@@ -119,7 +119,7 @@ export interface ContextResult {
   metrics: ExecutionMetrics;
   answer?: string;
   nextBestAction?: string;
-  /** Present when the broad-mode response was truncated to fit token budget. */
+  /** Present when the model-visible response was truncated to fit token budget. */
   truncation?: {
     originalTokens: number;
     truncatedTokens: number;

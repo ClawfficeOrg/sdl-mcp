@@ -61,6 +61,43 @@ function responseArtifact(toolName: string) {
 }
 
 describe("MCP output schemas", () => {
+  it("preserves context continuation metadata", () => {
+    const schema = requireSchema("AgentContextResponseSchema");
+    const truncation = {
+      originalTokens: 1_200,
+      truncatedTokens: 480,
+      fieldsAffected: ["finalEvidence", "summary"],
+      continuationHandle: "continuation-1",
+      continuationAction: "workflowContinuationGet",
+    };
+    const parsed = schema.parse({
+      taskId: "task-1",
+      taskType: "debug",
+      actionsTaken: [],
+      path: {
+        rungs: ["card"],
+        estimatedTokens: 100,
+        estimatedDurationMs: 10,
+        reasoning: "focused regression",
+      },
+      finalEvidence: [],
+      summary: "Retrieve the complete context with the continuation.",
+      success: true,
+      metrics: {
+        totalDurationMs: 10,
+        totalTokens: 480,
+        totalActions: 0,
+        successfulActions: 0,
+        failedActions: 0,
+        cacheHits: 0,
+      },
+      truncation,
+      etag: "context-etag",
+    }) as { truncation?: unknown };
+
+    assert.deepEqual(parsed.truncation, truncation);
+  });
+
   it("parses raw and compact info reports", () => {
     const schema = requireSchema("InfoResponseSchema");
     const report = {

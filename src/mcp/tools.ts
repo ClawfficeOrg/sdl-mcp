@@ -2832,6 +2832,18 @@ const AgentContextPayloadSchema = z.object({
       }),
     )
     .describe("Evidence collected during execution"),
+  truncation: z
+    .object({
+      originalTokens: z.number().int().nonnegative(),
+      truncatedTokens: z.number().int().nonnegative(),
+      fieldsAffected: z.array(z.string()),
+      continuationHandle: z.string().min(1),
+      continuationAction: z.literal("workflowContinuationGet"),
+    })
+    .optional()
+    .describe(
+      "Present when context was truncated to the response budget; use the continuation action and handle to retrieve the complete result.",
+    ),
   sessionDelta: z
     .object({
       newCards: z.number().int().min(0),

@@ -292,7 +292,7 @@ describe("ContextEngine", () => {
 
     const result = await new ContextEngine().buildContext(
       createTask({
-        budget: { maxTokens: 45 },
+        budget: { maxTokens: 512 },
         options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
@@ -360,7 +360,7 @@ describe("ContextEngine", () => {
 
     const result = await new ContextEngine().buildContext(
       createTask({
-        budget: { maxTokens: 40 },
+        budget: { maxTokens: 512 },
         options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
@@ -408,7 +408,7 @@ describe("ContextEngine", () => {
 
     const result = await new ContextEngine().buildContext(
       createTask({
-        budget: { maxTokens: 80 },
+        budget: { maxTokens: 512 },
         options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
@@ -718,6 +718,40 @@ describe("ContextEngine", () => {
     assert.deepEqual(minimumResult.finalEvidence, []);
     assert.deepEqual(minimumResult.actionsTaken ?? [], []);
     assert.ok(minimumResult.truncation?.continuationHandle);
+
+    const preciseMinimumResult = await new ContextEngine().buildContext(
+      createTask({
+        taskText:
+          "Diagnose runtimeQueryOutput and identify the runtimeExecute implementation path",
+        budget: { maxTokens: 512 },
+        options: { contextMode: "precise", evidenceOptimization: "off" },
+      }),
+    );
+    const preciseSerializedTokens = estimateTokens(
+      JSON.stringify(preciseMinimumResult),
+    );
+    assert.ok(
+      preciseSerializedTokens <= 512,
+      `precise result used ${preciseSerializedTokens} tokens: ${JSON.stringify(preciseMinimumResult)}`,
+    );
+    assert.equal(preciseMinimumResult.answer, undefined);
+    assert.ok(preciseMinimumResult.truncation?.continuationHandle);
+    assert.equal(
+      preciseMinimumResult.truncation.truncatedTokens,
+      preciseSerializedTokens,
+    );
+    const preciseContinuation = getContinuation(
+      preciseMinimumResult.truncation.continuationHandle,
+    );
+    assert.ok(preciseContinuation);
+    assert.equal(typeof preciseContinuation.data, "object");
+    const completePrecise = preciseContinuation.data as {
+      finalEvidence: Evidence[];
+    };
+    assert.deepEqual(
+      completePrecise.finalEvidence.map(({ reference }) => reference),
+      evidence.map(({ reference }) => reference),
+    );
   });
 
   it("enforces planner budget constraints for token and duration", async () => {

@@ -96,12 +96,14 @@ interface EvidenceCandidate {
   dominanceRank: number;
 }
 
-interface BroadOptimizationContext {
+interface ContextFinalizationContext {
   task: AgentTask;
   actions: Action[];
   success: boolean;
   clusterExpandedCount: number;
   evidenceOptimization?: EvidenceOptimizationMode;
+  /** Precise-mode direct callers still consume path and metrics when no truncation is needed. */
+  preserveUnchangedResult?: boolean;
 }
 
 const EVIDENCE_DOMINANCE_RANK: Partial<Record<Evidence["type"], number>> = {
@@ -811,7 +813,22 @@ export class ContextEngine {
           "engine.responseBuild",
           responseStartedAt,
         );
-        return attachDiagnosticTimings(result, diagnosticTimings);
+        const completeResult = attachDiagnosticTimings(
+          result,
+          diagnosticTimings,
+        );
+        return this.finalizeContextResult(
+          completeResult,
+          task.budget?.maxTokens,
+          {
+            task,
+            actions,
+            success,
+            clusterExpandedCount,
+            evidenceOptimization,
+            preserveUnchangedResult: true,
+          },
+        );
       }
 
       const responseStartedAt = performance.now();
@@ -1160,7 +1177,7 @@ export class ContextEngine {
   private finalizeContextResult(
     result: ContextResult,
     budgetMaxTokens: number | undefined,
-    context: BroadOptimizationContext,
+    context: ContextFinalizationContext,
   ): ContextResult {
     const effectiveCap = Math.min(
       budgetMaxTokens ?? MAX_CONTEXT_RESPONSE_TOKENS,
@@ -1170,7 +1187,7 @@ export class ContextEngine {
     const originalTokens = estimateTokens(JSON.stringify(completeResult));
 
     if (originalTokens <= effectiveCap) {
-      return completeResult;
+      return context.preserveUnchangedResult ? result : completeResult;
     }
 
     logger.debug("Context response exceeds token budget; finalizing", {
@@ -1264,7 +1281,7 @@ export class ContextEngine {
 
   private withBroadEvidence(
     result: ContextResult,
-    context: BroadOptimizationContext,
+    context: ContextFinalizationContext,
     evidence: Evidence[],
     compactEvidence: boolean,
   ): ContextResult {
@@ -1289,9 +1306,18 @@ export class ContextEngine {
           compactEvidence,
         },
       ),
-      answer: this.generateAnswer(context.task, evidence, context.success, {
-        compactEvidence,
-      }),
+      ...(result.answer !== undefined
+        ? {
+            answer: this.generateAnswer(
+              context.task,
+              evidence,
+              context.success,
+              {
+                compactEvidence,
+              },
+            ),
+          }
+        : {}),
     };
   }
 
