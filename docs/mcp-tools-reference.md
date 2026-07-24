@@ -19,15 +19,15 @@
 
 Complete reference for the SDL-MCP runtime surfaces exposed by `registerTools`.
 
-- `35` flat SDL action tools
-- `2` universal tools: `sdl.action.search` and `sdl.info`
+- `36` flat SDL action definitions and `2` universal tools, for `38` default-mode registrations
+- The default memory-disabled surface activates `34` tools: `2` universal tools and `32` flat tools. All `34` advertise object-root MCP `outputSchema` metadata.
 - Code Mode tools: `sdl.action.search`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file` (`sdl.info` is omitted in Code Mode exclusive)
 
 Flat mode and gateway mode share the same handler layer. The CLI `tool` command exposes direct action aliases for the shared handler layer rather than the full MCP surface.
 
 Parameter normalization is shared across flat and gateway calls. SDL-MCP accepts canonical camelCase fields plus common public aliases such as `repo_id`, `root_path`, `symbol_id`, `symbol_ids`, `from_version`, `to_version`, `slice_handle`, `spillover_handle`, `limit`, `if_none_match`, `known_etags`, `known_card_etags`, `edited_files`, `entry_symbols`, and `relative_cwd`.
 
-Selected stable tools, starting with `sdl.repo.status`, `sdl.runtime.execute`, and `sdl.runtime.queryOutput`, also advertise MCP `outputSchema` metadata for their structured results.
+The four remaining flat definitions are optional memory tools. Enable memory to register them; their presence does not change the default QA surface. `sdl.info` is the discovery entry point for runtime, configuration, and capability status.
 
 
 ---
@@ -112,7 +112,7 @@ Register a new repository for indexing.
 
 ### `sdl.repo.status`
 
-Get status for one repository including latest version, indexed files/symbols, timestamps, health, watcher telemetry, and prefetch statistics.
+Get stable repository and graph status. Set `includeTelemetry: true` only when operational telemetry is needed.
 
 **Parameters:**
 
@@ -125,13 +125,11 @@ Get status for one repository including latest version, indexed files/symbols, t
 
 **Response includes:**
 
-- `repoId`, `rootPath`, `latestVersionId`, `filesIndexed`, `symbolsIndexed`, `countNotes`, `lastIndexedAt`. The default minimal model-facing projection omits `rootPath` and `lastIndexedAt`; broader detail can expose `rootPath`, while timestamp telemetry requires `includeTelemetry: true`.
+- Telemetry-off responses include `repoId`, `latestVersionId`, `filesIndexed`, `symbolsIndexed`, `countNotes`, root availability, compact stable watcher state, and safety-relevant derived-state and graph-integrity fields. `detail` changes only the breadth of that stable status.
+- `includeTelemetry: true` adds `rootPath`, timestamps, expensive health data and components, prefetch statistics, server/runtime information, live-index operational fields, detailed watcher operations, and diagnostics. `rootPath` is never exposed by `detail` alone.
 - `rootAvailability` on every detail level, with `status` set to `available`, `missing`, or `unreadable`. An unavailable root also includes a stable `nextBestAction` for restoring or updating the registration.
-- `healthScore` (0-100), `healthComponents` (freshness, coverage, errorRate, edgeQuality, callResolution), `healthAvailable`. Root availability and graph availability are independent health gates. A missing or unreadable root sets `healthAvailable: false` and omits `healthScore`. A current manifest-backed graph remains available in `verifying` or `failed` state, although those states do not claim that the current revision is verified.
-- `watcherHealth` (nullable) — runtime telemetry: provider/configuredProvider/fallbackReason, enabled/running state, filesWatched, eventsReceived/Processed, errors, queueDepth, restartCount, stale timestamps, and Watchman warning/recrawl/fresh-instance diagnostics when Watchman is active or was attempted
-- `prefetchStats` — queue depth, hit/waste rates, latency reduction, last run
-- `liveIndexStatus` — live buffer overlay state: enabled, pendingBuffers, dirtyBuffers, parseQueueDepth, checkpointPending, reconcileQueueDepth, etc.
-- `derivedState` — derived-state freshness: stale flag, dirty cluster/process/algorithm/summary/embedding flags, target/computed version ids, `lastError` when recomputation failed, `graphIntegrityState`, `graphIntegrityVersionId`, `graphIntegrityRevision`, `graphIntegrityVerifiedRevision`, `graphIntegrityDigest`, and `nextBestAction` when recovery is needed. Equal current and verified revisions in `verified` state prove the latest revision. `verifying` and `failed` can remain readable when the current Version has a manifest and revisions, but they do not prove the latest revision. A `verifying` state does not require a refresh. An `unknown`, missing-manifest, or permanent failed state directs a populated graph to stopped `index --force --safe-rebuild` recovery rather than repeated full refreshes. Integrity mismatch details stay in operational logs and never appear in the response. Startup and foreground quiescence checks requeue persisted pending revisions.
+- With telemetry enabled: `healthScore` (0-100), `healthComponents` (freshness, coverage, errorRate, edgeQuality, callResolution), and `healthAvailable`; detailed watcher operations; `prefetchStats`; and `liveIndexStatus`. Root availability and graph availability remain independent safety gates.
+- `derivedState` retains stable freshness, version, graph-integrity, and recovery fields, including `graphIntegrityState`, `graphIntegrityVersionId`, `graphIntegrityRevision`, `graphIntegrityVerifiedRevision`, `graphIntegrityDigest`, and `nextBestAction` when recovery is needed. Equal current and verified revisions in `verified` state prove the latest revision. `verifying` and `failed` can remain readable when the current Version has a manifest and revisions, but they do not prove the latest revision. A `verifying` state does not require a refresh. An `unknown`, missing-manifest, or permanent failed state directs a populated graph to stopped `index --force --safe-rebuild` recovery rather than repeated full refreshes. Integrity mismatch details stay in operational logs and never appear in the response. Startup and foreground quiescence checks requeue persisted pending revisions.
 - `memories` (when `surfaceMemories: true` and memory is enabled in config) — array of relevant development memories auto-surfaced for the repository
 
 **Example:**
@@ -355,9 +353,11 @@ Flush the live draft overlay for a repository into a durable checkpoint.
 
 **Response includes:**
 
-- `repoId`, `requested`, `checkpointId`
+- `repoId`, `requested`, `pending`, `checkpointId`
 - `pendingBuffers`, `checkpointedFiles`, `failedFiles`
 - `lastCheckpointAt`
+
+When no buffers are pending, the result is the static no-op `{ "repoId": "…", "requested": false, "pending": false, "message": "No checkpoint-eligible buffers were pending." }`. It omits checkpoint IDs, file counts, failures, and timestamps.
 
 **Example:**
 
@@ -1401,6 +1401,10 @@ Get cumulative token usage statistics and savings metrics for the current sessio
 Retrieve task-shaped context inside Code Mode.
 
 Use `sdl.context` first for `debug`, `review`, `implement`, and `explain` requests when you are already operating through the Code Mode surfaces. Its public schema exposes the complete nested `budget` and `options` contracts plus `refsMode`, `wireFormat`, and `ifNoneMatch`.
+
+`budget.maxTokens` and its `maxEstimatedTokens` alias have a minimum request value of `512` and cap the complete serialized response, not only individual actions or evidence. When a response is truncated, use `workflowContinuationGet` with `truncation.continuationHandle` to retrieve the complete context. For precise context, an explicit request for an implementation or handler resolves implementation-oriented handler aliases so the returned actions and evidence match the requested implementation intent.
+
+For byte-stability checks, use `responseMode: "inline"` with `refsMode: "off"`. Response-artifact handles and session refs are intentionally session-scoped and may vary between calls.
 
 ### `sdl.workflow`
 
