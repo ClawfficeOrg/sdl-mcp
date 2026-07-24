@@ -18,6 +18,7 @@ describe("response projection registry", () => {
   it("covers the exact actions with custom projection behavior", () => {
     assert.deepEqual(CUSTOM_RESPONSE_PROJECTION_ACTIONS, [
       "action.search",
+      "buffer.checkpoint",
       "code.needWindow",
       "context",
       "delta.get",
