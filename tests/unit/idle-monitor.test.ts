@@ -39,6 +39,7 @@ describe("IdleMonitor", () => {
         return {
           repoId: request.repoId,
           requested: true,
+          pending: false,
           checkpointId: "ckpt-1",
           pendingBuffers: 0,
           checkpointedFiles: 1,

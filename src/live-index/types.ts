@@ -50,11 +50,12 @@ export interface CheckpointRequest {
 export interface CheckpointResult {
   repoId: string;
   requested: boolean;
-  checkpointId: string;
-  pendingBuffers: number;
-  checkpointedFiles: number;
-  failedFiles: number;
-  lastCheckpointAt: string | null;
+  pending: boolean;
+  checkpointId?: string;
+  pendingBuffers?: number;
+  checkpointedFiles?: number;
+  failedFiles?: number;
+  lastCheckpointAt?: string | null;
   message?: string;
 }
 

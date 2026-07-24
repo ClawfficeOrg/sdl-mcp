@@ -68,6 +68,7 @@ export class CheckpointService {
       return {
         repoId: input.repoId,
         requested: false,
+        pending: true,
         checkpointId: "in-progress",
         pendingBuffers: this.overlayStore.listDrafts(input.repoId).length,
         checkpointedFiles: 0,
@@ -77,16 +78,34 @@ export class CheckpointService {
       };
     }
 
+    // Resolve no-work outcomes before allocating an ID or mutating checkpoint status.
+    const candidates = this.overlayStore.listCheckpointCandidates(input.repoId, {
+      filePaths: options.filePaths,
+    });
+    const drafts = this.overlayStore.listDrafts(input.repoId);
+    if (candidates.length === 0) {
+      if (drafts.length === 0) {
+        return {
+          repoId: input.repoId,
+          requested: false,
+          pending: false,
+          message: "No checkpoint-eligible buffers were pending.",
+        };
+      }
+      return {
+        repoId: input.repoId,
+        requested: false,
+        pending: true,
+        pendingBuffers: drafts.length,
+        message:
+          "No checkpoint-eligible clean buffers were available; dirty buffers remain pending.",
+      };
+    }
+
     this.checkpointInProgress.add(input.repoId);
     try {
       const attemptAt = this.now();
       const checkpointId = `ckpt-${Date.now()}-${this.checkpointCounter++}`;
-      const candidates = this.overlayStore.listCheckpointCandidates(
-        input.repoId,
-        {
-          filePaths: options.filePaths,
-        },
-      );
 
       let checkpointedFiles = 0;
       let failedFiles = 0;
@@ -154,12 +173,7 @@ export class CheckpointService {
 
       const pendingBuffers = this.overlayStore.listDrafts(input.repoId).length;
       let message: string | undefined;
-      if (candidates.length === 0) {
-        message =
-          pendingBuffers > 0
-            ? "No checkpoint-eligible clean buffers were available; dirty buffers remain pending."
-            : "No checkpoint-eligible buffers were pending.";
-      } else if (
+      if (
         checkpointedFiles === 0 &&
         failedFiles === 0 &&
         skippedSuspicious + skippedDirty > 0
@@ -171,6 +185,7 @@ export class CheckpointService {
       return {
         repoId: input.repoId,
         requested: true,
+        pending: pendingBuffers > 0,
         checkpointId,
         pendingBuffers,
         checkpointedFiles,

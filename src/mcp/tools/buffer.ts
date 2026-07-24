@@ -132,12 +132,7 @@ export async function handleBufferCheckpoint(
 ): Promise<BufferCheckpointResponse> {
   try {
     const request = parseActionHandlerArgs(BufferCheckpointRequestSchema, args);
-    const result = await resolveLiveIndex(liveIndex).checkpointRepo(request);
-    // Surface a clear pending flag so callers know whether to poll buffer.status.
-    const pending =
-    result.pendingBuffers > 0 &&
-    (result.requested === true || result.checkpointId === "in-progress");
-    return { ...result, pending };
+    return await resolveLiveIndex(liveIndex).checkpointRepo(request);
   } catch (error) {
     if (error instanceof ZodError) {
       throw new ValidationError(

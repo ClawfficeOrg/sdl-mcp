@@ -914,16 +914,16 @@ export const BufferCheckpointRequestSchema = z.object({
 export const BufferCheckpointResponseSchema = z.object({
   repoId: z.string().min(1),
   requested: z.boolean(),
-  checkpointId: z.string(),
+  checkpointId: z.string().optional(),
   pending: z
     .boolean()
     .describe(
-      "True when checkpoint work is still in flight (pendingBuffers > 0). Poll buffer.status until pending=false to confirm completion.",
+      "True when checkpoint work is in flight or drafts remain pending.",
     ),
-  pendingBuffers: z.number().int().min(0),
-  checkpointedFiles: z.number().int().min(0),
-  failedFiles: z.number().int().min(0),
-  lastCheckpointAt: z.string().nullable(),
+  pendingBuffers: z.number().int().min(0).optional(),
+  checkpointedFiles: z.number().int().min(0).optional(),
+  failedFiles: z.number().int().min(0).optional(),
+  lastCheckpointAt: z.string().nullable().optional(),
   message: z.string().optional(),
 });
 

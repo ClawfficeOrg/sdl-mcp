@@ -116,6 +116,7 @@ describe("buffer MCP tools", () => {
           return {
             repoId: payload.repoId,
             requested: true,
+            pending: true,
             checkpointId: "ckpt-1",
             pendingBuffers: 1,
             checkpointedFiles: 2,
@@ -137,6 +138,41 @@ describe("buffer MCP tools", () => {
     assert.strictEqual(result.message, "Checkpointed 2 clean buffers.");
   });
 
+  it("returns a static response when no checkpoint work is pending", async () => {
+    const expected = {
+      repoId: "demo-repo",
+      requested: false,
+      pending: false,
+      message: "No checkpoint-eligible buffers were pending.",
+    };
+    const liveIndex = {
+      async pushBufferUpdate() {
+        throw new Error("not used");
+      },
+      async checkpointRepo() {
+        return expected;
+      },
+      async getLiveStatus() {
+        throw new Error("not used");
+      },
+    };
+
+    const first = await handleBufferCheckpoint(
+      { repoId: "demo-repo", reason: "manual" },
+      undefined,
+      liveIndex,
+    );
+    const second = await handleBufferCheckpoint(
+      { repoId: "demo-repo", reason: "manual" },
+      undefined,
+      liveIndex,
+    );
+
+    assert.deepStrictEqual(first, expected);
+    assert.deepStrictEqual(second, expected);
+    BufferCheckpointResponseSchema.parse(first);
+  });
+
   it("marks an in-progress checkpoint as pending", async () => {
     const result = await handleBufferCheckpoint(
       { repoId: "demo-repo", reason: "manual" },
@@ -149,6 +185,7 @@ describe("buffer MCP tools", () => {
           return {
             repoId: payload.repoId,
             requested: false,
+            pending: true,
             checkpointId: "in-progress",
             pendingBuffers: 2,
             checkpointedFiles: 0,

@@ -115,10 +115,25 @@ describe("CheckpointService", () => {
       reason: "manual",
     });
 
-    assert.strictEqual(result.checkpointedFiles, 0);
-    assert.strictEqual(result.failedFiles, 0);
-    assert.strictEqual(result.pendingBuffers, 1);
-    assert.match(result.message ?? "", /No checkpoint-eligible clean buffers/i);
+    assert.deepStrictEqual(result, {
+      repoId: "demo-repo",
+      requested: false,
+      pending: true,
+      pendingBuffers: 1,
+      message:
+        "No checkpoint-eligible clean buffers were available; dirty buffers remain pending.",
+    });
+    assert.deepStrictEqual(
+      checkpointService.getStatus("demo-repo"),
+      {
+        repoId: "demo-repo",
+        lastCheckpointAt: null,
+        lastCheckpointAttemptAt: null,
+        lastCheckpointResult: null,
+        lastCheckpointError: null,
+        lastCheckpointReason: null,
+      },
+    );
   });
 
   it("explains checkpoints when no buffers are pending", async () => {
@@ -128,14 +143,38 @@ describe("CheckpointService", () => {
       patchSavedFile: async () => undefined as never,
     });
 
-    const result = await checkpointService.checkpointRepo({
+    const request = {
       repoId: "demo-repo",
       reason: "manual",
-    });
+    };
+    const initialStatus = checkpointService.getStatus("demo-repo");
+    const expected = {
+      repoId: "demo-repo",
+      requested: false,
+      pending: false,
+      message: "No checkpoint-eligible buffers were pending.",
+    };
 
-    assert.strictEqual(result.checkpointedFiles, 0);
-    assert.strictEqual(result.failedFiles, 0);
-    assert.strictEqual(result.pendingBuffers, 0);
-    assert.match(result.message ?? "", /No checkpoint-eligible buffers were pending/i);
+    const first = await checkpointService.checkpointRepo(request);
+    const second = await checkpointService.checkpointRepo(request);
+
+    assert.deepStrictEqual(first, expected);
+    assert.deepStrictEqual(second, expected);
+    assert.deepStrictEqual(checkpointService.getStatus("demo-repo"), initialStatus);
+
+    store.upsertDraft({
+      repoId: "demo-repo",
+      eventType: "save",
+      filePath: "src/clean.ts",
+      content: "export const clean = 1;",
+      language: "typescript",
+      version: 1,
+      dirty: false,
+      timestamp: "2026-03-07T12:20:00.000Z",
+    });
+    const work = await checkpointService.checkpointRepo(request, {
+      skipDurablePatch: true,
+    });
+    assert.match(work.checkpointId ?? "", /-0$/);
   });
 });

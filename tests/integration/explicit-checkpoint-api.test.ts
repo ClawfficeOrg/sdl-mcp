@@ -140,4 +140,26 @@ describe("explicit checkpoint API", () => {
     const symbols = await ladybugDb.getSymbolsByFile(conn, file!.fileId);
     assert.deepStrictEqual(symbols.map((symbol) => symbol.name), ["renamed"]);
   });
+
+  it("returns the same static payload when no buffers are pending", async () => {
+    const request = {
+      method: "POST",
+      pathname: `/api/repo/${repoId}/checkpoint`,
+      body: { reason: "manual" },
+    } satisfies LiveIndexApiRequest;
+    const expected = {
+      repoId,
+      requested: false,
+      pending: false,
+      message: "No checkpoint-eligible buffers were pending.",
+    };
+
+    const first = await routeLiveIndexApiRequest(request);
+    const second = await routeLiveIndexApiRequest(request);
+
+    assert.strictEqual(first?.status, 202);
+    assert.strictEqual(second?.status, 202);
+    assert.deepStrictEqual(first?.payload, expected);
+    assert.deepStrictEqual(second?.payload, expected);
+  });
 });
