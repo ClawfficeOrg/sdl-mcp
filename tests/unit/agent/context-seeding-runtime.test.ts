@@ -42,6 +42,9 @@ const CONFIG_PATH = join(
 let buildSeedContext: (task: AgentTask) => Promise<ContextSeedResult>;
 let seedResultToContext: (result: ContextSeedResult) => string[];
 let ExecutorClass: typeof import("../../../dist/agent/executor.js").Executor;
+let ContextEngineClass: typeof import(
+  "../../../dist/agent/context-engine.js"
+).ContextEngine;
 let closeLadybugDb: () => Promise<void>;
 
 const previousConfig = process.env.SDL_CONFIG;
@@ -141,18 +144,20 @@ describe("context seeding runtime lanes", () => {
       delete process.env.SDL_MCP_DISABLE_NATIVE_ADDON;
     }
 
-    const [ladybug, queries, lifecycle, seeding, executor] =
+    const [ladybug, queries, lifecycle, seeding, executor, contextEngine] =
       await Promise.all([
         import("../../../dist/db/ladybug.js"),
         import("../../../dist/db/ladybug-queries.js"),
         import("../../../dist/retrieval/index-lifecycle.js"),
         import("../../../dist/agent/context-seeding.js"),
         import("../../../dist/agent/executor.js"),
+        import("../../../dist/agent/context-engine.js"),
       ]);
     closeLadybugDb = ladybug.closeLadybugDb;
     buildSeedContext = seeding.buildSeedContext;
     seedResultToContext = seeding.seedResultToContext;
     ExecutorClass = executor.Executor;
+    ContextEngineClass = contextEngine.ContextEngine;
 
     await closeLadybugDb();
     await ladybug.initLadybugDb(DB_PATH);
@@ -203,6 +208,8 @@ describe("context seeding runtime lanes", () => {
       ["file-ingress-server", "src/server.ts"],
       ["file-ingress-descriptors", "src/mcp/tools/tool-descriptors.ts"],
       ["file-ingress-runtime", "src/mcp/tools/runtime-query.ts"],
+      ["file-ingress-runtime-execute", "src/mcp/tools/runtime.ts"],
+      ["file-ingress-action-catalog", "src/code-mode/action-catalog.ts"],
       ["file-ingress-projection", "src/mcp/context-response-projection.ts"],
       [
         "file-ingress-projection-registry",
@@ -269,6 +276,27 @@ describe("context seeding runtime lanes", () => {
         "function",
         "handleRuntimeQueryOutput",
         "Read a bounded persisted command artifact.",
+      ],
+      [
+        "ingress-runtime-execute-handler",
+        "file-ingress-runtime-execute",
+        "function",
+        "handleRuntimeExecute",
+        "Execute a repository-scoped runtime command.",
+      ],
+      [
+        "ingress-runtime-query-declaration",
+        "file-ingress-action-catalog",
+        "variable",
+        "runtimeQueryOutput",
+        "Declare the runtime query output action.",
+      ],
+      [
+        "ingress-runtime-execute-declaration",
+        "file-ingress-action-catalog",
+        "variable",
+        "runtimeExecute",
+        "Declare the runtime execute action.",
       ],
       [
         "ingress-late-output",
@@ -698,4 +726,34 @@ describe("context seeding runtime lanes", () => {
       assert.equal(ids.includes(`symbol:${id}`), false, id);
     }
   });
+
+  for (const contextMode of ["precise", "broad"] as const) {
+    it(`selects runtime handlers for explicit implementation intent in ${contextMode} mode`, async () => {
+      const result = await new ContextEngineClass().buildContext({
+        repoId: REPO_ID,
+        taskType: "debug",
+        taskText:
+          "Diagnose why runtimeQueryOutput might fail to find a known term in a persisted runtimeExecute artifact and identify the implementation path.",
+        options: {
+          contextMode,
+          semantic: false,
+          includeRetrievalEvidence: true,
+        },
+      });
+      const selected = new Set(
+        result.finalEvidence
+          .filter(({ type }) => type === "symbolCard")
+          .map(({ reference }) => reference),
+      );
+
+      assert.ok(
+        selected.has("symbol:ingress-runtime-determinism"),
+        JSON.stringify(result.finalEvidence),
+      );
+      assert.ok(
+        selected.has("symbol:ingress-runtime-execute-handler"),
+        JSON.stringify(result.finalEvidence),
+      );
+    });
+  }
 });

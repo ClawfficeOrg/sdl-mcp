@@ -22,6 +22,7 @@ import {
   buildSeedContext,
   seedResultToContext,
   inferFocusPathsFromTaskText,
+  toPascalCaseIdentifier,
 } from "./context-seeding.js";
 import { explicitFocusPaths } from "./context-ranking.js";
 import { extractIdentifiersFromText } from "./identifier-extraction.js";
@@ -451,6 +452,14 @@ function isLikelyExactSymbolMention(identifier: string): boolean {
     /[`"'(){}\[\],.;:]/.test(identifier) === false &&
     (/[a-z0-9][A-Z]/.test(identifier) || identifier.includes("_"))
   );
+}
+
+function implementationAliases(identifier: string): string[] {
+  return [`handle${toPascalCaseIdentifier(identifier)}`, identifier];
+}
+
+function explicitlyRequestsImplementation(taskText: string): boolean {
+  return /\b(?:implementation|handler)\b/i.test(taskText);
 }
 
 export class ContextEngine {
@@ -1335,6 +1344,10 @@ export class ContextEngine {
         isLikelyExactSymbolMention(identifier) &&
         task.taskText.includes(identifier),
     );
+    const mentioned = [...new Set([...codeQuoted, ...extracted])];
+    const inferredCandidates = explicitlyRequestsImplementation(task.taskText)
+      ? mentioned.flatMap(implementationAliases)
+      : mentioned;
     const candidates = [
       ...new Set([
         ...(task.options?.focusSymbols ?? []).filter((mention) =>
@@ -1343,8 +1356,7 @@ export class ContextEngine {
         ...(task.options?.chatMentions ?? []).filter((mention) =>
           /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(mention),
         ),
-        ...codeQuoted,
-        ...extracted,
+        ...inferredCandidates,
       ]),
     ].slice(0, MAX_EXACT_SYMBOL_MENTION_SEEDS);
 

@@ -204,7 +204,7 @@ export function buildContextLexicalQueryPlan(
 
 const ACTION_SEED_QUERY_LIMIT = 3;
 
-function toPascalCaseIdentifier(identifier: string): string {
+export function toPascalCaseIdentifier(identifier: string): string {
   return identifier.length === 0
     ? identifier
     : identifier[0].toUpperCase() + identifier.slice(1);
