@@ -1609,7 +1609,7 @@ export class Executor {
               symbolMap.get(symbolId),
             );
             this.evidenceCapture.captureSkeleton(
-              symbolId,
+              `symbol:${symbolId}`,
               `${prefix} | Skeleton (${result.originalLines} lines, ~${result.estimatedTokens} tokens): ${buildSkeletonEvidenceExcerpt(result.skeletonText, task.taskText)}`,
             );
             processedCount++;
@@ -1640,7 +1640,7 @@ export class Executor {
           );
           if (result) {
             this.evidenceCapture.captureSkeleton(
-              filePath,
+              `file:${filePath}`,
               `File skeleton (${result.originalLines} lines, ~${result.estimatedTokens} tokens): ${buildSkeletonEvidenceExcerpt(result.skeleton, task.taskText)}`,
             );
             processedCount++;

@@ -15,10 +15,10 @@ export class EvidenceCapture {
     return evidence;
   }
 
-  captureSkeleton(filePath: string, summary: string): Evidence {
+  captureSkeleton(reference: string, summary: string): Evidence {
     const evidence: Evidence = {
       type: "skeleton",
-      reference: `file:${filePath}`,
+      reference,
       summary,
       timestamp: Date.now(),
     };

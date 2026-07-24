@@ -28,16 +28,20 @@ describe("Evidence Capture", () => {
   });
 
   describe("Skeleton Evidence", () => {
-    it("captures skeleton evidence", () => {
+    it("preserves caller-provided symbol and file skeleton references", () => {
       const capture = new EvidenceCapture();
-      const evidence = capture.captureSkeleton(
-        "file.ts",
-        "10 lines, 3 functions",
+      const symbolEvidence = capture.captureSkeleton(
+        "symbol:symbol-1",
+        "Symbol skeleton",
+      );
+      const fileEvidence = capture.captureSkeleton(
+        "file:src/file.ts",
+        "File skeleton",
       );
 
-      assert.strictEqual(evidence.type, "skeleton");
-      assert.strictEqual(evidence.reference, "file:file.ts");
-      assert.strictEqual(evidence.summary, "10 lines, 3 functions");
+      assert.strictEqual(symbolEvidence.type, "skeleton");
+      assert.strictEqual(symbolEvidence.reference, "symbol:symbol-1");
+      assert.strictEqual(fileEvidence.reference, "file:src/file.ts");
     });
   });
 

@@ -250,12 +250,34 @@ describe("ContextEngine", () => {
         timestamp: Date.now() + 2,
       },
     ];
+    const actions: Action[] = [
+      {
+        id: "selected-and-pruned",
+        type: "getCard",
+        status: "completed",
+        input: { context: evidence.map(({ reference }) => reference) },
+        output: {},
+        timestamp: Date.now(),
+        durationMs: 1,
+        evidence,
+      },
+      {
+        id: "pruned-only",
+        type: "getCard",
+        status: "completed",
+        input: { context: ["search:broad"] },
+        output: {},
+        timestamp: Date.now(),
+        durationMs: 1,
+        evidence: [evidence[0]],
+      },
+    ];
 
     mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
     mock.method(Planner.prototype, "plan", () => defaultPath);
     mock.method(Planner.prototype, "selectContext", () => ["symbol:alpha"]);
     mock.method(Executor.prototype, "execute", async () => ({
-      actions: [],
+      actions,
       evidence,
       success: true,
     }));
@@ -272,6 +294,28 @@ describe("ContextEngine", () => {
     assert.deepEqual(
       result.finalEvidence.map((item) => item.type),
       ["diagnostic", "symbolCard"],
+    );
+    const actionsSection = result.summary
+      .split("\n\n")
+      .find((part) => part.startsWith("Actions: "));
+    assert.ok(actionsSection);
+    const renderedReferences = new Set(
+      [...actionsSection.matchAll(/\[([^\]]+)\]/g)].flatMap(([, references]) =>
+        references.split(", "),
+      ),
+    );
+    const selectedReferences = new Set(
+      result.finalEvidence.map(({ reference }) => reference),
+    );
+
+    assert.deepEqual(
+      [...renderedReferences].sort(),
+      [...selectedReferences].sort(),
+    );
+    assert.equal(renderedReferences.has("search:broad"), false);
+    assert.deepEqual(
+      result.actionsTaken.map(({ evidenceCount }) => evidenceCount),
+      [2, 0],
     );
   });
 

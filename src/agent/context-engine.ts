@@ -171,6 +171,23 @@ function normalizeEvidenceCandidate(
   };
 }
 
+function evidenceIdentityKey(evidence: Evidence): string {
+  return `${evidence.type}\0${evidence.reference}\0${normalizeEvidenceText(evidence.summary)}`;
+}
+
+function projectActionsToEvidence(
+  actions: Action[],
+  selectedEvidence: Evidence[],
+): Action[] {
+  const selected = new Set(selectedEvidence.map(evidenceIdentityKey));
+  return actions.map((action) => {
+    const evidence = action.evidence.filter((item) =>
+      selected.has(evidenceIdentityKey(item)),
+    );
+    return { ...action, evidence, evidenceCount: evidence.length };
+  });
+}
+
 function dedupeExactEvidence(
   candidates: EvidenceCandidate[],
 ): EvidenceCandidate[] {
@@ -178,7 +195,7 @@ function dedupeExactEvidence(
   const selected: EvidenceCandidate[] = [];
 
   for (const candidate of candidates) {
-    const exactKey = `${candidate.evidence.type}\0${candidate.evidence.reference}\0${candidate.normalizedSummary}`;
+    const exactKey = evidenceIdentityKey(candidate.evidence);
     if (seenExact.has(exactKey)) continue;
     seenExact.add(exactKey);
     selected.push(candidate);
@@ -726,6 +743,10 @@ export class ContextEngine {
         "engine.optimizeEvidence",
         optimizeStartedAt,
       );
+      const projectedActions = projectActionsToEvidence(
+        actions,
+        optimizedEvidence,
+      );
 
       // Precise mode: return evidence + lightweight metadata.
       // actionsTaken and summary are always populated — they are the most
@@ -737,7 +758,7 @@ export class ContextEngine {
         const result: ContextResult = {
           taskId,
           taskType: task.taskType,
-          actionsTaken: actions.map((a) => ({
+          actionsTaken: projectedActions.map((a) => ({
             ...a,
             evidence: [],
             evidenceCount: a.evidence?.length ?? 0,
@@ -748,7 +769,7 @@ export class ContextEngine {
           finalEvidence: optimizedEvidence,
           summary: this.generateSummary(
             task,
-            actions,
+            projectedActions,
             optimizedEvidence,
             success,
             {
@@ -770,7 +791,7 @@ export class ContextEngine {
       const result: ContextResult = {
         taskId,
         taskType: task.taskType,
-        actionsTaken: actions.map((a) => ({
+        actionsTaken: projectedActions.map((a) => ({
           ...a,
           evidence: [],
           evidenceCount: a.evidence?.length ?? 0,
@@ -781,7 +802,7 @@ export class ContextEngine {
         finalEvidence: optimizedEvidence,
         summary: this.generateSummary(
           task,
-          actions,
+          projectedActions,
           optimizedEvidence,
           success,
           {
@@ -902,14 +923,11 @@ export class ContextEngine {
       );
     }
 
-    // Append per-action details: rung, symbol/file, tokens, duration
+    // Keep rendered action references aligned with the selected evidence set.
     if (actions.length > 0) {
       const actionLines = actions.map((a) => {
-        const sym =
-          typeof a.input?.context === "object" && Array.isArray(a.input.context)
-            ? (a.input.context as string[]).slice(0, 3).join(", ")
-            : undefined;
-        const ref = sym ? ` [${sym}]` : "";
+        const refs = a.evidence.map((item) => item.reference).join(", ");
+        const ref = refs ? ` [${refs}]` : "";
         return `- ${a.type} (${a.status}, ${a.durationMs}ms)${ref}`;
       });
       parts.push("Actions: " + actionLines.join("; "));
