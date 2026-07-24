@@ -106,9 +106,13 @@ function expandRootVariants(
     getCompositionVariants(schema, "anyOf");
   if (directVariants !== undefined) {
     const base = omitCompositionKeys(schema);
+    // Expand nested unions before merging the root object contract.
+    const expandedVariants = directVariants.flatMap(
+      (variant) => expandRootVariants(variant) ?? [variant],
+    );
     return hasObjectShape(base)
-      ? directVariants.map((variant) => ({ allOf: [base, variant] }))
-      : directVariants;
+      ? expandedVariants.map((variant) => ({ allOf: [base, variant] }))
+      : expandedVariants;
   }
 
   const allOf = getCompositionVariants(schema, "allOf");

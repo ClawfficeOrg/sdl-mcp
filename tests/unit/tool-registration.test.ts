@@ -50,8 +50,14 @@ describe("MCP tool registration", () => {
       undefined,
       undefined,
       z.union([
-        z.object({ kind: z.literal("first"), value: z.string() }),
-        z.object({ kind: z.literal("second"), count: z.number() }),
+        z.discriminatedUnion("kind", [
+          z.object({ kind: z.literal("first"), value: z.string() }),
+          z.object({ kind: z.literal("second"), count: z.number() }),
+        ]),
+        z.object({
+          responseMode: z.literal("handle"),
+          handle: z.string(),
+        }),
       ]),
     );
 
@@ -142,6 +148,7 @@ describe("MCP tool registration", () => {
       "sdl.buffer.status",
       "sdl.symbol.search",
       "sdl.symbol.getCard",
+      "sdl.symbol.edit",
       "sdl.slice.build",
       "sdl.slice.refresh",
       "sdl.slice.spillover.get",
@@ -160,13 +167,11 @@ describe("MCP tool registration", () => {
       "sdl.runtime.queryOutput",
       "sdl.file.read",
       "sdl.file.write",
-    ];
-    const intentionallyOmittedFlatTools = [
-      "sdl.symbol.edit",
       "sdl.semantic.enrichment.refresh",
       "sdl.semantic.enrichment.status",
       "sdl.search.edit",
     ];
+    const intentionallyOmittedFlatTools: string[] = [];
 
     for (const name of requiredFlatTools) {
       const tool = stableTools.find((candidate) => candidate.name === name);

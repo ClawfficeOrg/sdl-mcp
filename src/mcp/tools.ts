@@ -29,7 +29,6 @@ import { z } from "zod";
 // Signature, Card, Slice, Compact V1/V2/V3, Delta, CodeWindow.
 // =============================================================================
 
-import type { RetrievalEvidence } from "../retrieval/types.js";
 import type { Range } from "../domain/types.js";
 import { RUNTIME_NAMES } from "../runtime/runtimes.js";
 import { MAX_RESPONSE_EXCERPT_BYTES } from "../runtime/response-artifacts.js";
@@ -1145,6 +1144,62 @@ export const ToolTimingDiagnosticsSchema = z.object({
   }),
 });
 
+const FileWriteModeSchema = z.enum([
+  "create",
+  "overwrite",
+  "replaceLines",
+  "replacePattern",
+  "jsonPath",
+  "insertAt",
+  "append",
+]);
+
+const DiffPreviewSnippetsSchema = z.object({
+  before: z.string(),
+  after: z.string(),
+  beforeStartLine: z.number().int().nonnegative(),
+  beforeEndLine: z.number().int().nonnegative(),
+  afterStartLine: z.number().int().nonnegative(),
+  afterEndLine: z.number().int().nonnegative(),
+});
+
+const FileWriteIndexUpdateSchema = z
+  .object({
+    applied: z.boolean(),
+    symbolsMatched: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Symbols that existed before and were updated in place."),
+    symbolsAdded: z.number().int().nonnegative().optional(),
+    symbolsRemoved: z.number().int().nonnegative().optional(),
+    edgesUpserted: z.number().int().nonnegative().optional(),
+    error: z.string().optional(),
+  })
+  .describe("Live-index sync result when writing an indexed source file.");
+
+const EditPreviewFileEntrySchema = z.object({
+  file: z.string(),
+  matchCount: z.number().int().nonnegative(),
+  editMode: FileWriteModeSchema,
+  snippets: DiffPreviewSnippetsSchema,
+  indexedSource: z.boolean(),
+});
+
+const EditFileResultSchema = z.object({
+  file: z.string(),
+  status: z.enum(["written", "skipped", "failed", "rolled-back"]),
+  bytes: z.number().int().nonnegative().optional(),
+  reason: z.string().optional(),
+  indexUpdate: FileWriteIndexUpdateSchema.optional(),
+});
+
+const EditRollbackSchema = z.object({
+  triggered: z.boolean(),
+  restoredFiles: z.array(z.string()),
+});
+
 export const ResponseArtifactReferenceSchema = z.object({
   responseMode: z.literal("handle"),
   kind: z.literal("responseArtifact"),
@@ -1297,68 +1352,76 @@ export interface SymbolEditPreconditions {
   };
 }
 
-export interface SymbolEditValidationSummary {
-  parseBefore: boolean;
-  parseAfter: boolean;
-  targetSymbolResolved: boolean;
-  warnings?: string[];
-}
+const SymbolEditOperationKindSchema = z.enum([
+  "replaceSymbol",
+  "replaceBody",
+  "replaceSignature",
+  "insertBefore",
+  "insertAfter",
+  "renameLocal",
+]);
 
-export interface SymbolEditPreviewResponse {
-  mode: "preview";
-  planHandle: string;
-  symbolId: string;
-  symbolName: string;
-  operation: SymbolEditOperation["kind"];
-  file: string;
-  writeTarget: "file" | "draft";
-  requiresApply: boolean;
-  expiresAt: string;
-  validation: SymbolEditValidationSummary;
-  fileEntries: Array<{
-    file: string;
-    matchCount: number;
-    editMode: FileWriteResponse["mode"];
-    snippets: DiffPreviewSnippets;
-    indexedSource: boolean;
-  }>;
-}
+const SymbolEditValidationSummarySchema = z.object({
+  parseBefore: z.boolean(),
+  parseAfter: z.boolean(),
+  targetSymbolResolved: z.boolean(),
+  warnings: z.array(z.string()).optional(),
+});
 
-export interface SymbolEditApplyResponse {
-  mode: "apply";
-  planHandle: string;
-  symbolId: string;
-  symbolName: string;
-  operation: SymbolEditOperation["kind"];
-  file: string;
-  writeTarget: "file" | "draft";
-  validation: SymbolEditValidationSummary;
-  filesAttempted: number;
-  filesWritten: number;
-  filesSkipped: number;
-  filesFailed: number;
-  results: Array<{
-    file: string;
-    status: "written" | "skipped" | "failed" | "rolled-back";
-    bytes?: number;
-    reason?: string;
-    indexUpdate?: FileWriteResponse["indexUpdate"];
-  }>;
-  rollback: {
-    triggered: boolean;
-    restoredFiles: string[];
-  };
-  draftUpdate?: {
-    accepted: boolean;
-    overlayVersion: number;
-    parseScheduled: boolean;
-    warnings: string[];
-  };
-}
+const SymbolEditPreviewResponseSchema = z.object({
+  mode: z.literal("preview"),
+  planHandle: z.string(),
+  symbolId: z.string(),
+  symbolName: z.string(),
+  operation: SymbolEditOperationKindSchema,
+  file: z.string(),
+  writeTarget: z.enum(["file", "draft"]),
+  requiresApply: z.boolean(),
+  expiresAt: z.string(),
+  validation: SymbolEditValidationSummarySchema,
+  fileEntries: z.array(EditPreviewFileEntrySchema),
+});
 
-export type SymbolEditResponse =
-  | SymbolEditPreviewResponse
-  | SymbolEditApplyResponse;
+const SymbolEditApplyResponseSchema = z.object({
+  mode: z.literal("apply"),
+  planHandle: z.string(),
+  symbolId: z.string(),
+  symbolName: z.string(),
+  operation: SymbolEditOperationKindSchema,
+  file: z.string(),
+  writeTarget: z.enum(["file", "draft"]),
+  validation: SymbolEditValidationSummarySchema,
+  filesAttempted: z.number().int().nonnegative(),
+  filesWritten: z.number().int().nonnegative(),
+  filesSkipped: z.number().int().nonnegative(),
+  filesFailed: z.number().int().nonnegative(),
+  results: z.array(EditFileResultSchema),
+  rollback: EditRollbackSchema,
+  draftUpdate: z
+    .object({
+      accepted: z.boolean(),
+      overlayVersion: z.number().int().nonnegative(),
+      parseScheduled: z.boolean(),
+      warnings: z.array(z.string()),
+    })
+    .optional(),
+});
+
+export const SymbolEditResponseSchema = z.discriminatedUnion("mode", [
+  SymbolEditPreviewResponseSchema,
+  SymbolEditApplyResponseSchema,
+]);
+
+export type SymbolEditValidationSummary = z.infer<
+  typeof SymbolEditValidationSummarySchema
+>;
+export type SymbolEditPreviewResponse = z.infer<
+  typeof SymbolEditPreviewResponseSchema
+>;
+export type SymbolEditApplyResponse = z.infer<
+  typeof SymbolEditApplyResponseSchema
+>;
+export type SymbolEditResponse = z.infer<typeof SymbolEditResponseSchema>;
 
 /**
  * Unified symbol card request schema - supports both single and batch retrieval.
@@ -3696,6 +3759,183 @@ export type SemanticEnrichmentStatusRequest = z.infer<
   typeof SemanticEnrichmentStatusRequestSchema
 >;
 
+const SemanticProviderTypeSchema = z.enum(["scip", "lsp"]);
+const PersistedSemanticProviderTypeSchema = z.enum(["scip", "lsp", "lsif"]);
+const SemanticInstallPolicySchema = z.enum(["never", "verified"]);
+
+const SemanticSourceSelectionSchema = z.object({
+  languageId: z.string(),
+  selected: z
+    .object({
+      providerType: SemanticProviderTypeSchema,
+      providerId: z.string(),
+      providerVersion: z.string().optional(),
+      canAffectPass2: z.boolean(),
+    })
+    .optional(),
+  skipped: z.array(
+    z.object({
+      providerType: SemanticProviderTypeSchema,
+      reason: z.string(),
+    }),
+  ),
+});
+
+const SemanticProviderRunBaseShape = {
+  runId: z.string(),
+  repoId: z.string(),
+  providerId: z.string(),
+  providerVersion: z.string().optional(),
+  languages: z.array(z.string()),
+  sourceIndexPath: z.string().optional(),
+  sourceHash: z.string().optional(),
+  status: z.enum(["planned", "running", "completed", "failed", "skipped"]),
+  startedAt: z.string(),
+  finishedAt: z.string().optional(),
+  documentsProcessed: z.number().int().nonnegative(),
+  symbolsMatched: z.number().int().nonnegative(),
+  edgesCreated: z.number().int().nonnegative(),
+  edgesUpgraded: z.number().int().nonnegative(),
+  edgesReplaced: z.number().int().nonnegative(),
+  edgesSkipped: z.number().int().nonnegative(),
+  diagnosticsCount: z.number().int().nonnegative(),
+};
+
+const SemanticProviderRunSchema = z.object({
+  ...SemanticProviderRunBaseShape,
+  providerType: SemanticProviderTypeSchema,
+  precisionScore: z.number().optional(),
+  cacheHit: z.boolean().optional(),
+  canAffectPass2: z.boolean().optional(),
+  selected: z.boolean().optional(),
+  metadataJson: z.string().optional(),
+  error: z.string().optional(),
+});
+
+const ProjectedSemanticProviderRunBaseSchema = z.object({
+  ...SemanticProviderRunBaseShape,
+  providerType: PersistedSemanticProviderTypeSchema,
+  cacheHit: z.boolean().optional(),
+  canAffectPass2: z.boolean().optional(),
+  selected: z.boolean().optional(),
+  metadataJson: z.string().optional(),
+  error: z.string().optional(),
+});
+
+const ProjectedSemanticProviderRunSchema = z.union([
+  ProjectedSemanticProviderRunBaseSchema.extend({
+    precisionMeasurement: z.literal("unavailable"),
+  }),
+  ProjectedSemanticProviderRunBaseSchema.extend({
+    precisionScore: z.number(),
+    precisionMeasurement: z.literal("measured"),
+    precisionBasis: z.literal("operational-composite"),
+  }),
+]);
+
+const ScipIngestResponseSchema = z.object({
+  status: z.enum(["ingested", "alreadyIngested", "dryRun"]),
+  decoderBackend: z.enum(["rust", "typescript"]),
+  documentsProcessed: z.number().int().nonnegative(),
+  documentsSkipped: z.number().int().nonnegative(),
+  symbolsMatched: z.number().int().nonnegative(),
+  externalSymbolsCreated: z.number().int().nonnegative(),
+  edgesCreated: z.number().int().nonnegative(),
+  edgesUpgraded: z.number().int().nonnegative(),
+  edgesReplaced: z.number().int().nonnegative(),
+  unresolvedOccurrences: z.number().int().nonnegative(),
+  skippedSymbols: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  durationMs: z.number().nonnegative(),
+  perFileCoverage: z.array(
+    z.object({
+      relPath: z.string(),
+      total: z.number().int().nonnegative(),
+      matched: z.number().int().nonnegative(),
+      unresolved: z.number().int().nonnegative(),
+    }),
+  ),
+});
+
+export const SemanticEnrichmentRefreshResponseSchema = z.object({
+  ok: z.boolean(),
+  repoId: z.string(),
+  enabled: z.boolean(),
+  dryRun: z.boolean(),
+  installPolicy: SemanticInstallPolicySchema,
+  selections: z.array(SemanticSourceSelectionSchema),
+  runs: z.array(SemanticProviderRunSchema),
+  scipResults: z.array(ScipIngestResponseSchema),
+  skipped: z.array(
+    z.object({
+      providerType: z.string(),
+      languageId: z.string().optional(),
+      reason: z.string(),
+    }),
+  ),
+});
+
+const SemanticEnrichmentCompactStatusResponseSchema = z.object({
+  ok: z.boolean(),
+  repoId: z.string(),
+  enabled: z.boolean(),
+  autoRunOnIndexRefresh: z.boolean(),
+  installPolicy: SemanticInstallPolicySchema,
+  selections: z.object({
+    totalLanguages: z.number().int().nonnegative(),
+    selectedLanguages: z.number().int().nonnegative(),
+    skippedProviders: z.number().int().nonnegative(),
+    languagesWithSelection: z.array(z.string()),
+  }),
+  lastRuns: z.array(
+    z.object({
+      runId: z.string(),
+      providerType: PersistedSemanticProviderTypeSchema,
+      providerId: z.string(),
+      languages: z.array(z.string()),
+      status: z.enum(["planned", "running", "completed", "failed", "skipped"]),
+      startedAt: z.string(),
+      finishedAt: z.string().optional(),
+      symbolsMatched: z.number().int().nonnegative(),
+      edgesCreated: z.number().int().nonnegative(),
+      diagnosticsCount: z.number().int().nonnegative(),
+      diagnosticsBySeverity: z
+        .object({
+          error: z.number().int().nonnegative(),
+          warning: z.number().int().nonnegative(),
+          information: z.number().int().nonnegative(),
+          hint: z.number().int().nonnegative(),
+        })
+        .nullable(),
+      precisionScore: z.number().optional(),
+      precisionMeasurement: z.enum(["unavailable", "measured"]),
+      precisionBasis: z.literal("operational-composite").optional(),
+    }),
+  ),
+});
+
+const SemanticEnrichmentFullStatusResponseSchema = z.object({
+  ok: z.boolean(),
+  repoId: z.string(),
+  enabled: z.boolean(),
+  autoRunOnIndexRefresh: z.boolean(),
+  installPolicy: SemanticInstallPolicySchema,
+  selections: z.array(SemanticSourceSelectionSchema),
+  lastRuns: z.array(ProjectedSemanticProviderRunSchema),
+});
+
+export const SemanticEnrichmentStatusResponseSchema = z.union([
+  SemanticEnrichmentCompactStatusResponseSchema,
+  SemanticEnrichmentFullStatusResponseSchema,
+]);
+
+export type SemanticEnrichmentRefreshResponse = z.infer<
+  typeof SemanticEnrichmentRefreshResponseSchema
+>;
+export type SemanticEnrichmentStatusResponse = z.infer<
+  typeof SemanticEnrichmentStatusResponseSchema
+>;
+
 // ============================================================================
 // File Write Schemas
 // ============================================================================
@@ -3790,47 +4030,15 @@ export const FileWriteRequestSchema = z.object({
 
 export type FileWriteRequest = z.infer<typeof FileWriteRequestSchema>;
 
-const DiffPreviewSnippetsSchema = z.object({
-  before: z.string(),
-  after: z.string(),
-  beforeStartLine: z.number().int().nonnegative(),
-  beforeEndLine: z.number().int().nonnegative(),
-  afterStartLine: z.number().int().nonnegative(),
-  afterEndLine: z.number().int().nonnegative(),
-});
-
 export const FileWriteResponseSchema = z.object({
   filePath: z.string(),
   bytesWritten: z.number().int().nonnegative(),
   linesWritten: z.number().int().nonnegative(),
-  mode: z.enum([
-    "create",
-    "overwrite",
-    "replaceLines",
-    "replacePattern",
-    "jsonPath",
-    "insertAt",
-    "append",
-  ]),
+  mode: FileWriteModeSchema,
   backupPath: z.string().optional(),
   replacementCount: z.number().int().nonnegative().optional(),
   snippets: DiffPreviewSnippetsSchema.optional(),
-  indexUpdate: z
-    .object({
-      applied: z.boolean(),
-      symbolsMatched: z
-        .number()
-        .int()
-        .nonnegative()
-        .optional()
-        .describe("Symbols that existed before and were updated in place."),
-      symbolsAdded: z.number().int().nonnegative().optional(),
-      symbolsRemoved: z.number().int().nonnegative().optional(),
-      edgesUpserted: z.number().int().nonnegative().optional(),
-      error: z.string().optional(),
-    })
-    .optional()
-    .describe("Live-index sync result when writing an indexed source file."),
+  indexUpdate: FileWriteIndexUpdateSchema.optional(),
   diagnostics: ToolTimingDiagnosticsSchema.optional(),
 });
 
@@ -4112,91 +4320,141 @@ export const SearchEditRequestSchema = z.discriminatedUnion("mode", [
 
 export type SearchEditRequest = z.infer<typeof SearchEditRequestSchema>;
 
-export interface SearchEditPreviewResponse {
-  mode: "preview";
-  planHandle: string;
-  defaultCreateBackup: boolean;
-  applyArgs: {
-    mode: "apply";
-    repoId: string;
-    planHandle: string;
-    createBackup: boolean;
-  };
-  filesMatched: number;
-  matchesFound: number;
-  filesEligible: number;
-  filesSkipped: Array<{ path: string; reason: string; operationId?: string }>;
-  filesSkippedTotal?: number;
-  filesSkippedTruncated?: boolean;
-  filesSkippedByReason?: Array<{ reason: string; count: number }>;
-  fileEntries: Array<{
-    file: string;
-    matchCount: number;
-    editMode: FileWriteResponse["mode"];
-    snippets: DiffPreviewSnippets;
-    indexedSource: boolean;
-    astMatches?: Array<{
-      target: {
-        name: string;
-        nodeType: string;
-        text: string;
-      };
-      captures: Array<{
-        name: string;
-        nodeType: string;
-        text: string;
-      }>;
-    }>;
-    operationIds?: string[];
-    operations?: Array<{
-      id: string;
-      matchCount: number;
-      editMode: FileWriteResponse["mode"];
-    }>;
-  }>;
-  requiresApply: boolean;
-  expiresAt: string;
-  partial?: boolean;
-  retrievalEvidence?: RetrievalEvidence;
-  diagnostics?: z.infer<typeof ToolTimingDiagnosticsSchema>;
-}
+const SearchEditRetrievalEvidenceSchema = z.object({
+  sources: z.array(
+    z.enum([
+      "fts",
+      "vector:nomic",
+      "vector:jinacode",
+      "legacyFallback",
+      "overlay",
+    ]),
+  ),
+  topRanksPerSource: z.record(
+    z.string(),
+    z.array(z.number().int().positive()),
+  ),
+  fallbackReason: z.string().optional(),
+  fusionLatencyMs: z.number().nonnegative().optional(),
+  candidateCountPerSource: z.record(
+    z.string(),
+    z.number().int().nonnegative(),
+  ),
+  symptomType: z
+    .enum(["stackTrace", "failingTest", "taskText", "editedFiles"])
+    .optional(),
+  feedbackBoosts: z
+    .object({
+      feedbackMatchCount: z.number().int().nonnegative(),
+      symbolsBoosted: z.number().int().nonnegative(),
+      feedbackIds: z.array(z.string()),
+    })
+    .optional(),
+  pprBoosts: z
+    .object({
+      resolvedSeeds: z.array(z.string()),
+      unresolvedMentions: z.array(z.string()),
+      ambiguousMentions: z.array(z.string()),
+      symbolsBoosted: z.number().int().nonnegative(),
+      latencyMs: z.number().nonnegative(),
+      backend: z.enum(["native", "js", "fallback-bfs"]),
+    })
+    .optional(),
+  diagnosticTimings: z
+    .record(z.string(), z.number().nonnegative())
+    .optional(),
+});
 
-export interface SearchEditApplyResponse {
-  mode: "apply";
-  planHandle: string;
-  filesAttempted: number;
-  filesWritten: number;
-  filesSkipped: number;
-  filesFailed: number;
-  results: Array<{
-    file: string;
-    status: "written" | "skipped" | "failed" | "rolled-back";
-    bytes?: number;
-    reason?: string;
-    indexUpdate?: FileWriteResponse["indexUpdate"];
-  }>;
-  fileEntries?: Array<{
-    file: string;
-    matchCount: number;
-    editMode: FileWriteResponse["mode"];
-    snippets: DiffPreviewSnippets;
-    indexedSource: boolean;
-    astMatches?: SearchEditPreviewResponse["fileEntries"][number]["astMatches"];
-    operationIds?: string[];
-    operations?: Array<{
-      id: string;
-      matchCount: number;
-      editMode: FileWriteResponse["mode"];
-    }>;
-  }>;
-  rollback: {
-    triggered: boolean;
-    restoredFiles: string[];
-  };
-  diagnostics?: z.infer<typeof ToolTimingDiagnosticsSchema>;
-}
+const SearchEditAstNodeSchema = z.object({
+  name: z.string(),
+  nodeType: z.string(),
+  text: z.string(),
+});
 
-export type SearchEditResponse =
-  | SearchEditPreviewResponse
-  | SearchEditApplyResponse
-  | ResponseArtifactReference;
+const SearchEditFileEntrySchema = EditPreviewFileEntrySchema.extend({
+  astMatches: z
+    .array(
+      z.object({
+        target: SearchEditAstNodeSchema,
+        captures: z.array(SearchEditAstNodeSchema),
+      }),
+    )
+    .optional(),
+  operationIds: z.array(z.string()).optional(),
+  operations: z
+    .array(
+      z.object({
+        id: z.string(),
+        matchCount: z.number().int().nonnegative(),
+        editMode: FileWriteModeSchema,
+      }),
+    )
+    .optional(),
+});
+
+const SearchEditPreviewResponseSchema = z.object({
+  mode: z.literal("preview"),
+  planHandle: z.string(),
+  defaultCreateBackup: z.boolean(),
+  applyArgs: z.object({
+    mode: z.literal("apply"),
+    repoId: z.string(),
+    planHandle: z.string(),
+    createBackup: z.boolean(),
+  }),
+  filesMatched: z.number().int().nonnegative(),
+  matchesFound: z.number().int().nonnegative(),
+  filesEligible: z.number().int().nonnegative(),
+  filesSkipped: z.array(
+    z.object({
+      path: z.string(),
+      reason: z.string(),
+      operationId: z.string().optional(),
+    }),
+  ),
+  filesSkippedTotal: z.number().int().nonnegative().optional(),
+  filesSkippedTruncated: z.boolean().optional(),
+  filesSkippedByReason: z
+    .array(
+      z.object({
+        reason: z.string(),
+        count: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
+  fileEntries: z.array(SearchEditFileEntrySchema),
+  requiresApply: z.boolean(),
+  expiresAt: z.string(),
+  partial: z.boolean().optional(),
+  retrievalEvidence: SearchEditRetrievalEvidenceSchema.optional(),
+  diagnostics: ToolTimingDiagnosticsSchema.optional(),
+});
+
+const SearchEditApplyResponseSchema = z.object({
+  mode: z.literal("apply"),
+  planHandle: z.string(),
+  filesAttempted: z.number().int().nonnegative(),
+  filesWritten: z.number().int().nonnegative(),
+  filesSkipped: z.number().int().nonnegative(),
+  filesFailed: z.number().int().nonnegative(),
+  results: z.array(EditFileResultSchema),
+  fileEntries: z.array(SearchEditFileEntrySchema).optional(),
+  rollback: EditRollbackSchema,
+  diagnostics: ToolTimingDiagnosticsSchema.optional(),
+});
+
+export const SearchEditResponseSchema = z.union([
+  z.discriminatedUnion("mode", [
+    SearchEditPreviewResponseSchema,
+    SearchEditApplyResponseSchema,
+  ]),
+  ResponseArtifactReferenceSchema,
+]);
+
+export type SearchEditPreviewResponse = z.infer<
+  typeof SearchEditPreviewResponseSchema
+>;
+export type SearchEditApplyResponse = z.infer<
+  typeof SearchEditApplyResponseSchema
+>;
+export type SearchEditResponse = z.infer<typeof SearchEditResponseSchema>;

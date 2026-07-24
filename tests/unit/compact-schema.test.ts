@@ -100,6 +100,23 @@ describe("Compact JSON Schema builder", () => {
     assert.deepStrictEqual(result.required, ["type"]);
   });
 
+  it("flattens nested top-level unions for output schemas", () => {
+    const schema = z.union([
+      z.discriminatedUnion("mode", [
+        z.object({ mode: z.literal("preview"), planHandle: z.string() }),
+        z.object({ mode: z.literal("apply"), filesWritten: z.number() }),
+      ]),
+      z.object({
+        responseMode: z.literal("handle"),
+        handle: z.string(),
+      }),
+    ]);
+
+    const result = zodSchemaToJsonSchema(schema);
+    assert.strictEqual(result.type, "object");
+    assertNoTopLevelComposition(result);
+  });
+
   it("removes top-level composition from edit tool schemas", () => {
     for (const [name, schema] of [
       ["sdl.search.edit", SearchEditRequestSchema],

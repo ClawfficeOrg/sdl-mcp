@@ -40,10 +40,14 @@ import {
   ResponseGetResponseSchema,
   RuntimeExecuteResponseSchema,
   RuntimeQueryOutputResponseSchema,
+  SearchEditResponseSchema,
+  SemanticEnrichmentRefreshResponseSchema,
+  SemanticEnrichmentStatusResponseSchema,
   SliceBuildResponseSchema,
   SliceRefreshResponseSchema,
   SliceSpilloverGetResponseSchema,
   SymbolGetCardResponseSchema,
+  SymbolEditResponseSchema,
   SymbolSearchResponseSchema,
   UsageStatsResponseSchema,
 } from "../tools.js";
@@ -232,6 +236,7 @@ export function buildFlatToolDescriptors(
       action: "symbol.edit",
       description:
         "Symbol-scoped edit preview/apply/applyNow with astFingerprint, range, file sha, draft preconditions, and parse-after validation. createBackup uses temporary rollback copies that are removed after full success and does not retain a user backup.",
+      outputSchema: SymbolEditResponseSchema,
       handler: handleSymbolEdit,
     },
     {
@@ -393,18 +398,21 @@ export function buildFlatToolDescriptors(
       action: "semantic.enrichment.refresh",
       description:
         "Run provider-backed semantic enrichment for a repository using SCIP or LSP source selection.",
+      outputSchema: SemanticEnrichmentRefreshResponseSchema,
       handler: handleSemanticEnrichmentRefresh,
     },
     {
       action: "semantic.enrichment.status",
       description:
         "Report semantic enrichment provider selection, skipped providers, last runs, and operational enrichment scores.",
+      outputSchema: SemanticEnrichmentStatusResponseSchema,
       handler: handleSemanticEnrichmentStatus,
     },
     {
       action: "search.edit",
       description:
         'Cross-file search-and-edit in two phases: mode:"preview" returns a planHandle summarizing proposed edits; mode:"apply" executes the plan with sha256/mtime preconditions and rollback on mid-batch failure. Supports text, symbol, identifier, and structural tree-sitter targeting for safer edits across supported structural languages. Also supports targeting:"rename" (graph-scoped symbol rename) and targeting:"signature" (TS/JS signature change with AST-based callsite propagation). Preview responses default to responseMode:"auto". createBackup uses temporary rollback copies that are removed after full success and does not retain a user backup. Prefer this over composing repeated file.write calls.',
+      outputSchema: SearchEditResponseSchema,
       handler: handleSearchEdit,
     },
   ];

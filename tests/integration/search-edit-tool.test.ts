@@ -28,6 +28,7 @@ import {
   type SearchEditApplyResponse,
   type SearchEditPreviewResponse,
 } from "../../dist/mcp/tools.js";
+import * as toolSchemas from "../../dist/mcp/tools.js";
 import {
   getLadybugConn,
   initLadybugDb,
@@ -45,6 +46,14 @@ import {
 const REPO_ID = "search-edit-smoke";
 
 let repoRoot: string;
+
+function parseSearchEditResponse(value: unknown): void {
+  const schema = Reflect.get(toolSchemas, "SearchEditResponseSchema") as
+    | { parse(input: unknown): unknown }
+    | undefined;
+  assert.ok(schema, "expected SearchEditResponseSchema to be exported");
+  schema.parse(value);
+}
 
 async function ensureRepoRegistered(root: string): Promise<void> {
   const conn = await getLadybugConn();
@@ -95,6 +104,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
       filters: { extensions: [".txt"] },
     });
     const response = (await handleSearchEdit(req)) as SearchEditPreviewResponse;
+    parseSearchEditResponse(response);
 
     assert.equal(response.mode, "preview");
     assert.ok(response.planHandle.startsWith("se-"));
@@ -180,6 +190,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
         planHandle: preview.planHandle,
       }),
     )) as SearchEditApplyResponse;
+    parseSearchEditResponse(apply);
 
     assert.equal(apply.filesWritten, 1);
     const updated = await readFile(join(repoRoot, "ident.ts"), "utf-8");
@@ -802,6 +813,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
       responseMode: "handle",
     });
     const response = (await handleSearchEdit(req)) as Record<string, unknown>;
+    parseSearchEditResponse(response);
 
     assert.equal(response.responseMode, "handle");
     assert.equal(response.kind, "responseArtifact");

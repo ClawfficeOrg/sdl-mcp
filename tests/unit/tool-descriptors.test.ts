@@ -27,6 +27,7 @@ const provenOutputSchemaTools = new Set([
   "sdl.buffer.status",
   "sdl.symbol.search",
   "sdl.symbol.getCard",
+  "sdl.symbol.edit",
   "sdl.slice.build",
   "sdl.slice.refresh",
   "sdl.slice.spillover.get",
@@ -49,17 +50,12 @@ const provenOutputSchemaTools = new Set([
   "sdl.runtime.queryOutput",
   "sdl.file.read",
   "sdl.file.write",
+  "sdl.semantic.enrichment.refresh",
+  "sdl.semantic.enrichment.status",
+  "sdl.search.edit",
 ]);
 
-const intentionalOutputSchemaOmissions = new Map([
-  ["sdl.symbol.edit", "Preview/apply/applyNow union lacks exported response Zod schema"],
-  ["sdl.semantic.enrichment.refresh", "Provider result lacks stable exported MCP response Zod schema"],
-  [
-    "sdl.semantic.enrichment.status",
-    "Compact/full response union lacks one exported Zod response schema; Chunk 8 stabilizes both variants but does not invent a broad schema in this remediation",
-  ],
-  ["sdl.search.edit", "Preview/apply/response-artifact union lacks exported response Zod schema"],
-]);
+const intentionalOutputSchemaOmissions = new Map<string, string>();
 
 describe("buildFlatToolDescriptors", () => {
   const descriptors = buildFlatToolDescriptors({} as any);
@@ -79,11 +75,19 @@ describe("buildFlatToolDescriptors", () => {
     }
   });
 
-  it("documents the semantic enrichment status schema deferral", () => {
-    assert.strictEqual(
-      intentionalOutputSchemaOmissions.get("sdl.semantic.enrichment.status"),
-      "Compact/full response union lacks one exported Zod response schema; Chunk 8 stabilizes both variants but does not invent a broad schema in this remediation",
-    );
+  it("advertises edit and semantic enrichment response schemas", () => {
+    for (const name of [
+      "sdl.symbol.edit",
+      "sdl.search.edit",
+      "sdl.semantic.enrichment.refresh",
+      "sdl.semantic.enrichment.status",
+    ]) {
+      const descriptor = descriptors.find(
+        (candidate) => candidate.name === name,
+      );
+      assert.ok(descriptor, `expected ${name} descriptor`);
+      assert.ok(descriptor.outputSchema, `expected ${name} output schema`);
+    }
   });
 
   it("classifies every flat tool as schema-backed or intentionally omitted", () => {
