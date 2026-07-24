@@ -19,6 +19,7 @@ const defaultVisibleFlatToolNames = inventory.flatToolNames.filter(
 const provenOutputSchemaTools = new Set([
   "sdl.repo.register",
   "sdl.repo.status",
+  "sdl.repo.overview",
   "sdl.repo.unregister",
   "sdl.index.refresh",
   "sdl.buffer.push",
@@ -30,6 +31,7 @@ const provenOutputSchemaTools = new Set([
   "sdl.slice.refresh",
   "sdl.slice.spillover.get",
   "sdl.delta.get",
+  "sdl.code.needWindow",
   "sdl.code.getSkeleton",
   "sdl.code.getHotPath",
   "sdl.policy.get",
@@ -45,17 +47,12 @@ const provenOutputSchemaTools = new Set([
   "sdl.usage.stats",
   "sdl.runtime.execute",
   "sdl.runtime.queryOutput",
+  "sdl.file.read",
+  "sdl.file.write",
 ]);
 
 const intentionalOutputSchemaOmissions = new Map([
-  ["sdl.repo.overview", "Public full and notModified projections are disjoint with no common required root property; faithful union yields invalid root anyOf, while partial+refine weakens converted JSON Schema"],
   ["sdl.symbol.edit", "Preview/apply/applyNow union lacks exported response Zod schema"],
-  [
-    "sdl.code.needWindow",
-    "Approved/denied/response-artifact union converts to anyOf without the MCP-required root object; see tests/unit/mcp-code-need-window-policy.test.ts",
-  ],
-  ["sdl.file.read", "Inline/read-hint/response-artifact variants lack exported response Zod schema"],
-  ["sdl.file.write", "Typed response lacks exported response Zod schema"],
   ["sdl.semantic.enrichment.refresh", "Provider result lacks stable exported MCP response Zod schema"],
   [
     "sdl.semantic.enrichment.status",
@@ -67,14 +64,19 @@ const intentionalOutputSchemaOmissions = new Map([
 describe("buildFlatToolDescriptors", () => {
   const descriptors = buildFlatToolDescriptors({} as any);
 
-  it("defers repo.overview instead of advertising a schema that accepts an empty object", () => {
-    const overview = descriptors.find((descriptor) => descriptor.name === "sdl.repo.overview");
-    assert.ok(overview, "expected sdl.repo.overview descriptor");
-    assert.strictEqual(overview.outputSchema, undefined);
-    assert.strictEqual(
-      intentionalOutputSchemaOmissions.get("sdl.repo.overview"),
-      "Public full and notModified projections are disjoint with no common required root property; faithful union yields invalid root anyOf, while partial+refine weakens converted JSON Schema",
-    );
+  it("advertises overview, code-window, and file response schemas", () => {
+    for (const name of [
+      "sdl.repo.overview",
+      "sdl.code.needWindow",
+      "sdl.file.read",
+      "sdl.file.write",
+    ]) {
+      const descriptor = descriptors.find(
+        (candidate) => candidate.name === name,
+      );
+      assert.ok(descriptor, `expected ${name} descriptor`);
+      assert.ok(descriptor.outputSchema, `expected ${name} output schema`);
+    }
   });
 
   it("documents the semantic enrichment status schema deferral", () => {

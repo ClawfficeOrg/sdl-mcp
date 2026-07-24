@@ -3629,25 +3629,31 @@ export const FileReadRequestSchema = z.object({
 
 export type FileReadRequest = z.infer<typeof FileReadRequestSchema>;
 
-export interface FileReadInlineResponse {
-  filePath: string;
-  content: string;
-  bytes: number;
-  totalLines: number;
-  returnedLines: number;
-  truncated: boolean;
-  truncatedAt?: number;
-  matchCount?: number;
-  extractedPath?: string;
-  sessionDelta?: z.infer<typeof SessionDeltaMetadataSchema>;
-  delta?: z.infer<typeof SessionDeltaPayloadSchema>;
-  hint?: string;
-  diagnostics?: z.infer<typeof ToolTimingDiagnosticsSchema>;
-}
+export const FileReadInlineResponseSchema = z.object({
+  filePath: z.string(),
+  content: z.string(),
+  bytes: z.number().int().nonnegative(),
+  totalLines: z.number().int().nonnegative(),
+  returnedLines: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  truncatedAt: z.number().int().nonnegative().optional(),
+  matchCount: z.number().int().nonnegative().optional(),
+  extractedPath: z.string().optional(),
+  sessionDelta: SessionDeltaMetadataSchema.optional(),
+  delta: SessionDeltaPayloadSchema.optional(),
+  hint: z.string().optional(),
+  diagnostics: ToolTimingDiagnosticsSchema.optional(),
+});
 
-export type FileReadResponse =
-  | FileReadInlineResponse
-  | ResponseArtifactReference;
+export const FileReadResponseSchema = z.union([
+  FileReadInlineResponseSchema,
+  ResponseArtifactReferenceSchema,
+]);
+
+export type FileReadInlineResponse = z.infer<
+  typeof FileReadInlineResponseSchema
+>;
+export type FileReadResponse = z.infer<typeof FileReadResponseSchema>;
 
 // ============================================================================
 // Semantic Enrichment Schemas
@@ -3784,42 +3790,52 @@ export const FileWriteRequestSchema = z.object({
 
 export type FileWriteRequest = z.infer<typeof FileWriteRequestSchema>;
 
-export interface DiffPreviewSnippets {
-  before: string;
-  after: string;
-  beforeStartLine: number;
-  beforeEndLine: number;
-  afterStartLine: number;
-  afterEndLine: number;
-}
+const DiffPreviewSnippetsSchema = z.object({
+  before: z.string(),
+  after: z.string(),
+  beforeStartLine: z.number().int().nonnegative(),
+  beforeEndLine: z.number().int().nonnegative(),
+  afterStartLine: z.number().int().nonnegative(),
+  afterEndLine: z.number().int().nonnegative(),
+});
 
-export interface FileWriteResponse {
-  filePath: string;
-  bytesWritten: number;
-  linesWritten: number;
-  mode:
-    | "create"
-    | "overwrite"
-    | "replaceLines"
-    | "replacePattern"
-    | "jsonPath"
-    | "insertAt"
-    | "append";
-  backupPath?: string;
-  replacementCount?: number;
-  snippets?: DiffPreviewSnippets;
-  /** Live-index sync result when writing an indexed source file. */
-  indexUpdate?: {
-    applied: boolean;
-    /** Symbols that existed before and were updated in place. */
-    symbolsMatched?: number;
-    symbolsAdded?: number;
-    symbolsRemoved?: number;
-    edgesUpserted?: number;
-    error?: string;
-  };
-  diagnostics?: z.infer<typeof ToolTimingDiagnosticsSchema>;
-}
+export const FileWriteResponseSchema = z.object({
+  filePath: z.string(),
+  bytesWritten: z.number().int().nonnegative(),
+  linesWritten: z.number().int().nonnegative(),
+  mode: z.enum([
+    "create",
+    "overwrite",
+    "replaceLines",
+    "replacePattern",
+    "jsonPath",
+    "insertAt",
+    "append",
+  ]),
+  backupPath: z.string().optional(),
+  replacementCount: z.number().int().nonnegative().optional(),
+  snippets: DiffPreviewSnippetsSchema.optional(),
+  indexUpdate: z
+    .object({
+      applied: z.boolean(),
+      symbolsMatched: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Symbols that existed before and were updated in place."),
+      symbolsAdded: z.number().int().nonnegative().optional(),
+      symbolsRemoved: z.number().int().nonnegative().optional(),
+      edgesUpserted: z.number().int().nonnegative().optional(),
+      error: z.string().optional(),
+    })
+    .optional()
+    .describe("Live-index sync result when writing an indexed source file."),
+  diagnostics: ToolTimingDiagnosticsSchema.optional(),
+});
+
+export type DiffPreviewSnippets = z.infer<typeof DiffPreviewSnippetsSchema>;
+export type FileWriteResponse = z.infer<typeof FileWriteResponseSchema>;
 
 // ============================================================================
 // Search/Edit (sdl.search.edit) Schemas

@@ -19,7 +19,10 @@ import {
   BufferCheckpointResponseSchema,
   BufferPushResponseSchema,
   BufferStatusResponseSchema,
+  CodeNeedWindowResponseSchema,
   DeltaGetResponseSchema,
+  FileReadResponseSchema,
+  FileWriteResponseSchema,
   GetHotPathResponseSchema,
   GetSkeletonResponseSchema,
   IndexRefreshResponseSchema,
@@ -31,6 +34,7 @@ import {
   PolicySetResponseSchema,
   PRRiskAnalysisResponseSchema,
   RepoRegisterResponseSchema,
+  RepoOverviewResponseSchema,
   RepoStatusResponseSchema,
   RepoUnregisterResponseSchema,
   ResponseGetResponseSchema,
@@ -188,6 +192,7 @@ export function buildFlatToolDescriptors(
       action: "repo.overview",
       description:
         "Get token-efficient codebase overview with directory summaries and hotspots",
+      outputSchema: RepoOverviewResponseSchema,
       handler: handleRepoOverview,
     },
     {
@@ -263,6 +268,7 @@ export function buildFlatToolDescriptors(
       action: "code.needWindow",
       description:
         "Request access to raw code window for a symbol with gating policy",
+      outputSchema: CodeNeedWindowResponseSchema,
       handler: handleCodeNeedWindow,
     },
     {
@@ -373,12 +379,14 @@ export function buildFlatToolDescriptors(
       action: "file.read",
       description:
         "Read non-indexed files (templates, configs, docs) with optional line range, search, or JSON path extraction",
+      outputSchema: FileReadResponseSchema,
       handler: handleFileRead,
     },
     {
       action: "file.write",
       description:
         "Write to a single file (indexed or non-indexed) with targeted modes; use sdl.search.edit for cross-file batching: full content, line replacement, pattern replacement, JSON path update, insert, or append. createBackup defaults to true, retains a sibling .bak, and successful responses return backupPath when a backup is created.",
+      outputSchema: FileWriteResponseSchema,
       handler: handleFileWrite,
     },
     {

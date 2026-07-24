@@ -134,6 +134,7 @@ describe("MCP tool registration", () => {
     const requiredFlatTools = [
       "sdl.repo.register",
       "sdl.repo.status",
+      "sdl.repo.overview",
       "sdl.repo.unregister",
       "sdl.index.refresh",
       "sdl.buffer.push",
@@ -145,6 +146,7 @@ describe("MCP tool registration", () => {
       "sdl.slice.refresh",
       "sdl.slice.spillover.get",
       "sdl.delta.get",
+      "sdl.code.needWindow",
       "sdl.code.getSkeleton",
       "sdl.code.getHotPath",
       "sdl.policy.get",
@@ -156,13 +158,11 @@ describe("MCP tool registration", () => {
       "sdl.usage.stats",
       "sdl.runtime.execute",
       "sdl.runtime.queryOutput",
-    ];
-    const intentionallyOmittedFlatTools = [
-      "sdl.repo.overview",
-      "sdl.symbol.edit",
-      "sdl.code.needWindow",
       "sdl.file.read",
       "sdl.file.write",
+    ];
+    const intentionallyOmittedFlatTools = [
+      "sdl.symbol.edit",
       "sdl.semantic.enrichment.refresh",
       "sdl.semantic.enrichment.status",
       "sdl.search.edit",
