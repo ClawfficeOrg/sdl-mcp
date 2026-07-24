@@ -628,7 +628,7 @@ export const RepoUnregisterResponseSchema = z.object({
 export const RepoStatusRequestSchema = z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   surfaceMemories: z.boolean().optional().default(false),
-  /** "minimal" is compact/default. "standard" includes health/watcher/prefetch. "full" adds live-index. */
+  /** Detail controls stable breadth; includeTelemetry opts into operational fields. */
   detail: z
     .enum(["minimal", "standard", "full"])
     .optional()
@@ -643,7 +643,7 @@ const RepoRootAvailabilitySchema = z.object({
 
 const RepoStatusRawResponseSchema = z.object({
   repoId: z.string().min(1),
-  rootPath: z.string(),
+  rootPath: z.string().optional(),
   rootAvailability: RepoRootAvailabilitySchema,
   latestVersionId: z.string().nullable(),
   filesIndexed: z.number().int(),
@@ -654,7 +654,7 @@ const RepoStatusRawResponseSchema = z.object({
       symbolsIndexed: z.string(),
     })
     .optional(),
-  lastIndexedAt: z.string().nullable(),
+  lastIndexedAt: z.string().nullable().optional(),
   healthScore: z.number().int().min(0).max(100).nullable().optional(),
   healthComponents: z
     .object({
@@ -681,8 +681,8 @@ const RepoStatusRawResponseSchema = z.object({
       provider: z.enum(["watchman", "chokidar", "fsWatch"]).nullable(),
       configuredProvider: z.enum(["auto", "watchman", "chokidar", "fsWatch"]),
       fallbackReason: z.string().nullable(),
-      errors: z.number().int().min(0),
-      queueDepth: z.number().int().min(0),
+      errors: z.number().int().min(0).optional(),
+      queueDepth: z.number().int().min(0).optional(),
       stale: z.boolean(),
       lastEventAt: z.string().nullable().optional(),
       lastSuccessfulReindexAt: z.string().nullable().optional(),
@@ -745,7 +745,7 @@ const RepoStatusRawResponseSchema = z.object({
       embeddingsDirty: z.boolean(),
       targetVersionId: z.string().nullable(),
       computedVersionId: z.string().nullable(),
-      updatedAt: z.string().nullable(),
+      updatedAt: z.string().nullable().optional(),
       lastError: z.string().nullable().optional(),
       graphIntegrityState: z.enum([
         "unknown",

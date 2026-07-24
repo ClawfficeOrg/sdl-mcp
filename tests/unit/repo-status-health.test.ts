@@ -31,10 +31,9 @@ describe("repo status health fields", () => {
       "utf8",
     );
 
-    assert.ok(source.includes('const includeExpensiveStatus = detail !== "minimal" || includeTelemetry;'));
-    assert.ok(source.includes("const healthResult = includeExpensiveStatus"));
-    assert.ok(source.includes("const watcherHealth = includeExpensiveStatus"));
-    assert.ok(source.includes("const prefetchStats = includeExpensiveStatus"));
+    assert.ok(source.includes("const healthResult = includeTelemetry"));
+    assert.ok(source.includes("const watcherHealth = getWatcherHealth(repoId);"));
+    assert.ok(source.includes("const prefetchStats = includeTelemetry"));
     assert.ok(
       source.includes("graphIntegrityIsAvailableForVersion("),
       "repo.status must keep current verifying and failed graphs readable",
@@ -575,6 +574,7 @@ describe("repo status root availability", { concurrency: 1 }, () => {
     const status = await handleRepoStatus({
       repoId: "integrity-unknown",
       detail: "standard",
+      includeTelemetry: true,
     });
 
     assert.deepStrictEqual(status.rootAvailability, { status: "available" });
@@ -608,6 +608,7 @@ describe("repo status root availability", { concurrency: 1 }, () => {
         const status = await repoModule.handleRepoStatus({
           repoId,
           detail: "standard",
+          includeTelemetry: true,
         });
         assert.strictEqual(status.healthAvailable, true, repoId);
         assert.strictEqual(status.healthScore, 90, repoId);
@@ -619,6 +620,7 @@ describe("repo status root availability", { concurrency: 1 }, () => {
       const unknown = await repoModule.handleRepoStatus({
         repoId: "integrity-unknown",
         detail: "standard",
+        includeTelemetry: true,
       });
       assert.strictEqual(unknown.healthAvailable, false);
       assert.strictEqual(unknown.healthScore, null);
@@ -673,11 +675,83 @@ describe("repo status root availability", { concurrency: 1 }, () => {
     }
   });
 
-  it("is byte-stable across repeated status calls", async () => {
-    const { handleRepoStatus } = await import("../../dist/mcp/tools/repo.js");
-    const first = await handleRepoStatus({ repoId: "missing", detail: "minimal" });
-    const second = await handleRepoStatus({ repoId: "missing", detail: "minimal" });
+  it("keeps full status stable until telemetry is explicitly requested", async () => {
+    const repoModule = await import("../../dist/mcp/tools/repo.js");
+    let healthCalls = 0;
+    repoModule._setRepoStatusHealthLoaderForTesting(async (repoId) => {
+      healthCalls += 1;
+      return {
+        repoId,
+        score: 90,
+        available: true,
+        components: {
+          freshness: healthCalls,
+          coverage: 1,
+          errorRate: 1,
+          edgeQuality: 1,
+          callResolution: 1,
+          embeddingFailures: 0,
+        },
+        indexedFiles: 1,
+        indexedSymbols: 1,
+        totalEligibleFiles: 1,
+        totalCallEdges: 0,
+        resolvedCallEdges: 0,
+        minutesSinceLastIndex: healthCalls,
+      };
+    });
 
-    assert.strictEqual(JSON.stringify(first), JSON.stringify(second));
+    try {
+      const first = await repoModule.handleRepoStatus({
+        repoId: "available",
+        detail: "full",
+        includeTelemetry: false,
+      });
+      const second = await repoModule.handleRepoStatus({
+        repoId: "available",
+        detail: "full",
+        includeTelemetry: false,
+      });
+
+      assert.strictEqual(JSON.stringify(first), JSON.stringify(second));
+      assert.strictEqual(healthCalls, 0);
+      for (const field of [
+        "rootPath",
+        "healthComponents",
+        "prefetchStats",
+        "serverInfo",
+        "liveIndexStatus",
+        "lastIndexedAt",
+        "diagnostics",
+        "timings",
+      ]) {
+        assert.strictEqual(field in first, false, field);
+      }
+      assert.strictEqual(first.repoId, "available");
+      assert.deepStrictEqual(first.rootAvailability, { status: "available" });
+      assert.strictEqual(first.latestVersionId, "available-v1");
+      assert.strictEqual(typeof first.filesIndexed, "number");
+      assert.strictEqual(typeof first.symbolsIndexed, "number");
+      assert.strictEqual("watcherHealth" in first, true);
+      assert.ok(first.derivedState);
+      assert.ok(first.recentVersions);
+      assert.ok(first.recentVersions.every((version) => !("createdAt" in version)));
+
+      const telemetry = await repoModule.handleRepoStatus({
+        repoId: "available",
+        detail: "full",
+        includeTelemetry: true,
+      });
+      assert.strictEqual(healthCalls, 1);
+      assert.strictEqual(typeof telemetry.rootPath, "string");
+      assert.strictEqual(telemetry.healthComponents?.freshness, 1);
+      assert.ok(telemetry.prefetchStats);
+      assert.ok(telemetry.serverInfo);
+      assert.ok(telemetry.liveIndexStatus);
+      assert.strictEqual("lastIndexedAt" in telemetry, true);
+      assert.ok(telemetry.recentVersions?.every((version) => "createdAt" in version));
+    } finally {
+      repoModule._setRepoStatusHealthLoaderForTesting();
+    }
   });
 });

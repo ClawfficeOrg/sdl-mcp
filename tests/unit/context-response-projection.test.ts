@@ -1221,7 +1221,7 @@ describe("context-response-projection", () => {
       assert.deepEqual(rawRepoStatus.serverInfo, { node: "v24.0.0" });
     });
 
-    it("keeps repo status telemetry at standard detail", () => {
+    it("keeps repo status telemetry when explicitly requested", () => {
       const projected = projectToolResultForModelContent(
         "repo.status",
         {
@@ -1230,7 +1230,7 @@ describe("context-response-projection", () => {
           healthComponents: { freshness: 1 },
           prefetchStats: { wasteRate: 0 },
         },
-        { detail: "standard" },
+        { detail: "standard", includeTelemetry: true },
       ) as Record<string, unknown>;
 
       assert.deepEqual(projected, {

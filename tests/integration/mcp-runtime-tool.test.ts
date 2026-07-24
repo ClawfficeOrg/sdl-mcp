@@ -582,7 +582,11 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
     const { handleRepoStatus } = await import("../../dist/mcp/tools/repo.js");
     const { RepoStatusResponseSchema } = await import("../../dist/mcp/tools.js");
 
-    const status = await handleRepoStatus({ repoId, detail: "minimal" });
+    const status = await handleRepoStatus({
+      repoId,
+      detail: "minimal",
+      includeTelemetry: true,
+    });
     const parsed = RepoStatusResponseSchema.parse(status);
 
     assert.ok(parsed.serverInfo);

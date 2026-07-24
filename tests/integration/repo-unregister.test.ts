@@ -515,7 +515,11 @@ describe("repo.unregister integration", () => {
       };
     });
 
-    const status = handleRepoStatus({ repoId, detail: "standard" }).then(
+    const status = handleRepoStatus({
+      repoId,
+      detail: "standard",
+      includeTelemetry: true,
+    }).then(
       (value) => ({ value, error: undefined }),
       (error: unknown) => ({ value: undefined, error }),
     );
@@ -629,7 +633,11 @@ describe("repo.unregister integration", () => {
       resolvedCallEdges: 0,
       minutesSinceLastIndex: 0,
     }));
-    await handleRepoStatus({ repoId, detail: "standard" });
+    await handleRepoStatus({
+      repoId,
+      detail: "standard",
+      includeTelemetry: true,
+    });
     assert.strictEqual(_hasRepoStatusHealthCacheForTesting(repoId), true);
     const coordinator = new InMemoryLiveIndexCoordinator({
       debounceMs: 60_000,

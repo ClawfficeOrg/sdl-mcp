@@ -17,6 +17,14 @@
       }
     },
     {
+      "tool": "sdl.repo.status",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "full",
+        "includeTelemetry": false
+      }
+    },
+    {
       "tool": "sdl.symbol.search",
       "args": {
         "repoId": "{REPO_ID}",
@@ -113,10 +121,6 @@
     {
       "tool": "sdl.repo.unregister",
       "reason": "Destructive repository-lifecycle mutation; a stable call would consume its own fixture state."
-    },
-    {
-      "tool": "sdl.repo.status",
-      "reason": "Timestamp telemetry is model-gated; deterministic graph-integrity state and revision fields are public, while live root availability, health, watcher, and index state remain intentionally live."
     },
     {
       "tool": "sdl.index.refresh",

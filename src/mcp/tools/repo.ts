@@ -731,8 +731,7 @@ export async function handleRepoStatus(
       ? { ...rootProbe, nextBestAction: rootRecoveryAction }
       : rootProbe;
 
-    const includeExpensiveStatus = detail !== "minimal" || includeTelemetry;
-    const includeLiveIndex = detail === "full" || includeTelemetry;
+    const includeStableHistory = detail === "full";
 
     const unavailableHealth = {
       snapshot: {
@@ -751,20 +750,26 @@ export async function handleRepoStatus(
 
 function compactWatcherHealthForStatus(
   watcherHealth: ReturnType<typeof getWatcherHealth>,
+  includeTelemetry: boolean,
 ) {
   if (!watcherHealth) return watcherHealth;
-  return {
+  const stableState = {
     enabled: watcherHealth.enabled,
     running: watcherHealth.running,
     provider: watcherHealth.provider,
     configuredProvider: watcherHealth.configuredProvider,
     fallbackReason: watcherHealth.fallbackReason,
-    errors: watcherHealth.errors,
-    queueDepth: watcherHealth.queueDepth,
     stale: watcherHealth.stale,
-    lastEventAt: watcherHealth.lastEventAt,
-    lastSuccessfulReindexAt: watcherHealth.lastSuccessfulReindexAt,
   };
+  return includeTelemetry
+    ? {
+        ...stableState,
+        errors: watcherHealth.errors,
+        queueDepth: watcherHealth.queueDepth,
+        lastEventAt: watcherHealth.lastEventAt,
+        lastSuccessfulReindexAt: watcherHealth.lastSuccessfulReindexAt,
+      }
+    : stableState;
 }
 
 function compactPrefetchStatsForStatus(
@@ -787,8 +792,10 @@ function compactPrefetchStatsForStatus(
     const latestVersion = await ladybugDb.getLatestVersion(conn, repoId);
     const filesIndexed = await ladybugDb.getFileCount(conn, repoId);
     const symbolsIndexed = await ladybugDb.getSymbolCount(conn, repoId);
-    const lastIndexedAt = await ladybugDb.getLastIndexedAt(conn, repoId);
-    const healthResult = includeExpensiveStatus && rootAvailable
+    const lastIndexedAt = includeTelemetry
+      ? await ladybugDb.getLastIndexedAt(conn, repoId)
+      : undefined;
+    const healthResult = includeTelemetry && rootAvailable
       ? await Promise.race([
           getCachedHealthSnapshot(repoId),
           new Promise<typeof unavailableHealth>((resolve) =>
@@ -801,18 +808,16 @@ function compactPrefetchStatsForStatus(
           ),
         ])
       : unavailableHealth;
-    const recentVersions = includeLiveIndex
+    const recentVersions = includeStableHistory
       ? await ladybugDb.getVersionsByRepo(conn, repoId, 10)
       : ([] as Awaited<ReturnType<typeof ladybugDb.getVersionsByRepo>>);
     const health = healthResult.snapshot;
     const healthIsStale = healthResult.isStale;
-    const watcherHealth = includeExpensiveStatus
-      ? getWatcherHealth(repoId)
-      : null;
-    const prefetchStats = includeExpensiveStatus
+    const watcherHealth = getWatcherHealth(repoId);
+    const prefetchStats = includeTelemetry
       ? getPrefetchStats(repoId)
       : undefined;
-    const liveIndexStatus = includeLiveIndex
+    const liveIndexStatus = includeTelemetry
       ? await getDefaultLiveIndexCoordinator()
           .getLiveStatus(repoId)
           .catch((err) => {
@@ -905,6 +910,12 @@ function compactPrefetchStatsForStatus(
     const effectiveHealth = rootAvailable && graphIntegrityAvailable
       ? health
       : unavailableHealth.snapshot;
+    const stableDerivedState = derivedState
+      ? (({ updatedAt: _updatedAt, ...rest }) => rest)(derivedState)
+      : undefined;
+    const statusDerivedState = includeTelemetry
+      ? derivedState ?? undefined
+      : stableDerivedState;
 
     // Surface relevant memories if enabled (default: false) and config allows it
     const memCaps = getMemoryCapabilities(appConfig, repoId);
@@ -928,17 +939,18 @@ function compactPrefetchStatsForStatus(
 
     return {
       repoId,
-      rootPath: repo.rootPath,
+      ...(includeTelemetry ? { rootPath: repo.rootPath } : {}),
       rootAvailability,
       latestVersionId: latestVersion?.versionId ?? null,
-      recentVersions:
-        detail === "full"
-          ? recentVersions.map((v) => ({
-              versionId: v.versionId,
-              createdAt: v.createdAt,
-              reason: v.reason,
-            }))
-          : undefined,
+      ...(includeStableHistory
+        ? {
+            recentVersions: recentVersions.map((version) => ({
+              versionId: version.versionId,
+              ...(includeTelemetry ? { createdAt: version.createdAt } : {}),
+              reason: version.reason,
+            })),
+          }
+        : {}),
       filesIndexed,
       symbolsIndexed,
       countNotes: {
@@ -946,10 +958,10 @@ function compactPrefetchStatsForStatus(
         symbolsIndexed:
           "Real symbols counted by repo.status index state; repo.overview stats use the overview symbol query.",
       },
-      lastIndexedAt,
+      ...(includeTelemetry ? { lastIndexedAt } : {}),
       ...(!rootAvailable
         ? { healthAvailable: false }
-        : includeExpensiveStatus
+        : includeTelemetry
         ? {
             healthScore: effectiveHealth.score,
             healthComponents: effectiveHealth.components,
@@ -958,11 +970,8 @@ function compactPrefetchStatsForStatus(
         : {}),
       ...(!rootAvailable
         ? { healthNote: rootRecoveryAction }
-        : !includeExpensiveStatus
-        ? {
-            healthNote:
-              'Health omitted because detail:"minimal" skips health computation. Use detail:"standard" to inspect health.',
-          }
+        : !includeTelemetry
+        ? {}
         : !graphIntegrityAvailable
           ? {
               healthNote:
@@ -980,17 +989,25 @@ function compactPrefetchStatsForStatus(
                 "Health data may be stale (last known result). Fresh computation failed; retry or run sdl.index.refresh.",
             }
           : {}),
-      watcherHealth: includeExpensiveStatus
-        ? compactWatcherHealthForStatus(watcherHealth)
-        : undefined,
-      watcherNote: rootAvailable && includeExpensiveStatus && watcherHealth === null
-        ? "Watcher not active. Run 'sdl-mcp serve' or call sdl.index.refresh after edits."
-        : undefined,
-      prefetchStats: compactPrefetchStatsForStatus(prefetchStats),
-      serverInfo: getServerInfo(),
-      liveIndexStatus,
+      watcherHealth: compactWatcherHealthForStatus(
+        watcherHealth,
+        includeTelemetry,
+      ),
+      ...(rootAvailable && watcherHealth === null
+        ? {
+            watcherNote:
+              "Watcher not active. Run 'sdl-mcp serve' or call sdl.index.refresh after edits.",
+          }
+        : {}),
+      ...(includeTelemetry
+        ? {
+            prefetchStats: compactPrefetchStatsForStatus(prefetchStats),
+            serverInfo: getServerInfo(),
+            liveIndexStatus,
+          }
+        : {}),
       memories,
-      derivedState: derivedState ?? undefined,
+      derivedState: statusDerivedState,
     };
   };
 
