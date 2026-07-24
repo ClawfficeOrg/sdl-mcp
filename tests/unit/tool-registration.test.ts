@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { z } from "zod";
+
 import { registerTools } from "../../dist/mcp/tools/index.js";
+import { MCPServer } from "../../dist/server.js";
 import { getVersion } from "../../dist/cli/commands/version.js";
 
 interface RegisteredToolCall {
@@ -34,6 +40,47 @@ function makeFakeServer(): { names: string[]; tools: RegisteredToolCall[]; serve
 }
 
 describe("MCP tool registration", () => {
+  it("advertises flat union output schemas with an object root", async () => {
+    const mcpServer = new MCPServer();
+    mcpServer.registerTool(
+      "sdl.test.union-output",
+      "Union output",
+      z.object({}),
+      async () => ({ kind: "first", value: "ok" }),
+      undefined,
+      undefined,
+      z.union([
+        z.object({ kind: z.literal("first"), value: z.string() }),
+        z.object({ kind: z.literal("second"), count: z.number() }),
+      ]),
+    );
+
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      mcpServer.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      const listed = await client.listTools();
+      const tool = listed.tools.find(
+        (candidate) => candidate.name === "sdl.test.union-output",
+      );
+      const outputSchema = tool?.outputSchema as
+        | Record<string, unknown>
+        | undefined;
+
+      assert.equal(outputSchema?.type, "object");
+      assert.equal(outputSchema && "anyOf" in outputSchema, false);
+      assert.equal(outputSchema && "oneOf" in outputSchema, false);
+      assert.equal(outputSchema && "allOf" in outputSchema, false);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("registers sdl.info with a human title", () => {
     const { tools, server } = makeFakeServer();
 
