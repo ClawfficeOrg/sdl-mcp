@@ -519,7 +519,7 @@ export class ContextEngine {
 
     const validation = this.planner.validateTask(task);
     if (!validation.valid) {
-      return this.createErrorResult(
+      return this.finalizeErrorResult(
         taskId,
         task,
         validation.error ?? "Invalid task",
@@ -910,12 +910,10 @@ export class ContextEngine {
         },
       );
     } catch (error) {
-      return attachDiagnosticTimings(
-        this.createErrorResult(
-          taskId,
-          task,
-          error instanceof Error ? error.message : String(error),
-        ),
+      return this.finalizeErrorResult(
+        taskId,
+        task,
+        error instanceof Error ? error.message : String(error),
         diagnosticTimings,
       );
     }
@@ -1153,6 +1151,30 @@ export class ContextEngine {
     };
   }
 
+  private finalizeErrorResult(
+    taskId: string,
+    task: AgentTask,
+    error: string,
+    diagnosticTimings?: Map<string, number>,
+  ): ContextResult {
+    const result = this.createErrorResult(taskId, task, error);
+    const completeResult = diagnosticTimings
+      ? attachDiagnosticTimings(result, diagnosticTimings)
+      : result;
+    return this.finalizeContextResult(
+      completeResult,
+      task.budget?.maxTokens,
+      {
+        task,
+        actions: [],
+        success: false,
+        clusterExpandedCount: 0,
+        evidenceOptimization: task.options?.evidenceOptimization,
+        preserveUnchangedResult: true,
+      },
+    );
+  }
+
   /**
    * Compact a broad-mode result to only model-visible fields.
    * Uses the same allowlist as server-side projection so the projection
@@ -1204,6 +1226,9 @@ export class ContextEngine {
     }
     if (completeResult.answer !== undefined) {
       recordAffectedField(fieldsAffected, "answer");
+    }
+    if (completeResult.error !== undefined) {
+      recordAffectedField(fieldsAffected, "error");
     }
 
     // Continuation metadata is part of the response and therefore part of the cap.

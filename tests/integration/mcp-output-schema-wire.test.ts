@@ -409,7 +409,7 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     });
   }
 
-  it("keeps response.get failures text-only after output-schema discovery", async () => {
+  it("returns response.get failures in the generic structured error envelope", async () => {
     const failure = (await client.callTool({
       name: "sdl.response.get",
       arguments: {
@@ -419,7 +419,7 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     })) as ToolEnvelope;
 
     assert.equal(failure.isError, true);
-    assert.equal(failure.structuredContent, undefined);
+    GenericStructuredErrorSchema.parse(failure.structuredContent);
     assert.match(responseText(failure), /Response artifact not found/u);
   });
 

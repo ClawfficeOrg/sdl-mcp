@@ -796,6 +796,31 @@ describe("ContextEngine", () => {
     assert.deepEqual(result.finalEvidence, []);
   });
 
+  it("enforces maxTokens on validation errors with continuation recovery", async () => {
+    const validationError = `invalid task: ${"validation detail ".repeat(1_000)}`;
+    mock.method(Planner.prototype, "validateTask", () => ({
+      valid: false,
+      error: validationError,
+    }));
+
+    const result = await new ContextEngine().buildContext(
+      createTask({ budget: { maxTokens: 512 } }),
+    );
+    const serializedTokens = estimateTokens(JSON.stringify(result));
+
+    assert.ok(serializedTokens <= 512);
+    assert.ok(result.truncation?.continuationHandle);
+    assert.ok(result.truncation.fieldsAffected.includes("error"));
+    const continuation = getContinuation(
+      result.truncation.continuationHandle,
+      undefined,
+      undefined,
+      "error",
+    );
+    assert.ok(continuation);
+    assert.equal(continuation.data, validationError);
+  });
+
   it("returns structured error result when planner throws", async () => {
     mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
     mock.method(Planner.prototype, "plan", () => {
@@ -810,6 +835,31 @@ describe("ContextEngine", () => {
     assert.equal(result.metrics.failedActions, 0);
     assert.match(result.summary, /Task failed: planner exploded/);
     assert.equal(result.nextBestAction, "retryWithDifferentInputs");
+  });
+
+  it("enforces maxTokens on planner errors with continuation recovery", async () => {
+    const plannerError = `planner exploded: ${"planner detail ".repeat(1_000)}`;
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => {
+      throw new Error(plannerError);
+    });
+
+    const result = await new ContextEngine().buildContext(
+      createTask({ budget: { maxTokens: 512 } }),
+    );
+    const serializedTokens = estimateTokens(JSON.stringify(result));
+
+    assert.ok(serializedTokens <= 512);
+    assert.ok(result.truncation?.continuationHandle);
+    assert.ok(result.truncation.fieldsAffected.includes("error"));
+    const continuation = getContinuation(
+      result.truncation.continuationHandle,
+      undefined,
+      undefined,
+      "error",
+    );
+    assert.ok(continuation);
+    assert.equal(continuation.data, plannerError);
   });
 
   it("surfaces failed execution result and failure answer", async () => {

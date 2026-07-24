@@ -439,11 +439,6 @@ export function buildToolResponseContentBlocks(
   return contentBlocks;
 }
 
-function shouldIncludeErrorStructuredContent(toolName: string): boolean {
-  // response.get has a strict success-only schema, so its recovery stays in text.
-  return toolName !== "sdl.response.get";
-}
-
 export function buildToolResponseEnvelope(
   primaryPayload: unknown,
   userDisplay: string | null,
@@ -572,7 +567,6 @@ export class MCPServer {
                     outputSchema: convertOutputSchema(
                       tool.outputSchema,
                       this._gatewayMode,
-                      shouldIncludeErrorStructuredContent(tool.name),
                     ),
                   }
                 : {}),
@@ -690,7 +684,6 @@ export class MCPServer {
                 toolName,
                 normalizedArgs as Record<string, unknown>,
                 responseForLog,
-                shouldIncludeErrorStructuredContent(toolName),
               ),
               isError: true,
             };
@@ -1014,7 +1007,6 @@ export class MCPServer {
                 toolName,
                 normalizedArgs as Record<string, unknown>,
                 responseForLog,
-                shouldIncludeErrorStructuredContent(toolName),
               ),
               isError: true,
             };
@@ -1275,10 +1267,8 @@ const GENERIC_ERROR_DETAIL_SCHEMA = {
 function convertOutputSchema(
   schema: z.ZodType,
   compact: boolean,
-  includeStructuredErrors: boolean,
 ): Record<string, unknown> {
   const successSchema = convertSchema(schema, compact);
-  if (!includeStructuredErrors) return successSchema;
 
   const successProperties = isRecordValue(successSchema["properties"])
     ? successSchema["properties"]
