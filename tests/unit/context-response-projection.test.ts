@@ -187,17 +187,29 @@ describe("context-response-projection", () => {
         "sdl.context",
         withRawContext,
       );
+      const modelProjection = projectToolResultForModelContent(
+        "sdl.context",
+        withRawContext,
+      ) as Record<string, unknown>;
 
       assert.notStrictEqual(projected, withRawContext);
       assert.equal(projected.actionsTaken, undefined);
       assert.equal(projected.path, undefined);
       assert.equal(projected.metrics, undefined);
       assert.equal(projected.taskId, undefined);
-      assert.equal(projected.summary, undefined);
+      assert.equal(projected.summary, broadResult.summary);
       assert.equal(projected.retrievalEvidence, undefined);
       assert.equal(projected.etag, undefined);
       assert.equal(projected.answer, broadResult.answer);
       assert.deepEqual(projected._rawContext, { rawTokens: 1000 });
+
+      const modelVisibleAccounting = { ...projected };
+      delete modelVisibleAccounting._rawContext;
+      assert.deepEqual(
+        Object.keys(modelVisibleAccounting),
+        Object.keys(modelProjection),
+      );
+      assert.deepEqual(modelVisibleAccounting, modelProjection);
     });
   });
 
@@ -1473,6 +1485,47 @@ describe("context-response-projection", () => {
       assert.deepEqual(projected.expand, {
         hint: "call sdl.context without answerFirst, or symbol.getCard on evidence ids",
       });
+    });
+
+    it("keeps broad context action references aligned with final evidence by default", () => {
+      const references = [
+        "symbol:handleRuntimeQueryOutput",
+        "symbol:handleRuntimeExecute",
+      ];
+      const summary =
+        `Actions: - getCard (completed, 1ms) [${references.join(", ")}]`;
+      const projected = projectToolResultForModelContent(
+        "sdl.context",
+        {
+          taskType: "explain",
+          success: true,
+          answer: "Both runtime handlers are implemented.",
+          summary,
+          finalEvidence: references.map((reference) => ({
+            type: "symbolCard",
+            reference,
+            summary: reference,
+          })),
+        },
+        {},
+      ) as Record<string, unknown>;
+
+      assert.equal(projected.summary, summary);
+      assert.deepEqual(Object.keys(projected), [
+        "taskType",
+        "success",
+        "answer",
+        "summary",
+        "finalEvidence",
+      ]);
+
+      const actionReferences = /\[([^\]]+)\]/
+        .exec(String(projected.summary))?.[1]
+        .split(", ");
+      const finalReferences = (
+        projected.finalEvidence as Array<{ reference: string }>
+      ).map((item) => item.reference);
+      assert.deepEqual(actionReferences, finalReferences);
     });
 
     it("keeps the answer-first fallback marker in compact context model content", () => {

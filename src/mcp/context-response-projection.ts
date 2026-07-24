@@ -612,9 +612,7 @@ function projectContextResultForModel(
   copyIfPresent(result, projected, "evidence");
   copyIfPresent(result, projected, "expand");
   copyIfPresent(result, projected, "answerFirstFallback");
-  if (!("answer" in result)) {
-    copyIfPresent(result, projected, "summary");
-  }
+  copyIfPresent(result, projected, "summary");
   if ("finalEvidence" in result) {
     projected.finalEvidence = projectEvidenceForModel(result.finalEvidence);
   }
