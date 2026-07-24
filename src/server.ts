@@ -568,7 +568,13 @@ export class MCPServer {
                 tool.wireSchema ??
                 convertSchema(tool.inputSchema, this._gatewayMode),
               ...(tool.outputSchema
-                ? { outputSchema: convertSchema(tool.outputSchema, this._gatewayMode) }
+                ? {
+                    outputSchema: convertOutputSchema(
+                      tool.outputSchema,
+                      this._gatewayMode,
+                      shouldIncludeErrorStructuredContent(tool.name),
+                    ),
+                  }
                 : {}),
             };
           }),
@@ -1249,6 +1255,73 @@ function convertSchema(
     return buildCompactJsonSchema(schema);
   }
   return zodSchemaToJsonSchema(schema);
+}
+
+const GENERIC_ERROR_DETAIL_SCHEMA = {
+  type: "object",
+  properties: {
+    message: { type: "string", minLength: 1 },
+    code: { type: "string", minLength: 1 },
+    details: { type: "array" },
+    classification: { type: "string" },
+    retryable: { type: "boolean" },
+    fallbackTools: { type: "array", items: { type: "string" } },
+    fallbackRationale: { type: "string" },
+  },
+  required: ["message"],
+  additionalProperties: true,
+} as const;
+
+function convertOutputSchema(
+  schema: z.ZodType,
+  compact: boolean,
+  includeStructuredErrors: boolean,
+): Record<string, unknown> {
+  const successSchema = convertSchema(schema, compact);
+  if (!includeStructuredErrors) return successSchema;
+
+  const successProperties = isRecordValue(successSchema["properties"])
+    ? successSchema["properties"]
+    : {};
+  const existingErrorSchema = successProperties["error"];
+  const errorSchema =
+    existingErrorSchema === undefined
+      ? GENERIC_ERROR_DETAIL_SCHEMA
+      : {
+          anyOf: [existingErrorSchema, GENERIC_ERROR_DETAIL_SCHEMA],
+        };
+  const successRequired = Array.isArray(successSchema["required"])
+    ? successSchema["required"].filter(
+        (field): field is string => typeof field === "string",
+      )
+    : [];
+  const advertisedSchema: Record<string, unknown> = {};
+
+  // Keep the advertised root composition-free while relaxing success-only
+  // required fields exclusively for the server's structured error envelope.
+  for (const [key, value] of Object.entries(successSchema)) {
+    if (key === "required") continue;
+    advertisedSchema[key] =
+      key === "properties"
+        ? { ...successProperties, error: errorSchema }
+        : value;
+  }
+  if (!("properties" in advertisedSchema)) {
+    advertisedSchema["properties"] = { error: errorSchema };
+  }
+  if (successRequired.length > 0) {
+    advertisedSchema["if"] = {
+      properties: {
+        error: {
+          type: "object",
+          required: ["message"],
+        },
+      },
+      required: ["error"],
+    };
+    advertisedSchema["else"] = { required: successRequired };
+  }
+  return advertisedSchema;
 }
 
 /**

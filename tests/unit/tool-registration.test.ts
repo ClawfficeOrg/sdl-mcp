@@ -95,6 +95,75 @@ describe("MCP tool registration", () => {
     }
   });
 
+  it("advertises generic errors without weakening a strict success schema", async () => {
+    const mcpServer = new MCPServer();
+    const inputSchema = z.object({
+      mode: z.enum(["success", "error", "invalid"]),
+    });
+    mcpServer.registerTool(
+      "sdl.test.strict-output",
+      "Strict output",
+      inputSchema,
+      async (args) => {
+        const { mode } = inputSchema.parse(args);
+        if (mode === "error") throw new Error("test failure");
+        return mode === "invalid"
+          ? { ok: true }
+          : { ok: true, value: "valid" };
+      },
+      undefined,
+      undefined,
+      z
+        .object({
+          ok: z.literal(true),
+          value: z.string(),
+        })
+        .strict(),
+    );
+
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      mcpServer.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      await client.listTools();
+
+      const success = await client.callTool({
+        name: "sdl.test.strict-output",
+        arguments: { mode: "success" },
+      });
+      assert.notEqual(success.isError, true);
+
+      const failure = await client.callTool({
+        name: "sdl.test.strict-output",
+        arguments: { mode: "error" },
+      });
+      assert.equal(failure.isError, true);
+      const error = failure.structuredContent as {
+        error?: { message?: string; code?: string };
+      };
+      assert.equal(
+        error.error?.message,
+        "An internal error occurred. Check server logs for details.",
+      );
+      assert.equal(error.error?.code, undefined);
+
+      await assert.rejects(
+        client.callTool({
+          name: "sdl.test.strict-output",
+          arguments: { mode: "invalid" },
+        }),
+        /Structured content does not match.+value/u,
+      );
+    } finally {
+      await client.close();
+    }
+  });
+
   it("registers sdl.info with a human title", () => {
     const { tools, server } = makeFakeServer();
 

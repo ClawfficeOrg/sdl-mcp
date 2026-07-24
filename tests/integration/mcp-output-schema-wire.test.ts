@@ -188,6 +188,7 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
       gatewayConfig: { enabled: false, emitLegacyTools: true },
     });
     client = await connect(server);
+    await client.listTools();
 
     for (const setupCall of [
       {
@@ -407,6 +408,20 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
       GenericStructuredErrorSchema.parse(failure.structuredContent);
     });
   }
+
+  it("keeps response.get failures text-only after output-schema discovery", async () => {
+    const failure = (await client.callTool({
+      name: "sdl.response.get",
+      arguments: {
+        repoId: REPO_ID,
+        handle: `response-${REPO_ID}-1784866000000-deadbeefdeadbeef`,
+      },
+    })) as ToolEnvelope;
+
+    assert.equal(failure.isError, true);
+    assert.equal(failure.structuredContent, undefined);
+    assert.match(responseText(failure), /Response artifact not found/u);
+  });
 
   it("returns the exact static no-op checkpoint payload through the SDK wire", async () => {
     const expected = {
