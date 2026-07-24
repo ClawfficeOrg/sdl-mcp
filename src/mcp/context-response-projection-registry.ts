@@ -1,5 +1,6 @@
 export const CUSTOM_RESPONSE_PROJECTION_ACTIONS = [
   "action.search",
+  "buffer.checkpoint",
   "code.needWindow",
   "context",
   "delta.get",
@@ -66,6 +67,7 @@ export function createResponseProjectionRegistry(
 
 export const RESPONSE_PROJECTION_RULES = createResponseProjectionRegistry([
   ["action.search", { projector: "actionSearch" }],
+  ["buffer.checkpoint", { projector: "generic", showRepoId: true }],
   [
     "code.needWindow",
     {

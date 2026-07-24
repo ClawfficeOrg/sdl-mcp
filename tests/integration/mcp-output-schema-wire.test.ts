@@ -22,6 +22,7 @@ import {
 } from "../../dist/db/ladybug.js";
 import { resetSearchEditPlanStore } from "../../dist/mcp/tools/search-edit/plan-store.js";
 import {
+  BufferCheckpointResponseSchema,
   CodeNeedWindowResponseSchema,
   FileReadResponseSchema,
   FileWriteResponseSchema,
@@ -406,4 +407,33 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
       GenericStructuredErrorSchema.parse(failure.structuredContent);
     });
   }
+
+  it("returns the exact static no-op checkpoint payload through the SDK wire", async () => {
+    const expected = {
+      repoId: REPO_ID,
+      requested: false,
+      pending: false,
+      message: "No checkpoint-eligible buffers were pending.",
+    };
+    await client.listTools();
+
+    const first = (await client.callTool({
+      name: "sdl.buffer.checkpoint",
+      arguments: { repoId: REPO_ID, reason: "wire-regression" },
+    })) as ToolEnvelope;
+    const second = (await client.callTool({
+      name: "sdl.buffer.checkpoint",
+      arguments: { repoId: REPO_ID, reason: "wire-regression" },
+    })) as ToolEnvelope;
+
+    assert.notEqual(first.isError, true);
+    assert.notEqual(second.isError, true);
+    assert.strictEqual(
+      JSON.stringify(first.structuredContent),
+      JSON.stringify(second.structuredContent),
+    );
+    assert.deepStrictEqual(first.structuredContent, expected);
+    assert.deepStrictEqual(second.structuredContent, expected);
+    BufferCheckpointResponseSchema.parse(first.structuredContent);
+  });
 });
