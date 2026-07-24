@@ -37,6 +37,27 @@ function evictExpired(): void {
   }
 }
 
+/** Store a complete result behind the workflow continuation retrieval action. */
+export function storeContinuation(result: unknown): string {
+  const handle = `cont-${Date.now()}-${randomBytes(4).toString("hex")}`;
+
+  evictExpired();
+  if (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
+    // Batch eviction prevents rapid churn when a burst fills the bounded store.
+    const evictCount = Math.max(1, Math.floor(MAX_CONTINUATIONS * 0.1));
+    const keys = Array.from(CONTINUATION_STORE.keys()).slice(0, evictCount);
+    for (const key of keys) {
+      CONTINUATION_STORE.delete(key);
+    }
+  }
+  CONTINUATION_STORE.set(handle, {
+    data: safeJsonStringify(result),
+    expiresAt: Date.now() + CONTINUATION_TTL_MS,
+  });
+
+  return handle;
+}
+
 // --- Truncation result types ---
 
 export interface TruncationResult {
@@ -253,22 +274,7 @@ export function truncateStepResult(
     };
   }
 
-  const handle = `cont-${Date.now()}-${randomBytes(4).toString("hex")}`;
-
-  // Store full result for continuation
-  evictExpired();
-  if (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
-    // Evict 10% of entries (batch eviction prevents rapid churn from bursts)
-    const evictCount = Math.max(1, Math.floor(MAX_CONTINUATIONS * 0.1));
-    const keys = Array.from(CONTINUATION_STORE.keys()).slice(0, evictCount);
-    for (const key of keys) {
-      CONTINUATION_STORE.delete(key);
-    }
-  }
-  CONTINUATION_STORE.set(handle, {
-    data: json,
-    expiresAt: Date.now() + CONTINUATION_TTL_MS,
-  });
+  const handle = storeContinuation(result);
 
   const truncated = ensureVisibleTruncationPreview(
     smartTruncate(result, maxTokens),

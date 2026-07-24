@@ -9,6 +9,7 @@ import type {
 import { Planner } from "./planner.js";
 import { Executor } from "./executor.js";
 
+import { storeContinuation } from "../code-mode/workflow-truncation.js";
 import { getLadybugConn } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
 import type { ClusterMemberRow } from "../db/ladybug-clusters.js";
@@ -349,6 +350,31 @@ function supportsHotPath(
     maybeCard.subjectKey !== undefined &&
     maybeCard.subjectKey === maybeHotPath.subjectKey
   );
+}
+
+function removeLowestRankedEvidenceBundle(evidence: Evidence[]): Evidence[] {
+  const candidates = evidence.map(normalizeEvidenceCandidate);
+  const lowest = [...candidates].sort(compareEvidenceValueDensity).at(-1);
+  if (!lowest) return [];
+
+  const removed = new Set([lowest]);
+  if (lowest.evidence.type === "symbolCard") {
+    const hasAlternateSupport = candidates.some(
+      (candidate) =>
+        candidate !== lowest &&
+        candidate.evidence.type === "symbolCard" &&
+        candidate.subjectKey === lowest.subjectKey,
+    );
+    if (!hasAlternateSupport) {
+      for (const candidate of candidates) {
+        if (supportsHotPath(lowest, candidate)) removed.add(candidate);
+      }
+    }
+  }
+
+  return candidates
+    .filter((candidate) => !removed.has(candidate))
+    .map((candidate) => candidate.evidence);
 }
 
 function compareEvidenceValueDensity(
@@ -729,7 +755,8 @@ export class ContextEngine {
       const isPrecise = task.options?.contextMode === "precise";
       const evidenceOptimization = task.options?.evidenceOptimization;
       const finalEvidenceOptimization =
-        evidenceOptimization === "global" && !isPrecise
+        !isPrecise &&
+        (evidenceOptimization === "global" || evidenceOptimization === "budgeted")
           ? "dedupe"
           : evidenceOptimization;
       const optimizeStartedAt = performance.now();
@@ -853,15 +880,17 @@ export class ContextEngine {
 
       // Guard against oversized broad-mode responses that can overflow
       // MCP response limits (observed 136K+ chars in production).
-      return attachDiagnosticTimings(
-        this.truncateIfOverBudget(result, task.budget?.maxTokens, {
+      const completeResult = attachDiagnosticTimings(result, diagnosticTimings);
+      return this.finalizeContextResult(
+        completeResult,
+        task.budget?.maxTokens,
+        {
           task,
           actions,
           success,
           clusterExpandedCount,
           evidenceOptimization,
-        }),
-        diagnosticTimings,
+        },
       );
     } catch (error) {
       return attachDiagnosticTimings(
@@ -1124,191 +1153,113 @@ export class ContextEngine {
   }
 
   /**
-   * Enforce token budget on broad-mode responses.
-   *
-   * 1. Compact to model-visible fields first (drops actionsTaken, path, metrics, etc.).
-   * 2. Progressively trim finalEvidence, then actionsTaken, then answer length.
-   * 3. **Never fully remove `answer` on a successful result** — the answer is the
-   *    primary value of a broad-mode response.
+   * Enforce the token cap at the complete, model-visible response boundary.
+   * Whole evidence bundles are selected first; a shared continuation preserves
+   * the complete pre-truncation result when the response cannot fit unchanged.
    */
-  private truncateIfOverBudget(
+  private finalizeContextResult(
     result: ContextResult,
-    budgetMaxTokens?: number,
-    optimizationContext?: BroadOptimizationContext,
+    budgetMaxTokens: number | undefined,
+    context: BroadOptimizationContext,
   ): ContextResult {
     const effectiveCap = Math.min(
       budgetMaxTokens ?? MAX_CONTEXT_RESPONSE_TOKENS,
       MAX_CONTEXT_RESPONSE_TOKENS,
     );
-
-    // Phase 0: Compact to model-visible fields before measuring tokens.
-    // This runs on both success and error results — error results also
-    // carry an answer field that should be preserved in compact form.
-    result = this.compactBroadResult(result);
-
-    const serialized = JSON.stringify(result);
-    const originalTokens = estimateTokens(serialized);
+    const completeResult = this.compactBroadResult(result);
+    const originalTokens = estimateTokens(JSON.stringify(completeResult));
 
     if (originalTokens <= effectiveCap) {
-      return result;
+      return completeResult;
     }
 
-    logger.debug("Broad-mode response exceeds token budget; truncating", {
+    logger.debug("Context response exceeds token budget; finalizing", {
       originalTokens,
       effectiveCap,
     });
 
+    const continuationHandle = storeContinuation(completeResult);
     const fieldsAffected: string[] = [];
-    let currentTokens = originalTokens;
+    recordAffectedField(fieldsAffected, "finalEvidence");
+    recordAffectedField(fieldsAffected, "summary");
+    if ("actionsTaken" in completeResult) {
+      recordAffectedField(fieldsAffected, "actionsTaken");
+    }
+    if (completeResult.answer !== undefined) {
+      recordAffectedField(fieldsAffected, "answer");
+    }
 
-    if (optimizationContext?.evidenceOptimization === "global") {
-      const globallyOptimized = this.optimizeBroadResultGlobally(
-        result,
-        effectiveCap,
-        optimizationContext,
-      );
-      const optimizedTokens = estimateTokens(JSON.stringify(globallyOptimized));
-      if (optimizedTokens < currentTokens) {
-        if (
-          JSON.stringify(globallyOptimized.finalEvidence) !==
-          JSON.stringify(result.finalEvidence)
-        ) {
-          recordAffectedField(fieldsAffected, "finalEvidence");
-        }
-        if (globallyOptimized.summary !== result.summary) {
-          recordAffectedField(fieldsAffected, "summary");
-        }
-        if (globallyOptimized.answer !== result.answer) {
-          recordAffectedField(fieldsAffected, "answer");
-        }
-        result = globallyOptimized;
-        currentTokens = optimizedTokens;
+    // Continuation metadata is part of the response and therefore part of the cap.
+    const attachTruncation = (value: ContextResult): ContextResult => {
+      let truncatedTokens = 0;
+      let candidate = value;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        candidate = {
+          ...value,
+          truncation: {
+            originalTokens,
+            truncatedTokens,
+            fieldsAffected,
+            continuationHandle,
+            continuationAction: "workflowContinuationGet",
+          },
+        };
+        const measuredTokens = estimateTokens(JSON.stringify(candidate));
+        if (measuredTokens === truncatedTokens) return candidate;
+        truncatedTokens = measuredTokens;
       }
-      if (currentTokens <= effectiveCap) {
-        result.truncation = {
+      return {
+        ...value,
+        truncation: {
           originalTokens,
-          truncatedTokens: currentTokens,
+          truncatedTokens,
           fieldsAffected,
-        };
-        return result;
-      }
-    }
-
-    // Phase 1: Trim finalEvidence. Global optimization must keep evidence
-    // bundles intact, so use the selector instead of positional slicing.
-    if (result.finalEvidence.length > 0) {
-      const targetEvidenceCount = Math.max(
-        1,
-        Math.floor(
-          result.finalEvidence.length * (effectiveCap / currentTokens),
-        ),
-      );
-      if (targetEvidenceCount < result.finalEvidence.length) {
-        if (optimizationContext?.evidenceOptimization === "global") {
-          const evidenceBudget = Math.max(
-            0,
-            Math.floor(
-              result.finalEvidence.reduce(
-                (total, item) => total + evidenceTokenCost(item),
-                0,
-              ) *
-                (effectiveCap / currentTokens),
-            ),
-          );
-          const selectedEvidence = optimizeEvidenceForResponse(
-            result.finalEvidence,
-            "budgeted",
-            evidenceBudget,
-          );
-          result = this.withBroadEvidence(
-            result,
-            optimizationContext,
-            selectedEvidence,
-            true,
-          );
-          recordAffectedField(fieldsAffected, "summary");
-          recordAffectedField(fieldsAffected, "answer");
-        } else {
-          result = {
-            ...result,
-            finalEvidence: result.finalEvidence.slice(0, targetEvidenceCount),
-          };
-        }
-        recordAffectedField(fieldsAffected, "finalEvidence");
-      }
-    }
-
-    // Check after phase 1
-    currentTokens = estimateTokens(JSON.stringify(result));
-    if (currentTokens <= effectiveCap) {
-      result.truncation = {
-        originalTokens,
-        truncatedTokens: currentTokens,
-        fieldsAffected,
+          continuationHandle,
+          continuationAction: "workflowContinuationGet",
+        },
       };
-      return result;
-    }
+    };
 
-    // Phase 2: Trim actionsTaken — keep first N items
-    if (result.actionsTaken && result.actionsTaken.length > 0) {
-      const targetActionCount = Math.max(
-        1,
-        Math.floor(result.actionsTaken.length * (effectiveCap / currentTokens)),
-      );
-      if (targetActionCount < result.actionsTaken.length) {
-        result = {
-          ...result,
-          actionsTaken: result.actionsTaken.slice(0, targetActionCount),
-        };
-        recordAffectedField(fieldsAffected, "actionsTaken");
-      }
-    }
+    const buildEvidenceResult = (evidence: Evidence[]): ContextResult =>
+      attachTruncation(this.withBroadEvidence(completeResult, context, evidence, true));
 
-    // Check after phase 2
-    currentTokens = estimateTokens(JSON.stringify(result));
-    if (currentTokens <= effectiveCap) {
-      result.truncation = {
-        originalTokens,
-        truncatedTokens: currentTokens,
-        fieldsAffected,
-      };
-      return result;
-    }
-
-    // Phase 3: Truncate answer length but NEVER remove it on successful results.
-    // The answer is the primary value of a broad-mode response.
-    if (result.answer) {
-      const halfBudgetChars = Math.floor((effectiveCap / 2) * 3.5); // rough token-to-char
-      if (result.answer.length > halfBudgetChars) {
-        result = {
-          ...result,
-          answer:
-            result.answer.slice(0, halfBudgetChars) + "\n\n[answer truncated]",
-        };
-        recordAffectedField(fieldsAffected, "answer");
-      }
-    }
-
-    const truncatedTokens = estimateTokens(JSON.stringify(result));
-    result.truncation = { originalTokens, truncatedTokens, fieldsAffected };
-    return result;
-  }
-
-  private optimizeBroadResultGlobally(
-    result: ContextResult,
-    effectiveCap: number,
-    context: BroadOptimizationContext,
-  ): ContextResult {
-    const baseResult = this.withBroadEvidence(result, context, [], true);
-    const baseTokens = estimateTokens(JSON.stringify(baseResult));
-    const evidenceBudget = Math.max(0, effectiveCap - baseTokens);
-    const selectedEvidence = optimizeEvidenceForResponse(
-      result.finalEvidence,
-      "budgeted",
-      evidenceBudget,
+    const baseEnvelope = buildEvidenceResult([]);
+    const evidenceAllowance = Math.max(
+      0,
+      effectiveCap - estimateTokens(JSON.stringify(baseEnvelope)),
     );
+    let selectedEvidence = optimizeEvidenceForResponse(
+      completeResult.finalEvidence,
+      "budgeted",
+      evidenceAllowance,
+    );
+    let candidate = buildEvidenceResult(selectedEvidence);
+    let candidateTokens = estimateTokens(JSON.stringify(candidate));
 
-    return this.withBroadEvidence(result, context, selectedEvidence, true);
+    while (candidateTokens > effectiveCap && selectedEvidence.length > 0) {
+      selectedEvidence = removeLowestRankedEvidenceBundle(selectedEvidence);
+      candidate = buildEvidenceResult(selectedEvidence);
+      candidateTokens = estimateTokens(JSON.stringify(candidate));
+    }
+
+    if (candidateTokens <= effectiveCap) {
+      return candidate;
+    }
+
+    const continuationSummary =
+      "Complete context exceeds the requested token budget. Retrieve it with workflowContinuationGet.";
+    const continuationOnly = {
+      taskType: result.taskType,
+      finalEvidence: [],
+      summary: continuationSummary,
+      success: result.success,
+      ...(result.answer !== undefined ? { answer: continuationSummary } : {}),
+      ...(completeResult.retrievalEvidence !== undefined
+        ? { retrievalEvidence: completeResult.retrievalEvidence }
+        : {}),
+    } as unknown as ContextResult;
+
+    return attachTruncation(continuationOnly);
   }
 
   private withBroadEvidence(
@@ -1317,12 +1268,20 @@ export class ContextEngine {
     evidence: Evidence[],
     compactEvidence: boolean,
   ): ContextResult {
+    const projectedActions = projectActionsToEvidence(context.actions, evidence);
+    const actionsTaken = projectedActions.map((action) => ({
+      ...action,
+      evidence: [],
+      evidenceCount: action.evidence.length,
+    }));
+
     return {
       ...result,
+      ...("actionsTaken" in result ? { actionsTaken } : {}),
       finalEvidence: evidence,
       summary: this.generateSummary(
         context.task,
-        context.actions,
+        projectedActions,
         evidence,
         context.success,
         {

@@ -14,6 +14,11 @@ import type {
   ExecutionMetrics,
   RungPath,
 } from "../../../dist/agent/types.js";
+import {
+  clearContinuationStore,
+  getContinuation,
+} from "../../../dist/code-mode/workflow-truncation.js";
+import { estimateTokens } from "../../../dist/util/tokenize.js";
 
 function createTask(overrides: Partial<AgentTask> = {}): AgentTask {
   return {
@@ -42,6 +47,7 @@ const defaultMetrics: ExecutionMetrics = {
 
 afterEach(() => {
   mock.restoreAll();
+  clearContinuationStore();
 });
 
 describe("selectPathScopedExactSymbol", () => {
@@ -560,6 +566,158 @@ describe("ContextEngine", () => {
     assert.match(result.summary, /Evidence: 1 hotPath, 1 symbolCard/);
     assert.match(result.answer ?? "", /Selected evidence: 1 hotPath, 1 symbolCard/);
     assert.equal(result.truncation, undefined);
+  });
+
+  it("enforces maxTokens on the complete response with continuation recovery", async () => {
+    const handlerDetail =
+      " if(value[index]){return persistArtifact(result);}".repeat(12);
+    const unrelatedDetail =
+      " for(item of lane){collect(item);}".repeat(30);
+    const evidence: Evidence[] = [
+      {
+        type: "symbolCard",
+        reference: "symbol:handleRuntimeQueryOutput",
+        summary: `handleRuntimeQueryOutput resolves persisted runtime artifacts.${handlerDetail}`,
+        timestamp: 1,
+      },
+      {
+        type: "hotPath",
+        reference: "hotpath:handleRuntimeQueryOutput",
+        summary: `handleRuntimeQueryOutput artifact lookup hot path.${handlerDetail}`,
+        timestamp: 2,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:handleRuntimeExecute",
+        summary: `handleRuntimeExecute persists runtime output artifacts.${handlerDetail}`,
+        timestamp: 3,
+      },
+      {
+        type: "hotPath",
+        reference: "hotpath:handleRuntimeExecute",
+        summary: `handleRuntimeExecute persistence hot path.${handlerDetail}`,
+        timestamp: 4,
+      },
+      ...Array.from({ length: 6 }, (_, index): Evidence => ({
+        type: index % 2 === 0 ? "searchResult" : "skeleton",
+        reference:
+          index % 2 === 0
+            ? `search:unrelated-${index}`
+            : `file:src/unrelated-${index}.ts`,
+        summary: `Unrelated lane ${index}.${unrelatedDetail}`,
+        timestamp: 5 + index,
+      })),
+    ];
+    const actions: Action[] = [
+      {
+        id: "runtime-handlers",
+        type: "getHotPath",
+        status: "completed",
+        input: { context: evidence.slice(0, 4).map(({ reference }) => reference) },
+        output: {},
+        timestamp: 1,
+        durationMs: 1,
+        evidence: evidence.slice(0, 4),
+      },
+      {
+        id: "unrelated-lanes",
+        type: "search",
+        status: "completed",
+        input: { context: evidence.slice(4).map(({ reference }) => reference) },
+        output: {},
+        timestamp: 2,
+        durationMs: 1,
+        evidence: evidence.slice(4),
+      },
+    ];
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => [
+      "symbol:handleRuntimeQueryOutput",
+      "symbol:handleRuntimeExecute",
+    ]);
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions,
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskText:
+          "Diagnose runtimeQueryOutput and identify the runtimeExecute implementation path",
+        budget: { maxTokens: 2600 },
+        options: { contextMode: "broad", evidenceOptimization: "budgeted" },
+      }),
+    );
+    const references = result.finalEvidence.map(({ reference }) => reference);
+
+    assert.ok(references.includes("symbol:handleRuntimeQueryOutput"));
+    assert.ok(references.includes("symbol:handleRuntimeExecute"));
+    assert.ok(references.some((reference) => reference.startsWith("hotpath:handleRuntime")));
+    assert.ok(
+      references.filter((reference) => reference.includes("unrelated")).length < 6,
+    );
+    assert.match(
+      result.summary,
+      new RegExp(`collected ${result.finalEvidence.length} evidence item`),
+    );
+    const actionsSection = result.summary
+      .split("\n\n")
+      .find((part) => part.startsWith("Actions: "));
+    assert.ok(actionsSection);
+    const renderedReferences = new Set(
+      [...actionsSection.matchAll(/\[([^\]]+)\]/g)].flatMap(([, refs]) =>
+        refs.split(", "),
+      ),
+    );
+    assert.deepEqual(
+      [...renderedReferences].sort(),
+      [...new Set(references)].sort(),
+    );
+    const serializedTokens = estimateTokens(JSON.stringify(result));
+    assert.ok(serializedTokens <= 2600);
+    assert.ok(result.truncation);
+    assert.equal(result.truncation.truncatedTokens, serializedTokens);
+    assert.ok(result.truncation.fieldsAffected.length > 0);
+    assert.ok(result.truncation.continuationHandle);
+    assert.equal(
+      result.truncation.continuationAction,
+      "workflowContinuationGet",
+    );
+
+    const continuation = getContinuation(result.truncation.continuationHandle);
+    assert.ok(continuation);
+    assert.equal(
+      typeof continuation.data,
+      "object",
+      `continuation should resolve inline (tokens: ${continuation.totalTokens})`,
+    );
+    const complete = continuation.data as { finalEvidence: Evidence[] };
+    assert.deepEqual(
+      complete.finalEvidence.map(({ reference }) => reference),
+      evidence.map(({ reference }) => reference),
+    );
+    assert.equal(
+      result.truncation.originalTokens,
+      estimateTokens(JSON.stringify(complete)),
+    );
+
+    const minimumResult = await new ContextEngine().buildContext(
+      createTask({
+        taskText:
+          "Diagnose runtimeQueryOutput and identify the runtimeExecute implementation path",
+        budget: { maxTokens: 512 },
+        options: { contextMode: "broad", evidenceOptimization: "budgeted" },
+      }),
+    );
+    assert.ok(estimateTokens(JSON.stringify(minimumResult)) <= 512);
+    assert.deepEqual(minimumResult.finalEvidence, []);
+    assert.deepEqual(minimumResult.actionsTaken ?? [], []);
+    assert.ok(minimumResult.truncation?.continuationHandle);
   });
 
   it("enforces planner budget constraints for token and duration", async () => {

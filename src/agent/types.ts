@@ -124,6 +124,8 @@ export interface ContextResult {
     originalTokens: number;
     truncatedTokens: number;
     fieldsAffected: string[];
+    continuationHandle: string;
+    continuationAction: "workflowContinuationGet";
   };
   /** Retrieval evidence with symptom classification. */
   retrievalEvidence?: {

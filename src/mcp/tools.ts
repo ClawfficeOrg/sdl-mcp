@@ -2517,9 +2517,10 @@ export type PRRiskAnalysisResponse = z.infer<
 const AgentContextBudgetSchema = z
   .strictObject(
     {
-      maxTokens: z.number().optional().describe("Maximum tokens to consume"),
+      maxTokens: z.number().min(512).optional().describe("Maximum tokens to consume"),
       maxEstimatedTokens: z
         .number()
+        .min(512)
         .optional()
         .describe("Alias for maxTokens, accepted for slice.build compatibility"),
       maxActions: z

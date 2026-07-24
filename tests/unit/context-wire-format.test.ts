@@ -6,6 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+
+import { AgentContextRequestSchema } from "../../dist/mcp/tools.js";
 import {
   publishContextWireDecision,
   serializeContextForWireFormat,
@@ -99,6 +101,43 @@ function captureTap(): {
   installObservabilityTap(tap);
   return { events, uninstall: () => resetObservabilityTap() };
 }
+
+test("sdl.context budget enforces the continuation-safe minimum", () => {
+  const request = {
+    repoId: "repo-1",
+    taskType: "explain",
+    taskText: "Explain the response budget",
+  };
+
+  assert.equal(
+    AgentContextRequestSchema.safeParse({
+      ...request,
+      budget: { maxTokens: 512 },
+    }).success,
+    true,
+  );
+  assert.equal(
+    AgentContextRequestSchema.safeParse({
+      ...request,
+      budget: { maxEstimatedTokens: 512 },
+    }).success,
+    true,
+  );
+  assert.equal(
+    AgentContextRequestSchema.safeParse({
+      ...request,
+      budget: { maxTokens: 511 },
+    }).success,
+    false,
+  );
+  assert.equal(
+    AgentContextRequestSchema.safeParse({
+      ...request,
+      budget: { maxEstimatedTokens: 511 },
+    }).success,
+    false,
+  );
+});
 
 test("wireFormat=undefined returns json passthrough (no gate)", () => {
   tokenAccumulator.reset();

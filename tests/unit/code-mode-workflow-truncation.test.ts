@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   truncateStepResult,
+  storeContinuation,
   getContinuation,
   clearContinuationStore,
 } from "../../dist/code-mode/workflow-truncation.js";
@@ -108,6 +109,17 @@ describe("workflow-truncation", () => {
     const data = Array.from({ length: 100 }, (_, i) => ({ id: i }));
     const result = truncateStepResult(data, 50);
     const continuation = getContinuation(result.handle);
+    assert.ok(continuation);
+    assert.deepEqual(continuation.data, data);
+    assert.equal(continuation.hasMore, false);
+  });
+
+  it("stores explicit continuations in the shared workflow store", () => {
+    const data = { source: "context", items: [{ id: 1 }, { id: 2 }] };
+    const handle = storeContinuation(data);
+    const continuation = getContinuation(handle);
+
+    assert.match(handle, /^cont-/);
     assert.ok(continuation);
     assert.deepEqual(continuation.data, data);
     assert.equal(continuation.hasMore, false);

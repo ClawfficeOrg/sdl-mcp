@@ -78,6 +78,13 @@ describe("sdl.context response artifacts", () => {
       ],
       summary: "large context response",
       success: true,
+      truncation: {
+        originalTokens: 6000,
+        truncatedTokens: 512,
+        fieldsAffected: ["finalEvidence"],
+        continuationHandle: "cont-context-response",
+        continuationAction: "workflowContinuationGet",
+      },
       metrics: {
         totalDurationMs: 1,
         totalTokens: 6000,
@@ -118,5 +125,12 @@ describe("sdl.context response artifacts", () => {
     const content = full.content as Record<string, unknown>;
     assert.equal(content.taskId, "task-a");
     assert.equal(content._rawContext, undefined);
+    assert.deepEqual(content.truncation, {
+      originalTokens: 6000,
+      truncatedTokens: 512,
+      fieldsAffected: ["finalEvidence"],
+      continuationHandle: "cont-context-response",
+      continuationAction: "workflowContinuationGet",
+    });
   });
 });
