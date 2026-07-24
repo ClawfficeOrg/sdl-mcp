@@ -15,6 +15,7 @@ interface RegisteredToolCall {
   wireSchema?: Record<string, unknown>;
   outputSchema?: unknown;
   presentation?: { title?: string };
+  handler?: (args: unknown) => unknown;
 }
 
 function makeFakeServer(): { names: string[]; tools: RegisteredToolCall[]; server: any } {
@@ -26,13 +27,20 @@ function makeFakeServer(): { names: string[]; tools: RegisteredToolCall[]; serve
       name: string,
       description?: string,
       _inputSchema?: unknown,
-      _handler?: unknown,
+      handler?: (args: unknown) => unknown,
       wireSchema?: Record<string, unknown>,
       presentation?: { title?: string },
       outputSchema?: unknown,
     ): void {
       names.push(name);
-      tools.push({ name, description, wireSchema, outputSchema, presentation });
+      tools.push({
+        name,
+        description,
+        wireSchema,
+        outputSchema,
+        presentation,
+        handler,
+      });
     },
     registerPostDispatchHook(): void {},
   };
@@ -97,6 +105,78 @@ describe("MCP tool registration", () => {
     assert.strictEqual(infoTool.presentation?.title, "SDL Info");
   });
 
+  it("advertises all 34 structured tools in stable order with object-root output schemas", async () => {
+    const mcpServer = new MCPServer();
+    registerTools(mcpServer, {
+      actionAvailability: { memoryTools: false },
+    });
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      mcpServer.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      const listed = await client.listTools();
+      const expectedNames = [
+        "sdl.action.search",
+        "sdl.info",
+        "sdl.repo.register",
+        "sdl.repo.status",
+        "sdl.repo.unregister",
+        "sdl.index.refresh",
+        "sdl.repo.overview",
+        "sdl.buffer.push",
+        "sdl.buffer.checkpoint",
+        "sdl.buffer.status",
+        "sdl.symbol.search",
+        "sdl.symbol.getCard",
+        "sdl.symbol.edit",
+        "sdl.slice.build",
+        "sdl.slice.refresh",
+        "sdl.slice.spillover.get",
+        "sdl.delta.get",
+        "sdl.code.needWindow",
+        "sdl.code.getSkeleton",
+        "sdl.code.getHotPath",
+        "sdl.policy.get",
+        "sdl.policy.set",
+        "sdl.pr.risk.analyze",
+        "sdl.agent.feedback",
+        "sdl.agent.feedback.query",
+        "sdl.runtime.execute",
+        "sdl.runtime.queryOutput",
+        "sdl.response.get",
+        "sdl.usage.stats",
+        "sdl.file.read",
+        "sdl.file.write",
+        "sdl.semantic.enrichment.refresh",
+        "sdl.semantic.enrichment.status",
+        "sdl.search.edit",
+      ];
+      assert.deepStrictEqual(
+        listed.tools.map((tool) => tool.name),
+        expectedNames,
+      );
+      for (const tool of listed.tools) {
+        const outputSchema = tool.outputSchema;
+        assert.ok(outputSchema, `${tool.name} output schema`);
+        assert.strictEqual(
+          outputSchema.type,
+          "object",
+          `${tool.name} output schema root`,
+        );
+        assert.strictEqual("anyOf" in outputSchema, false, tool.name);
+        assert.strictEqual("oneOf" in outputSchema, false, tool.name);
+        assert.strictEqual("allOf" in outputSchema, false, tool.name);
+      }
+    } finally {
+      await client.close();
+    }
+  });
+
   it("preserves gateway wire schemas with action-specific fields and descriptions", () => {
     const { tools, server } = makeFakeServer();
 
@@ -133,7 +213,7 @@ describe("MCP tool registration", () => {
     assert.ok(getVersion().length > 0, "package version should resolve");
   });
 
-  it("registers only proven flat output schemas", () => {
+  it("registers output schemas for every flat tool", () => {
     const { tools: stableTools, server: stableServer } = makeFakeServer();
     registerTools(stableServer as any);
 
@@ -171,21 +251,11 @@ describe("MCP tool registration", () => {
       "sdl.semantic.enrichment.status",
       "sdl.search.edit",
     ];
-    const intentionallyOmittedFlatTools: string[] = [];
 
     for (const name of requiredFlatTools) {
       const tool = stableTools.find((candidate) => candidate.name === name);
       assert.ok(tool, `expected ${name} to be registered`);
       assert.ok(tool.outputSchema, `expected ${name} output schema`);
-    }
-    for (const name of intentionallyOmittedFlatTools) {
-      const tool = stableTools.find((candidate) => candidate.name === name);
-      assert.ok(tool, `expected ${name} to be registered`);
-      assert.strictEqual(
-        tool.outputSchema,
-        undefined,
-        `expected ${name} output schema to remain omitted`,
-      );
     }
 
     const { tools: codeTools, server: codeServer } = makeFakeServer();
@@ -415,8 +485,8 @@ describe("MCP tool registration", () => {
     assert.ok(!("maxTokens" in sliceBudget));
   });
 
-  it("registers only code-mode tools when exclusive mode is enabled", () => {
-    const { names, server } = makeFakeServer();
+  it("registers only code-mode tools when exclusive mode is enabled", async () => {
+    const { names, tools, server } = makeFakeServer();
 
     registerTools(server as any, {}, undefined, {
       enabled: true,
@@ -456,6 +526,18 @@ describe("MCP tool registration", () => {
     assert.ok(
       !names.includes("sdl.info"),
       "sdl.info should NOT be registered in exclusive mode",
+    );
+    const actionSearch = tools.find(
+      (tool) => tool.name === "sdl.action.search",
+    );
+    assert.ok(actionSearch?.handler);
+    const discovery = await actionSearch.handler({
+      query: "sdl.info server information",
+      limit: 10,
+    }) as { actions?: Array<{ action?: string }> };
+    assert.ok(
+      !discovery.actions?.some((action) => action.action === "info"),
+      "exclusive mode discovery must not advertise sdl.info",
     );
     assert.strictEqual(
       names.length,

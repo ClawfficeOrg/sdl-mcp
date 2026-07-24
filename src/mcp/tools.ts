@@ -560,6 +560,47 @@ const CodeWindowRequestSchema = z.object({
     .optional(),
 });
 
+// ============================================================================
+// Info Schemas
+// ============================================================================
+
+/** Public runtime/configuration report returned by the special sdl.info tool. */
+export const InfoResponseSchema = z.object({
+  version: z.string(),
+  runtime: z.object({
+    node: z.string(),
+    platform: z.string(),
+    arch: z.string(),
+  }),
+  config: z.object({
+    path: z.string(),
+    exists: z.boolean(),
+    loaded: z.boolean(),
+  }),
+  logging: z.object({
+    path: z.string().nullable(),
+    consoleMirroring: z.boolean(),
+    fallbackUsed: z.boolean(),
+  }),
+  ladybug: z.object({
+    available: z.boolean(),
+    activePath: z.string().nullable(),
+  }),
+  native: z.object({
+    available: z.boolean(),
+    sourcePath: z.string().nullable(),
+    disabledByEnv: z.boolean(),
+    reason: z.string(),
+  }),
+  warnings: z
+    .array(z.string())
+    .optional()
+    .describe("Omitted by compact projection when no warnings are present."),
+  misconfigurations: z.array(z.string()),
+});
+
+export type InfoResponse = z.infer<typeof InfoResponseSchema>;
+
 export const RepoRegisterRequestSchema = z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   rootPath: z.string().min(1),
@@ -1135,6 +1176,10 @@ const ResponseArtifactPublicMetadataSchema = ResponseArtifactMetadataSchema.pick
   originalBytes: true,
   etag: true,
   contentKind: true,
+}).extend({
+  // The compact model projection omits redundant repository identity and ETags.
+  repoId: z.string().optional(),
+  etag: z.string().optional(),
 });
 
 export const ToolTimingDiagnosticsSchema = z.object({
@@ -1377,7 +1422,7 @@ const SymbolEditPreviewResponseSchema = z.object({
   file: z.string(),
   writeTarget: z.enum(["file", "draft"]),
   requiresApply: z.boolean(),
-  expiresAt: z.string(),
+  expiresAt: z.string().optional(),
   validation: SymbolEditValidationSummarySchema,
   fileEntries: z.array(EditPreviewFileEntrySchema),
 });
@@ -1396,7 +1441,7 @@ const SymbolEditApplyResponseSchema = z.object({
   filesSkipped: z.number().int().nonnegative(),
   filesFailed: z.number().int().nonnegative(),
   results: z.array(EditFileResultSchema),
-  rollback: EditRollbackSchema,
+  rollback: EditRollbackSchema.optional(),
   draftUpdate: z
     .object({
       accepted: z.boolean(),
@@ -1412,16 +1457,25 @@ export const SymbolEditResponseSchema = z.discriminatedUnion("mode", [
   SymbolEditApplyResponseSchema,
 ]);
 
+// Compact wire projections may omit these fields, while handlers still return
+// the complete domain response represented by their exported TypeScript types.
+type WithRequiredFields<T, K extends keyof T> = T &
+  Required<Pick<T, K>>;
+
 export type SymbolEditValidationSummary = z.infer<
   typeof SymbolEditValidationSummarySchema
 >;
-export type SymbolEditPreviewResponse = z.infer<
-  typeof SymbolEditPreviewResponseSchema
+export type SymbolEditPreviewResponse = WithRequiredFields<
+  z.infer<typeof SymbolEditPreviewResponseSchema>,
+  "expiresAt"
 >;
-export type SymbolEditApplyResponse = z.infer<
-  typeof SymbolEditApplyResponseSchema
+export type SymbolEditApplyResponse = WithRequiredFields<
+  z.infer<typeof SymbolEditApplyResponseSchema>,
+  "rollback"
 >;
-export type SymbolEditResponse = z.infer<typeof SymbolEditResponseSchema>;
+export type SymbolEditResponse =
+  | SymbolEditPreviewResponse
+  | SymbolEditApplyResponse;
 
 /**
  * Unified symbol card request schema - supports both single and batch retrieval.
@@ -1564,12 +1618,6 @@ const WireBatchCardResponseSchema = BatchCardResponseSchema.extend({
     ]),
   ),
 });
-
-const SymbolGetCardHandlerResponseSchema = z.union([
-  SingleCardResponseSchema,
-  BatchCardResponseSchema,
-  NotModifiedResponseSchema,
-]);
 
 /**
  * Unified response schema - supports both single and batch responses.
@@ -1973,9 +2021,9 @@ const CodeWindowResponseApprovedSchema = z.object({
   file: z.string(),
   range: RangeSchema,
   code: z.string(),
-  whyApproved: z.array(z.string()),
+  whyApproved: z.array(z.string()).optional(),
   warnings: z.array(z.string()).optional(),
-  estimatedTokens: z.number().int(),
+  estimatedTokens: z.number().int().optional(),
   downgradedFrom: z.enum(["raw-code", "skeleton", "hotpath"]).optional(),
   truncation: z
     .object({
@@ -2320,8 +2368,8 @@ export const RepoOverviewRequestSchema = z.object({
 
 const RepoOverviewPayloadSchema = z.object({
   repoId: z.string().min(1),
-  versionId: z.string(),
-  generatedAt: z.string(),
+  versionId: z.string().optional(),
+  generatedAt: z.string().optional(),
   stats: RepoStatsSchema,
   directories: z.array(DirectorySummarySchema),
   hotspots: CodebaseHotspotsSchema.optional(),
@@ -2354,14 +2402,16 @@ const RepoOverviewPayloadSchema = z.object({
       ),
     })
     .optional(),
-  tokenMetrics: TokenMetricsSchema,
+  tokenMetrics: TokenMetricsSchema.optional(),
 });
 
 export const RepoOverviewResponseSchema = z.union([
   RepoOverviewPayloadSchema.extend({
-    etag: z.string(),
+    etag: z.string().optional(),
   }),
-  ConditionalNotModifiedResponseSchema,
+  ConditionalNotModifiedResponseSchema.extend({
+    etag: z.string().optional(),
+  }),
 ]);
 
 // ============================================================================
@@ -2390,9 +2440,10 @@ export type SymbolSearchRequest = z.infer<typeof SymbolSearchRequestSchema>;
 export type SymbolSearchResponse = z.infer<typeof SymbolSearchResponseSchema>;
 export type SymbolRef = z.infer<typeof SymbolRefSchema>;
 export type SymbolGetCardRequest = z.infer<typeof SymbolGetCardRequestSchema>;
-export type SymbolGetCardResponse = z.infer<
-  typeof SymbolGetCardHandlerResponseSchema
->;
+export type SymbolGetCardResponse =
+  | z.infer<typeof SingleCardResponseSchema>
+  | z.infer<typeof BatchCardResponseSchema>
+  | z.infer<typeof NotModifiedResponseSchema>;
 export type SliceBuildRequest = z.infer<typeof SliceBuildRequestSchema>;
 export type SliceBuildResponse = z.infer<typeof SliceBuildResponseSchema>;
 export type SliceBuildWireFormat = z.infer<typeof SliceBuildWireFormatSchema>;
@@ -2415,9 +2466,13 @@ export type SliceSpilloverGetResponse = z.infer<
   typeof SliceSpilloverGetResponseSchema
 >;
 export type CodeNeedWindowRequest = z.infer<typeof CodeNeedWindowRequestSchema>;
-export type CodeNeedWindowResponse = z.infer<
-  typeof CodeNeedWindowResponseSchema
->;
+export type CodeNeedWindowResponse =
+  | WithRequiredFields<
+      z.infer<typeof CodeWindowResponseApprovedSchema>,
+      "whyApproved" | "estimatedTokens"
+    >
+  | z.infer<typeof CodeWindowResponseDeniedSchema>
+  | z.infer<typeof ResponseArtifactReferenceSchema>;
 export type PolicyGetRequest = z.infer<typeof PolicyGetRequestSchema>;
 export type PolicyGetResponse = z.infer<typeof PolicyGetResponseSchema>;
 export type PolicySetRequest = z.infer<typeof PolicySetRequestSchema>;
@@ -2427,7 +2482,13 @@ export type GetSkeletonResponse = z.infer<typeof GetSkeletonResponseSchema>;
 export type GetHotPathRequest = z.infer<typeof GetHotPathRequestSchema>;
 export type GetHotPathResponse = z.infer<typeof GetHotPathResponseSchema>;
 export type RepoOverviewRequest = z.infer<typeof RepoOverviewRequestSchema>;
-export type RepoOverviewResponse = z.infer<typeof RepoOverviewResponseSchema>;
+export type RepoOverviewResponse =
+  | WithRequiredFields<
+      z.infer<typeof RepoOverviewPayloadSchema>,
+      "versionId" | "generatedAt" | "tokenMetrics"
+    > &
+      { etag: string }
+  | z.infer<typeof ConditionalNotModifiedResponseSchema>;
 
 const FindingSchema = z.object({
   type: z.string(),
@@ -3695,10 +3756,10 @@ export type FileReadRequest = z.infer<typeof FileReadRequestSchema>;
 export const FileReadInlineResponseSchema = z.object({
   filePath: z.string(),
   content: z.string(),
-  bytes: z.number().int().nonnegative(),
-  totalLines: z.number().int().nonnegative(),
-  returnedLines: z.number().int().nonnegative(),
-  truncated: z.boolean(),
+  bytes: z.number().int().nonnegative().optional(),
+  totalLines: z.number().int().nonnegative().optional(),
+  returnedLines: z.number().int().nonnegative().optional(),
+  truncated: z.boolean().optional(),
   truncatedAt: z.number().int().nonnegative().optional(),
   matchCount: z.number().int().nonnegative().optional(),
   extractedPath: z.string().optional(),
@@ -3713,10 +3774,13 @@ export const FileReadResponseSchema = z.union([
   ResponseArtifactReferenceSchema,
 ]);
 
-export type FileReadInlineResponse = z.infer<
-  typeof FileReadInlineResponseSchema
+export type FileReadInlineResponse = WithRequiredFields<
+  z.infer<typeof FileReadInlineResponseSchema>,
+  "bytes" | "totalLines" | "returnedLines" | "truncated"
 >;
-export type FileReadResponse = z.infer<typeof FileReadResponseSchema>;
+export type FileReadResponse =
+  | FileReadInlineResponse
+  | z.infer<typeof ResponseArtifactReferenceSchema>;
 
 // ============================================================================
 // Semantic Enrichment Schemas
@@ -3814,6 +3878,9 @@ const SemanticProviderRunSchema = z.object({
 
 const ProjectedSemanticProviderRunBaseSchema = z.object({
   ...SemanticProviderRunBaseShape,
+  // Status projections omit volatile run identity/timestamps by default.
+  runId: z.string().optional(),
+  startedAt: z.string().optional(),
   providerType: PersistedSemanticProviderTypeSchema,
   cacheHit: z.boolean().optional(),
   canAffectPass2: z.boolean().optional(),
@@ -3859,7 +3926,7 @@ const ScipIngestResponseSchema = z.object({
 
 export const SemanticEnrichmentRefreshResponseSchema = z.object({
   ok: z.boolean(),
-  repoId: z.string(),
+  repoId: z.string().optional(),
   enabled: z.boolean(),
   dryRun: z.boolean(),
   installPolicy: SemanticInstallPolicySchema,
@@ -3877,7 +3944,7 @@ export const SemanticEnrichmentRefreshResponseSchema = z.object({
 
 const SemanticEnrichmentCompactStatusResponseSchema = z.object({
   ok: z.boolean(),
-  repoId: z.string(),
+  repoId: z.string().optional(),
   enabled: z.boolean(),
   autoRunOnIndexRefresh: z.boolean(),
   installPolicy: SemanticInstallPolicySchema,
@@ -3889,12 +3956,12 @@ const SemanticEnrichmentCompactStatusResponseSchema = z.object({
   }),
   lastRuns: z.array(
     z.object({
-      runId: z.string(),
+      runId: z.string().optional(),
       providerType: PersistedSemanticProviderTypeSchema,
       providerId: z.string(),
       languages: z.array(z.string()),
       status: z.enum(["planned", "running", "completed", "failed", "skipped"]),
-      startedAt: z.string(),
+      startedAt: z.string().optional(),
       finishedAt: z.string().optional(),
       symbolsMatched: z.number().int().nonnegative(),
       edgesCreated: z.number().int().nonnegative(),
@@ -3916,7 +3983,7 @@ const SemanticEnrichmentCompactStatusResponseSchema = z.object({
 
 const SemanticEnrichmentFullStatusResponseSchema = z.object({
   ok: z.boolean(),
-  repoId: z.string(),
+  repoId: z.string().optional(),
   enabled: z.boolean(),
   autoRunOnIndexRefresh: z.boolean(),
   installPolicy: SemanticInstallPolicySchema,
@@ -4032,8 +4099,8 @@ export type FileWriteRequest = z.infer<typeof FileWriteRequestSchema>;
 
 export const FileWriteResponseSchema = z.object({
   filePath: z.string(),
-  bytesWritten: z.number().int().nonnegative(),
-  linesWritten: z.number().int().nonnegative(),
+  bytesWritten: z.number().int().nonnegative().optional(),
+  linesWritten: z.number().int().nonnegative().optional(),
   mode: FileWriteModeSchema,
   backupPath: z.string().optional(),
   replacementCount: z.number().int().nonnegative().optional(),
@@ -4043,7 +4110,10 @@ export const FileWriteResponseSchema = z.object({
 });
 
 export type DiffPreviewSnippets = z.infer<typeof DiffPreviewSnippetsSchema>;
-export type FileWriteResponse = z.infer<typeof FileWriteResponseSchema>;
+export type FileWriteResponse = WithRequiredFields<
+  z.infer<typeof FileWriteResponseSchema>,
+  "bytesWritten" | "linesWritten"
+>;
 
 // ============================================================================
 // Search/Edit (sdl.search.edit) Schemas
@@ -4398,7 +4468,7 @@ const SearchEditPreviewResponseSchema = z.object({
   defaultCreateBackup: z.boolean(),
   applyArgs: z.object({
     mode: z.literal("apply"),
-    repoId: z.string(),
+    repoId: z.string().optional(),
     planHandle: z.string(),
     createBackup: z.boolean(),
   }),
@@ -4411,7 +4481,7 @@ const SearchEditPreviewResponseSchema = z.object({
       reason: z.string(),
       operationId: z.string().optional(),
     }),
-  ),
+  ).optional(),
   filesSkippedTotal: z.number().int().nonnegative().optional(),
   filesSkippedTruncated: z.boolean().optional(),
   filesSkippedByReason: z
@@ -4424,7 +4494,7 @@ const SearchEditPreviewResponseSchema = z.object({
     .optional(),
   fileEntries: z.array(SearchEditFileEntrySchema),
   requiresApply: z.boolean(),
-  expiresAt: z.string(),
+  expiresAt: z.string().optional(),
   partial: z.boolean().optional(),
   retrievalEvidence: SearchEditRetrievalEvidenceSchema.optional(),
   diagnostics: ToolTimingDiagnosticsSchema.optional(),
@@ -4439,7 +4509,7 @@ const SearchEditApplyResponseSchema = z.object({
   filesFailed: z.number().int().nonnegative(),
   results: z.array(EditFileResultSchema),
   fileEntries: z.array(SearchEditFileEntrySchema).optional(),
-  rollback: EditRollbackSchema,
+  rollback: EditRollbackSchema.optional(),
   diagnostics: ToolTimingDiagnosticsSchema.optional(),
 });
 
@@ -4451,10 +4521,26 @@ export const SearchEditResponseSchema = z.union([
   ResponseArtifactReferenceSchema,
 ]);
 
-export type SearchEditPreviewResponse = z.infer<
+type SearchEditPreviewWireResponse = z.infer<
   typeof SearchEditPreviewResponseSchema
 >;
-export type SearchEditApplyResponse = z.infer<
-  typeof SearchEditApplyResponseSchema
+export type SearchEditPreviewResponse = Omit<
+  WithRequiredFields<
+    SearchEditPreviewWireResponse,
+    "filesSkipped" | "expiresAt"
+  >,
+  "applyArgs"
+> & {
+  applyArgs: WithRequiredFields<
+    SearchEditPreviewWireResponse["applyArgs"],
+    "repoId"
+  >;
+};
+export type SearchEditApplyResponse = WithRequiredFields<
+  z.infer<typeof SearchEditApplyResponseSchema>,
+  "rollback"
 >;
-export type SearchEditResponse = z.infer<typeof SearchEditResponseSchema>;
+export type SearchEditResponse =
+  | SearchEditPreviewResponse
+  | SearchEditApplyResponse
+  | z.infer<typeof ResponseArtifactReferenceSchema>;

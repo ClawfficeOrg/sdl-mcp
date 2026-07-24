@@ -41,6 +41,7 @@ import {
   UsageStatsRequestSchema,
 } from "../mcp/tools.js";
 import { FileGatewayRequestSchema } from "../mcp/tools/file-gateway.js";
+import { InfoRequestSchema } from "../mcp/tools/info.js";
 import { RetrieveRequestSchema } from "./retrieve-schema.js";
 import { WorkflowRequestSchema } from "./types.js";
 
@@ -76,6 +77,7 @@ const META_MANUAL_SCHEMA = z.object({
 
 const META_TOOL_SCHEMAS: Record<string, z.ZodType> = {
   "action.search": META_ACTION_SEARCH_SCHEMA,
+  info: InfoRequestSchema,
   manual: META_MANUAL_SCHEMA,
   context: AgentContextRequestSchema,
   file: FileGatewayRequestSchema,
@@ -139,6 +141,7 @@ const ACTION_TAGS: Record<string, ActionTag[]> = {
 
 const META_TOOL_TAGS: Record<string, ActionTag[]> = {
   "action.search": ["meta"],
+  info: ["meta", "runtime"],
   manual: ["meta"],
   context: ["meta", "agent"],
   file: ["meta", "repo", "mutation"],
@@ -881,6 +884,8 @@ export type LadderRung = 0 | 1 | 2 | 3 | 4;
 
 export interface ActionAvailability {
   memoryTools: boolean;
+  /** Whether the raw sdl.info tool is part of this server's static surface. */
+  infoTool?: boolean;
 }
 
 /**
@@ -999,6 +1004,8 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
 const META_TOOL_DESCRIPTIONS: Record<string, string> = {
   "action.search":
     "Search the SDL-MCP catalog before choosing a tool. Best starting point when you are unsure whether to use context or workflow; limit accepts at most 50 results.",
+  info:
+    "Get SDL-MCP server information, version, runtime capabilities, configuration, logging, LadybugDB, and native-addon status.",
   manual:
     "Load the focused SDL-MCP manual after discovery. Use this before composing workflow steps.",
   context:
@@ -1046,6 +1053,7 @@ const TRANSFORM_EXAMPLES: Record<string, Record<string, unknown>> = {
 
 const META_TOOL_EXAMPLES: Record<string, Record<string, unknown>> = {
   "action.search": { query: "debug auth flow", limit: 5 },
+  info: { redactPaths: true },
   manual: { query: "runtime execute workflow", format: "markdown" },
   context: {
     repoId: "<repoId>",
@@ -1320,6 +1328,11 @@ const ACTION_METADATA: Record<string, ActionMetadata> = {
     recommendedNextActions: ["context", "workflow", "manual"],
     fallbacks: [],
   },
+  info: {
+    prerequisites: [],
+    recommendedNextActions: ["repo.status"],
+    fallbacks: [],
+  },
 };
 
 export function getActionMetadata(action: string): ActionMetadata {
@@ -1503,7 +1516,15 @@ const INTERNAL_ACTION_DEFINITIONS: readonly ActionDefinition[] = Object.freeze(
 );
 
 const META_ACTION_DEFINITIONS: readonly ActionDefinition[] = Object.freeze(
-  ["action.search", "manual", "context", "file", "retrieve", "workflow"].map(
+  [
+    "action.search",
+    "info",
+    "manual",
+    "context",
+    "file",
+    "retrieve",
+    "workflow",
+  ].map(
     (action) =>
       createDefinition(
         action,
@@ -1560,6 +1581,7 @@ const MEMORY_ACTIONS = new Set<string>(MEMORY_ACTIONS_LIST);
 
 let cachedCatalog: ActionCatalogEntry[] | null = null;
 let cachedMemoryVisible: boolean | null = null;
+let cachedInfoVisible: boolean | null = null;
 
 /**
  * Builds the full action catalog from the gateway action map and internal transforms.
@@ -1569,16 +1591,23 @@ export function buildCatalog(opts?: {
   includeSchemas?: boolean;
   includeExamples?: boolean;
   memoryVisible?: boolean;
+  infoVisible?: boolean;
   detail?: "compact" | "full";
 }): ActionCatalogEntry[] {
   const includeSchemas = opts?.includeSchemas ?? false;
   const includeExamples = opts?.includeExamples ?? false;
   const memoryVisible = opts?.memoryVisible ?? false;
+  const infoVisible = opts?.infoVisible ?? true;
   const detail = opts?.detail ?? "compact";
 
-  if (cachedCatalog === null || cachedMemoryVisible !== memoryVisible) {
-    cachedCatalog = buildBaseCatalog(memoryVisible);
+  if (
+    cachedCatalog === null
+    || cachedMemoryVisible !== memoryVisible
+    || cachedInfoVisible !== infoVisible
+  ) {
+    cachedCatalog = buildBaseCatalog(memoryVisible, infoVisible);
     cachedMemoryVisible = memoryVisible;
+    cachedInfoVisible = infoVisible;
   }
 
   if (!includeSchemas && !includeExamples) {
@@ -1644,10 +1673,15 @@ function projectDefinition(definition: ActionDefinition): ActionCatalogEntry {
   };
 }
 
-function buildBaseCatalog(memoryVisible: boolean): ActionCatalogEntry[] {
+function buildBaseCatalog(
+  memoryVisible: boolean,
+  infoVisible: boolean,
+): ActionCatalogEntry[] {
   const catalog = ACTION_DEFINITIONS.filter(
     (definition) => memoryVisible || !MEMORY_ACTIONS.has(definition.action),
-  ).map(projectDefinition);
+  )
+    .filter((definition) => infoVisible || definition.action !== "info")
+    .map(projectDefinition);
 
   if (!memoryVisible) {
     for (const action of MEMORY_ACTIONS_LIST) {
@@ -1679,6 +1713,7 @@ function buildBaseCatalog(memoryVisible: boolean): ActionCatalogEntry[] {
 export function invalidateCatalog(): void {
   cachedCatalog = null;
   cachedMemoryVisible = null;
+  cachedInfoVisible = null;
 }
 
 // --- Discovery Ranking ---

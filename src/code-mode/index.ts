@@ -129,6 +129,7 @@ export function handleActionSearch(
   const effectiveIncludeExamples = args.includeExamples || autoIncludeExamples;
   const catalog = buildCatalog({
     memoryVisible: services.actionAvailability?.memoryTools,
+    infoVisible: services.actionAvailability?.infoTool !== false,
     includeSchemas: effectiveIncludeSchemas,
     includeExamples: effectiveIncludeExamples,
     detail: args.detail,
@@ -261,6 +262,7 @@ export function handleManual(
 
   const fullCatalog = buildCatalog({
     memoryVisible: services.actionAvailability?.memoryTools,
+    infoVisible: services.actionAvailability?.infoTool !== false,
     includeSchemas,
     includeExamples,
     detail: args.detail,

@@ -61,6 +61,42 @@ function responseArtifact(toolName: string) {
 }
 
 describe("MCP output schemas", () => {
+  it("parses raw and compact info reports", () => {
+    const schema = requireSchema("InfoResponseSchema");
+    const report = {
+      version: "0.12.4",
+      runtime: {
+        node: "v24.0.0",
+        platform: "win32",
+        arch: "x64",
+      },
+      config: {
+        path: "sdl.config.json",
+        exists: true,
+        loaded: true,
+      },
+      logging: {
+        path: "sdl-mcp.log",
+        consoleMirroring: false,
+        fallbackUsed: false,
+      },
+      ladybug: {
+        available: true,
+        activePath: "graph.lbug",
+      },
+      native: {
+        available: false,
+        sourcePath: null,
+        disabledByEnv: true,
+        reason: "disabled by environment",
+      },
+      misconfigurations: [],
+    };
+
+    schema.parse({ ...report, warnings: ["Native addon disabled."] });
+    schema.parse(report);
+  });
+
   it("parses full and not-modified repository overviews", () => {
     const schema = requireSchema("RepoOverviewResponseSchema");
     schema.parse({

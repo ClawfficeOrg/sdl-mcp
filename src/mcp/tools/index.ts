@@ -11,6 +11,7 @@ import {
 import type { CodeModeConfig, GatewayConfig } from "../../config/types.js";
 import { loadConfig } from "../../config/loadConfig.js";
 import { anyRepoHasMemoryTools } from "../../config/memory-config.js";
+import { InfoResponseSchema } from "../tools.js";
 import {
   buildFlatToolDescriptors,
   registerFlatTools,
@@ -24,14 +25,15 @@ export function registerTools(
 ): void {
   // Tool visibility is fixed once at server registration so every projection
   // sees the same static action set for the lifetime of this process.
-  const stableServices: ToolServices = services.actionAvailability
-    ? services
-    : {
-        ...services,
-        actionAvailability: {
-          memoryTools: anyRepoHasMemoryTools(loadConfig()),
-        },
-      };
+  const stableServices: ToolServices = {
+    ...services,
+    actionAvailability: {
+      memoryTools:
+        services.actionAvailability?.memoryTools
+        ?? anyRepoHasMemoryTools(loadConfig()),
+      infoTool: !(codeModeConfig?.enabled && codeModeConfig.exclusive),
+    },
+  };
 
   // Register memory hint hook for all modes
   server.registerPostDispatchHook(createMemoryHintHook());
@@ -52,6 +54,7 @@ export function registerTools(
     handleInfo,
     undefined,
     { title: "SDL Info" },
+    InfoResponseSchema,
   );
 
   if (gatewayConfig?.enabled) {

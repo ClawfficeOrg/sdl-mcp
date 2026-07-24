@@ -113,7 +113,7 @@
   "uncoveredAllowlist": [
     {
       "tool": "sdl.info",
-      "reason": "Diagnostic surface reports runtime and machine state rather than cache-stable code context."
+      "reason": "Diagnostic output is path-redacted but intentionally reports process-local runtime and log-file identity."
     },
     {
       "tool": "sdl.repo.register",

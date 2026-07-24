@@ -9,7 +9,10 @@ import {
   zodToSchemaSummary,
   invalidateCatalog,
 } from "../../dist/code-mode/action-catalog.js";
-import { handleActionSearch } from "../../dist/code-mode/index.js";
+import {
+  handleActionSearch,
+  handleManual,
+} from "../../dist/code-mode/index.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import {
   FileWriteRequestSchema,
@@ -60,7 +63,39 @@ describe("code-mode action catalog", () => {
       assert.strictEqual(transforms.length, 6, "should have 6 internal transforms");
       assert.deepStrictEqual(
         metaTools.map((d) => d.action).sort(),
-        ["action.search", "context", "file", "manual", "retrieve", "workflow"],
+        [
+          "action.search",
+          "context",
+          "file",
+          "info",
+          "manual",
+          "retrieve",
+          "workflow",
+        ],
+      );
+    });
+
+    it("includes sdl.info and its request schema in the full manual", () => {
+      invalidateCatalog();
+      const result = handleManual({
+        actions: ["sdl.info"],
+        format: "json",
+        includeSchemas: true,
+        detail: "full",
+      }) as {
+        actions?: Array<{
+          action: string;
+          schemaSummary?: { fields: Array<{ name: string }> };
+        }>;
+      };
+
+      assert.strictEqual(result.actions?.length, 1);
+      assert.strictEqual(result.actions[0]?.action, "info");
+      assert.ok(
+        result.actions[0]?.schemaSummary?.fields.some(
+          (field) => field.name === "redactPaths",
+        ),
+        "expected the full info manual to include redactPaths",
       );
     });
 
@@ -262,6 +297,17 @@ describe("code-mode action catalog", () => {
         rankCatalog(catalog, "sdl.runtime.execute")[0]?.action,
         "runtime.execute",
       );
+    });
+
+    it("ranks exact sdl.info discovery first", () => {
+      invalidateCatalog();
+      const catalog = buildCatalog();
+      const ranked = rankCatalog(
+        catalog,
+        "sdl.info server information version capabilities",
+      );
+
+      assert.strictEqual(ranked[0]?.action, "info");
     });
 
     it("honors explicit schema/example opt-outs for exact action lookups", () => {
