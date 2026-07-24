@@ -16,6 +16,30 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe("InMemoryLiveIndexCoordinator", () => {
+  it("returns the static no-work checkpoint response when disabled", async () => {
+    const coordinator = new InMemoryLiveIndexCoordinator({ enabled: false });
+
+    const first = await coordinator.checkpointRepo({
+      repoId: "disabled-repo",
+      reason: "explicit",
+    });
+    const second = await coordinator.checkpointRepo({
+      repoId: "disabled-repo",
+      reason: "explicit",
+    });
+
+    const expected = {
+      repoId: "disabled-repo",
+      requested: false,
+      pending: false,
+      message: "No checkpoint-eligible buffers were pending.",
+    };
+    assert.deepStrictEqual(first, expected);
+    assert.deepStrictEqual(second, expected);
+    assert.strictEqual(JSON.stringify(first), JSON.stringify(second));
+    coordinator.reset();
+  });
+
   it("drains an admitted sweep and skips a late sweep after removal", async () => {
     resetRepoLifecycleForTests();
     const repoId = "sweep-removal-race";

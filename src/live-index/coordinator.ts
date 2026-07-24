@@ -327,11 +327,7 @@ export class InMemoryLiveIndexCoordinator implements LiveIndexCoordinator {
         repoId: input.repoId,
         requested: false,
         pending: false,
-        checkpointId: "ckpt-disabled",
-        pendingBuffers: 0,
-        checkpointedFiles: 0,
-        failedFiles: 0,
-        lastCheckpointAt: null,
+        message: "No checkpoint-eligible buffers were pending.",
       };
     }
 
