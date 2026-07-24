@@ -13,10 +13,12 @@ import assert from "node:assert/strict";
 import { registerCodeModeTools } from "../../dist/code-mode/index.js";
 import { getContinuation } from "../../dist/code-mode/workflow-truncation.js";
 import { SHUTDOWN_FORCE_EXIT_TIMEOUT_MS } from "../../dist/config/constants.js";
+import { closeLadybugDb, initLadybugDb } from "../../dist/db/ladybug.js";
 import type { CodeModeConfig } from "../../dist/config/types.js";
 import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "../../dist/mcp/server-instructions.js";
-import type { MCPServer } from "../../dist/server.js";
+import { handleSymbolGetCard } from "../../dist/mcp/tools/symbol.js";
+import type { MCPServer, ToolContext } from "../../dist/server.js";
 import {
   DeltaGetResponseSchema,
   IndexRefreshResponseSchema,
@@ -432,7 +434,57 @@ test("INVARIANT 2a: exposed tools are covered or justified", () => {
   assert.deepEqual(reasonless, [], `Allowlist entries missing reasons: ${reasonless.join(", ")}`);
 });
 
-test("INVARIANT 2b: registered workflow uses resolved projection options deterministically", async () => {
+test("BYTE-STABILITY SCOPE: ref-compacting context calls disable session refs", () => {
+  const refCompactingTools = new Set([
+    "sdl.context",
+    "sdl.symbol.getCard",
+    "sdl.code.getSkeleton",
+    "sdl.code.getHotPath",
+    "sdl.code.needWindow",
+  ]);
+  const contextCalls = fixtures.toolCalls.filter((call) => refCompactingTools.has(call.tool));
+  assert.ok(contextCalls.length > 0);
+
+  for (const call of contextCalls) {
+    const args = call.args as Record<string, unknown>;
+    assert.equal(args.refsMode, "off", `${call.tool} must opt out of session refs`);
+  }
+});
+
+test("SESSION BOUNDARY: refsMode auto may compact repeated evidence", async () => {
+  await initLadybugDb(GRAPH_DB_PATH);
+  try {
+    const args = {
+      repoId: REPO_ID,
+      refsMode: "auto" as const,
+      symbolRef: { name: "UserRepository", file: "src/typescript/models.ts" },
+    };
+    const context: ToolContext = {
+      sessionId: `determinism-auto-refs-${process.pid}`,
+      signal: new AbortController().signal,
+      sendNotification: async () => undefined,
+    };
+    const first = await handleSymbolGetCard(args, context);
+    const second = await handleSymbolGetCard(args, context);
+    assert.ok("card" in first);
+    assert.ok("card" in second);
+    const fullCard = first.card as Record<string, unknown>;
+    assert.equal(typeof fullCard.symbolId, "string");
+    assert.equal(typeof fullCard.etag, "string");
+    assert.ok(!("unchanged" in fullCard));
+    assert.deepEqual(second.card, {
+      ref: {
+        key: `card:${REPO_ID}:${fullCard.symbolId}`,
+        etag: fullCard.etag,
+      },
+      unchanged: true,
+    });
+  } finally {
+    await closeLadybugDb();
+  }
+});
+
+test("SESSION BOUNDARY: workflow projection is resolved before continuation storage", async () => {
   const rawOverview = {
     repoId: REPO_ID,
     generatedAt: "2026-07-18T12:00:00.000Z",
@@ -475,16 +527,17 @@ test("INVARIANT 2b: registered workflow uses resolved projection options determi
     const continuation = canonical(getContinuation(handle)?.data);
     assert.doesNotMatch(continuation, /generatedAt/);
     assert.match(continuation, /durationMs/);
+    assert.match(continuation, /stable-repository-data/);
     const displayed = projectToolResultForModelContent("sdl.workflow", response, workflowArgs) as {
       results: Array<{ result?: unknown }>;
     };
     assert.match(canonical(displayed.results[1].result), /durationMs/);
-    return continuation;
+    return handle;
   };
 
-  const first = await run();
-  assert.match(first, /stable-repository-data/);
-  assert.equal(await run(), first);
+  // Continuation handles are process-local state, so validate each payload without byte-comparing handles.
+  const firstHandle = await run();
+  assert.notEqual(await run(), firstHandle);
 });
 
 test("INVARIANT 2c: repo status revision fields are ordered without changing normal retrieval", () => {

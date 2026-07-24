@@ -84,6 +84,7 @@
       "tool": "sdl.code.needWindow",
       "args": {
         "repoId": "{REPO_ID}",
+        "refsMode": "off",
         "symbolRef": {
           "name": "findById",
           "file": "src/typescript/models.ts"
@@ -188,7 +189,7 @@
     },
     {
       "tool": "sdl.response.get",
-      "reason": "Requires a response artifact handle from a previous tool call."
+      "reason": "Response artifact handles are process-local continuation state; only inline responses participate in byte-stability comparisons."
     },
     {
       "tool": "sdl.usage.stats",
