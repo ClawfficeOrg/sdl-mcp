@@ -185,6 +185,10 @@ const CONDITIONAL_CODE_MODE_TOOLS = new Set([
   "sdl.workflow",
 ]);
 const EXCLUDED_CODE_MODE_TOOLS = new Set(["sdl.action.search", "sdl.manual"]);
+const EXCLUDED_META_TOOLS = new Set([
+  ...EXCLUDED_CODE_MODE_TOOLS,
+  "sdl.info",
+]);
 
 const gatewayToolByAction = new Map<string, string>([
   ...QUERY_ACTIONS.map((action) => [action, "sdl.query"] as const),
@@ -257,7 +261,7 @@ describe("public graph retrieval admission classifier", () => {
       "meta action definitions",
       ALWAYS_GATED_CODE_MODE_TOOLS,
       CONDITIONAL_CODE_MODE_TOOLS,
-      EXCLUDED_CODE_MODE_TOOLS,
+      EXCLUDED_META_TOOLS,
     );
     assertClosedRegistry(
       TOOL_INVENTORY.codeModeToolNames,

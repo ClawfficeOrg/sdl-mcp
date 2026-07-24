@@ -1601,7 +1601,7 @@ export class Executor {
         : new Map<string, SymbolRow>();
 
       // Generate skeletons for symbol IDs (skip degenerate < 10 tokens)
-      for (const { symbolId } of visibleItems) {
+      for (const { symbolId, file } of visibleItems) {
         try {
           const result = await generateSkeletonIR(task.repoId, symbolId, {});
           if (result && result.estimatedTokens >= 10) {
@@ -1609,7 +1609,7 @@ export class Executor {
               symbolMap.get(symbolId),
             );
             this.evidenceCapture.captureSkeleton(
-              `symbol:${symbolId}`,
+              file ? `file:${file.relPath}` : `symbol:${symbolId}`,
               `${prefix} | Skeleton (${result.originalLines} lines, ~${result.estimatedTokens} tokens): ${buildSkeletonEvidenceExcerpt(result.skeletonText, task.taskText)}`,
             );
             processedCount++;
