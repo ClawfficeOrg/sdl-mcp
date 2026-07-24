@@ -452,8 +452,12 @@ test("BYTE-STABILITY SCOPE: ref-compacting context calls disable session refs", 
 });
 
 test("SESSION BOUNDARY: refsMode auto may compact repeated evidence", async () => {
-  await initLadybugDb(GRAPH_DB_PATH);
+  const previousConfig = process.env.SDL_CONFIG;
+  const previousConfigPath = process.env.SDL_CONFIG_PATH;
+  process.env.SDL_CONFIG = CONFIG_PATH;
+  process.env.SDL_CONFIG_PATH = CONFIG_PATH;
   try {
+    await initLadybugDb(GRAPH_DB_PATH);
     const args = {
       repoId: REPO_ID,
       refsMode: "auto" as const,
@@ -480,7 +484,14 @@ test("SESSION BOUNDARY: refsMode auto may compact repeated evidence", async () =
       unchanged: true,
     });
   } finally {
-    await closeLadybugDb();
+    try {
+      await closeLadybugDb();
+    } finally {
+      if (previousConfig === undefined) delete process.env.SDL_CONFIG;
+      else process.env.SDL_CONFIG = previousConfig;
+      if (previousConfigPath === undefined) delete process.env.SDL_CONFIG_PATH;
+      else process.env.SDL_CONFIG_PATH = previousConfigPath;
+    }
   }
 });
 
