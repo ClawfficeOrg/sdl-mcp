@@ -1584,32 +1584,32 @@ export class Executor {
           : rawSkeletonSymbols.slice(0, skeletonSymbolLimit);
 
       let processedCount = 0;
-      const hydrateEvidencePrefixes = this.shouldHydrateEvidencePrefixes(task);
       const resolved = await this.resolveVisibleSymbols(task.repoId, symbolIds);
       const visibleItems = resolved.items.filter(
         (item) => item.status === "resolved",
       );
-      const symbolMap = hydrateEvidencePrefixes
-        ? new Map(
-            visibleItems.map((item) => [
-              item.symbolId,
-              item.file
-                ? { ...item.symbol, fileId: item.file.relPath }
-                : item.symbol,
-            ]),
-          )
-        : new Map<string, SymbolRow>();
+      // Symbol skeletons retain their symbol namespace, so use the already
+      // resolved overlay view to keep their path and signature dereferenceable.
+      const symbolMap = new Map(
+        visibleItems.map((item) => [
+          item.symbolId,
+          item.file
+            ? { ...item.symbol, fileId: item.file.relPath }
+            : item.symbol,
+        ]),
+      );
 
       // Generate skeletons for symbol IDs (skip degenerate < 10 tokens)
-      for (const { symbolId, file } of visibleItems) {
+      for (const { symbolId } of visibleItems) {
         try {
           const result = await generateSkeletonIR(task.repoId, symbolId, {});
           if (result && result.estimatedTokens >= 10) {
             const prefix = this.formatSymbolEvidencePrefix(
               symbolMap.get(symbolId),
+              true,
             );
             this.evidenceCapture.captureSkeleton(
-              file ? `file:${file.relPath}` : `symbol:${symbolId}`,
+              `symbol:${symbolId}`,
               `${prefix} | Skeleton (${result.originalLines} lines, ~${result.estimatedTokens} tokens): ${buildSkeletonEvidenceExcerpt(result.skeletonText, task.taskText)}`,
             );
             processedCount++;
@@ -1931,8 +1931,10 @@ export class Executor {
           kind: string;
           name: string;
           fileId?: string;
+          signatureJson?: string | null;
         }
       | undefined,
+    includeSignature = false,
   ): string {
     if (!sym) return "symbol";
     const relPath = sym.fileId?.includes(":")
@@ -1943,6 +1945,18 @@ export class Executor {
     const fileAlias = this.fileAliasForPath(relPath);
     if (fileAlias && fileAlias !== sym.name) {
       parts.push(`fileAlias: ${fileAlias}`);
+    }
+    if (includeSignature && sym.signatureJson) {
+      try {
+        const signature = JSON.parse(sym.signatureJson) as { text?: unknown };
+        if (typeof signature.text === "string") {
+          parts.push(`sig: ${signature.text}`);
+        }
+      } catch (err) {
+        logger.debug("Failed to parse signature JSON", {
+          error: String(err),
+        });
+      }
     }
     return parts.join(" | ");
   }

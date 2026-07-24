@@ -267,6 +267,13 @@ describe("context overlay evidence invariant", () => {
     const symbolEvidence = context.finalEvidence.filter((evidence) =>
       evidence.reference.startsWith("symbol:"),
     );
+    const skeletonEvidence = context.finalEvidence.filter(
+      (evidence) => evidence.type === "skeleton",
+    );
+    assert.ok(skeletonEvidence.length > 0);
+    for (const evidence of skeletonEvidence) {
+      assert.ok(evidence.reference.startsWith("symbol:"));
+    }
     const evidenceIds = symbolEvidence.map((evidence) =>
       evidence.reference.slice("symbol:".length),
     );
