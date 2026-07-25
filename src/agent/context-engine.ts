@@ -757,9 +757,10 @@ export class ContextEngine {
       const isPrecise = task.options?.contextMode === "precise";
       const evidenceOptimization = task.options?.evidenceOptimization;
       const finalEvidenceOptimization =
-        !isPrecise &&
-        (evidenceOptimization === "global" || evidenceOptimization === "budgeted")
-          ? "dedupe"
+        evidenceOptimization === "global" || evidenceOptimization === "budgeted"
+          ? isPrecise
+            ? "off"
+            : "dedupe"
           : evidenceOptimization;
       const optimizeStartedAt = performance.now();
       const optimizedEvidence = optimizeEvidenceForResponse(
@@ -1205,7 +1206,9 @@ export class ContextEngine {
       budgetMaxTokens ?? MAX_CONTEXT_RESPONSE_TOKENS,
       MAX_CONTEXT_RESPONSE_TOKENS,
     );
-    const completeResult = this.compactBroadResult(result);
+    const completeResult = context.preserveUnchangedResult
+      ? result
+      : this.compactBroadResult(result);
     const originalTokens = estimateTokens(JSON.stringify(completeResult));
 
     if (originalTokens <= effectiveCap) {
@@ -1296,10 +1299,12 @@ export class ContextEngine {
       summary: continuationSummary,
       success: result.success,
       ...(result.answer !== undefined ? { answer: continuationSummary } : {}),
-      ...(completeResult.retrievalEvidence !== undefined
-        ? { retrievalEvidence: completeResult.retrievalEvidence }
-        : {}),
     } as unknown as ContextResult;
+
+    if (completeResult.retrievalEvidence !== undefined) {
+      // Unbounded retrieval metadata remains available in the complete continuation.
+      recordAffectedField(fieldsAffected, "retrievalEvidence");
+    }
 
     return attachTruncation(continuationOnly);
   }

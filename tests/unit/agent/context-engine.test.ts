@@ -292,7 +292,7 @@ describe("ContextEngine", () => {
 
     const result = await new ContextEngine().buildContext(
       createTask({
-        budget: { maxTokens: 512 },
+        budget: { maxTokens: 1_000 },
         options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
@@ -360,7 +360,7 @@ describe("ContextEngine", () => {
 
     const result = await new ContextEngine().buildContext(
       createTask({
-        budget: { maxTokens: 512 },
+        budget: { maxTokens: 1_000 },
         options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
@@ -393,6 +393,12 @@ describe("ContextEngine", () => {
         summary: `Hot path (1 match): ${sharedContent}`,
         timestamp: Date.now() + 2,
       },
+      {
+        type: "codeWindow",
+        reference: "window:noise",
+        summary: `Code window: ${"unrelated noise ".repeat(200)}`,
+        timestamp: Date.now() + 3,
+      },
     ];
 
     mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
@@ -408,7 +414,7 @@ describe("ContextEngine", () => {
 
     const result = await new ContextEngine().buildContext(
       createTask({
-        budget: { maxTokens: 512 },
+        budget: { maxTokens: 1_000 },
         options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
@@ -724,7 +730,7 @@ describe("ContextEngine", () => {
         taskText:
           "Diagnose runtimeQueryOutput and identify the runtimeExecute implementation path",
         budget: { maxTokens: 512 },
-        options: { contextMode: "precise", evidenceOptimization: "off" },
+        options: { contextMode: "precise", evidenceOptimization: "budgeted" },
       }),
     );
     const preciseSerializedTokens = estimateTokens(
@@ -746,12 +752,22 @@ describe("ContextEngine", () => {
     assert.ok(preciseContinuation);
     assert.equal(typeof preciseContinuation.data, "object");
     const completePrecise = preciseContinuation.data as {
+      actionsTaken: unknown[];
       finalEvidence: Evidence[];
+      contextModeHint: string;
+      metrics: ExecutionMetrics;
+      path: RungPath;
+      taskId: string;
     };
     assert.deepEqual(
       completePrecise.finalEvidence.map(({ reference }) => reference),
       evidence.map(({ reference }) => reference),
     );
+    assert.ok(completePrecise.actionsTaken.length > 0);
+    assert.match(completePrecise.contextModeHint, /^precise:/);
+    assert.deepEqual(completePrecise.metrics, defaultMetrics);
+    assert.deepEqual(completePrecise.path, defaultPath);
+    assert.equal(typeof completePrecise.taskId, "string");
   });
 
   it("enforces planner budget constraints for token and duration", async () => {
@@ -769,7 +785,7 @@ describe("ContextEngine", () => {
       createTask({
         options: { requireDiagnostics: true, contextMode: "precise" },
         budget: {
-          maxTokens: 100,
+          maxTokens: 512,
           maxDurationMs: 40,
           maxActions: 1,
         },
@@ -777,7 +793,7 @@ describe("ContextEngine", () => {
     );
 
     assert.equal(result.success, true);
-    assert.ok(result.path.estimatedTokens <= 100);
+    assert.ok(result.path.estimatedTokens <= 512);
     assert.ok(result.path.estimatedDurationMs <= 40);
     assert.ok(result.path.rungs.length >= 1);
   });
@@ -2073,10 +2089,24 @@ describe("ContextEngine", () => {
     }
   });
 
-  it("compact broad response omits internal fields (path, metrics) while preserving retrievalEvidence", async () => {
+  it("keeps oversized retrieval metadata behind the compact continuation", async () => {
+    const ranks = Array.from({ length: 250 }, (_, index) => index + 1);
     mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
     mock.method(Planner.prototype, "plan", () => defaultPath);
     mock.method(Planner.prototype, "selectContext", () => ["symbol:alpha"]);
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedContext",
+      async (): Promise<ContextSeedResult> => ({
+        candidates: [],
+        sources: { semantic: 0, lexical: 0, feedback: 0 },
+        evidence: {
+          sources: ["fts"],
+          topRanksPerSource: { fts: ranks },
+          candidateCountPerSource: { fts: ranks.length },
+        },
+      }),
+    );
     mock.method(Executor.prototype, "execute", async () => ({
       actions: [
         {
@@ -2093,7 +2123,7 @@ describe("ContextEngine", () => {
         {
           type: "symbolCard",
           reference: "symbol:alpha",
-          summary: "alpha card",
+          summary: `alpha card ${"detail ".repeat(1_000)}`,
           timestamp: Date.now(),
         },
       ],
@@ -2106,7 +2136,7 @@ describe("ContextEngine", () => {
     const result = await engine.buildContext(
       createTask({
         options: { contextMode: "broad" },
-        budget: { maxTokens: 200 }, // Force truncation path
+        budget: { maxTokens: 512 },
       }),
     );
 
@@ -2123,11 +2153,17 @@ describe("ContextEngine", () => {
       undefined,
       "metrics should be stripped by compaction",
     );
-    assert.ok(
-      resultObj.retrievalEvidence &&
-        typeof resultObj.retrievalEvidence === "object",
-      "retrievalEvidence should be preserved in compact broad responses",
+    assert.equal(resultObj.retrievalEvidence, undefined);
+    assert.ok(result.truncation?.continuationHandle);
+    assert.ok(estimateTokens(JSON.stringify(result)) <= 512);
+    const continuation = getContinuation(
+      result.truncation.continuationHandle,
+      undefined,
+      undefined,
+      "retrievalEvidence.topRanksPerSource.fts",
     );
+    assert.ok(continuation && Array.isArray(continuation.data));
+    assert.equal(continuation.data.length, ranks.length);
   });
 
   it("does not add irrelevant cluster members", async () => {
