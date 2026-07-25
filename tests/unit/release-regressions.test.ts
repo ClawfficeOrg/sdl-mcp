@@ -194,6 +194,11 @@ describe("release regression guards", () => {
     );
     assert.match(
       benchmarksJob,
+      /for BENCHMARK_ATTEMPT in 1 2; do[\s\S]*SDL_GRAPH_DB_PATH="\$\{RUNNER_TEMP\}\/benchmark-ci-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{BENCHMARK_ATTEMPT\}\.lbug"[\s\S]*BENCHMARK_EXIT_CODE=\$\?[\s\S]*BENCHMARK_EXIT_CODE" -ne 139[\s\S]*BENCHMARK_ATTEMPT" -eq 2[\s\S]*break[\s\S]*done/s,
+      "benchmark CI should retry exit 139 once with a fresh dedicated graph path",
+    );
+    assert.match(
+      benchmarksJob,
       /set \+e[\s\S]*benchmark:ci[\s\S]*BENCHMARK_EXIT_CODE=\$\?[\s\S]*set -e[\s\S]*name:\s*Upload Benchmark CI result[\s\S]*if:\s*always\(\)[\s\S]*path:\s*\.benchmark\/latest-result\.json/s,
       "benchmark CI should preserve the real exit code and upload its result on failure",
     );

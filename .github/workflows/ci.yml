@@ -300,8 +300,16 @@ jobs:
           echo "Using threshold config: ${THRESHOLD_PATH}"
           npm run build
           set +e
-          node dist/cli/index.js benchmark:ci --repo-id zod-oss --threshold-path "${THRESHOLD_PATH}" --json --out .benchmark/latest-result.json
-          BENCHMARK_EXIT_CODE=$?
+          # Retry only the known native crash; threshold failures remain final.
+          for BENCHMARK_ATTEMPT in 1 2; do
+            SDL_GRAPH_DB_PATH="${RUNNER_TEMP}/benchmark-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BENCHMARK_ATTEMPT}.lbug" \
+              node dist/cli/index.js benchmark:ci --repo-id zod-oss --threshold-path "${THRESHOLD_PATH}" --json --out .benchmark/latest-result.json
+            BENCHMARK_EXIT_CODE=$?
+            if [ "$BENCHMARK_EXIT_CODE" -ne 139 ] || [ "$BENCHMARK_ATTEMPT" -eq 2 ]; then
+              break
+            fi
+            echo "[WARN] benchmark:ci exited 139; retrying once with a fresh graph"
+          done
           set -e
 
           echo "Benchmark exit code: ${BENCHMARK_EXIT_CODE}"
