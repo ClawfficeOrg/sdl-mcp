@@ -289,6 +289,7 @@ jobs:
           # Keep benchmark:ci as a stable JS/LadybugDB regression guardrail.
           # Native parser crash coverage lives in native-build and sync-memory;
           # enabling it here has repeatedly produced Linux exit 139 flakes.
+          # benchmark:ci also forces legacy indexing and skips native SCIP generation.
           SDL_MCP_DISABLE_NATIVE_ADDON: "1"
           # Avoid overlapping pass-1 LadybugDB writes with native tree-sitter
           # parsing in the same Node process; hosted runners have hit exit 139

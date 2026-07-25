@@ -80,6 +80,8 @@ describe("release regression guards", () => {
   it("keeps the broad CI suite non-native while native-dependent jobs consume built addons", () => {
     const ciSource = readSource(".github/workflows/ci.yml");
     const runTestsSource = readSource("scripts/run-tests.mjs");
+    const benchmarkCommandSource = readSource("src/cli/commands/benchmark.ts");
+    const indexerSource = readSource("src/indexer/indexer.ts");
     const testsJob =
       ciSource.match(/tests:\s*[\s\S]*?\n  benchmarks:/)?.[0] ?? "";
     const benchmarksJob =
@@ -186,6 +188,21 @@ describe("release regression guards", () => {
       benchmarksJob,
       /SDL_MCP_PASS1_STABLE_DB_WRITES:\s*"1"/,
       "benchmark CI should serialize pass-1 DB writes against parser work to avoid hosted-runner exit 139 flakes",
+    );
+    assert.match(
+      benchmarkCommandSource,
+      /forceLegacyPipeline:\s*true/,
+      "benchmark CI should force the legacy TypeScript pipeline instead of invoking a native SCIP producer",
+    );
+    assert.match(
+      indexerSource,
+      /options\?\.forceLegacyPipeline\s*\|\|[\s\S]*shouldDeferScipIoPreRefreshToIncrementalProvider/,
+      "the compatibility option should skip native SCIP pre-generation",
+    );
+    assert.match(
+      indexerSource,
+      /scip:\s*options\?\.forceLegacyPipeline\s*\?\s*undefined/,
+      "the compatibility option should remove SCIP from provider pipeline selection",
     );
     assert.match(
       benchmarksJob,

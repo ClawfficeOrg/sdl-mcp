@@ -157,21 +157,21 @@ describe("Benchmark Threshold Evaluator", () => {
     assert.strictEqual(result.summary.passed, 2);
   });
 
-  it("allows current locked zod-oss CI provider-first density", () => {
+  it("allows current locked zod-oss CI legacy TypeScript density", () => {
     const ciThresholds = loadThresholdConfig(
       resolve(process.cwd(), "config/benchmark.ci.config.json"),
     );
     const result = new ThresholdEvaluator(ciThresholds).evaluate({
-      indexTimePerFile: 113.98268168161435,
-      indexTimePerSymbol: 5.643458706705151,
-      symbolsPerFile: 20.19730941704036,
-      edgesPerSymbol: 0.5326376554174067,
-      graphConnectivity: 0.2879662522202487,
-      exportedSymbolRatio: 0.9897868561278863,
-      sliceBuildTimeMs: 347.0271775000001,
-      avgSkeletonTimeMs: 6.954816583334832,
-      avgCardTokens: 189.45,
-      avgSkeletonTokens: 49,
+      indexTimePerFile: 374.080915470852,
+      indexTimePerSymbol: 28.8152138687392,
+      symbolsPerFile: 12.9820627802691,
+      edgesPerSymbol: 84.9723661485319,
+      graphConnectivity: 0.918134715025907,
+      exportedSymbolRatio: 0.763730569948187,
+      sliceBuildTimeMs: 266.544750000001,
+      avgSkeletonTimeMs: 5.55324499999697,
+      avgCardTokens: 185.025,
+      avgSkeletonTokens: 42.9,
     });
 
     assert.strictEqual(result.passed, true);

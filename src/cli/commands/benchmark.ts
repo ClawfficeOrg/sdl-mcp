@@ -210,7 +210,12 @@ async function collectBenchmarkMetrics(
       "full",
       undefined,
       undefined,
-      { isolatedRebuild: true },
+      {
+        isolatedRebuild: true,
+        // This CI lane validates the portable TypeScript indexer. Provider-first
+        // SCIP generation is native coverage and belongs in its dedicated jobs.
+        forceLegacyPipeline: true,
+      },
     );
     indexTimeMs = performance.now() - indexStart;
     filesIndexed = indexResult.filesProcessed;

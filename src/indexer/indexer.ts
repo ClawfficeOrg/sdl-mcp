@@ -488,6 +488,8 @@ export interface IndexRepoOptions {
   includeTimings?: boolean;
   /** @internal Allows destructive full writes only on a fresh rebuild path. */
   isolatedRebuild?: boolean;
+  /** @internal Keeps compatibility benchmarks on the TypeScript-only pipeline. */
+  forceLegacyPipeline?: boolean;
 }
 export interface IndexResult {
   versionId: string;
@@ -1998,7 +2000,8 @@ export async function indexRepo(
       const { runScipIoPreRefreshForIndex } =
         await import("../scip/scip-io-runner.js");
       const scipPreRefreshResult =
-        await shouldDeferScipIoPreRefreshToIncrementalProvider(repoId, mode)
+        options?.forceLegacyPipeline ||
+        (await shouldDeferScipIoPreRefreshToIncrementalProvider(repoId, mode))
           ? undefined
           : await runScipIoPreRefreshForIndex(repoId, signal);
       // Flush WAL before large indexing runs open their own transactions.
@@ -2225,9 +2228,13 @@ async function indexRepoImpl(
     appConfig.indexing?.providerFirst ??
     IndexingConfigSchema.parse({}).providerFirst;
   const providerFirst = resolveProviderFirstPipeline({
-    indexing: appConfig.indexing,
-    scip: appConfig.scip,
-    semanticEnrichment: appConfig.semanticEnrichment,
+    indexing: options?.forceLegacyPipeline
+      ? IndexingConfigSchema.parse({ ...appConfig.indexing, pipeline: "legacy" })
+      : appConfig.indexing,
+    scip: options?.forceLegacyPipeline ? undefined : appConfig.scip,
+    semanticEnrichment: options?.forceLegacyPipeline
+      ? undefined
+      : appConfig.semanticEnrichment,
   });
   const providerFirstExecutionPlan = resolveProviderFirstExecutionPlan({
     selection: providerFirst,
