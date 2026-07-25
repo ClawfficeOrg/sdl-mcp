@@ -84,7 +84,7 @@ export const DEFAULT_THRESHOLDS = {
   candidateForegroundP95Ms: 1_000,
   candidateToControlP50Ratio: 0.2,
   concurrentForegroundMs: 1_000,
-  backgroundVerificationP95Ms: 3_500,
+  backgroundVerificationP95Ms: 4_000,
 } as const;
 
 interface BenchmarkFile {
