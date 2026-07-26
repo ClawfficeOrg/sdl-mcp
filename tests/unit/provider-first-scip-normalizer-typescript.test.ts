@@ -243,4 +243,45 @@ describe("provider-first SCIP TypeScript variable statement ranges", () => {
       endCol: 21,
     });
   });
+
+  it("normalizes variable statement ranges in declaration files", () => {
+    const symbol =
+      "scip-typescript npm fixture 1.0.0 src/types/config/SETTINGS.";
+    const relPath = "src/types/config.d.ts";
+    const document: ScipDocument = {
+      language: "typescript",
+      relativePath: relPath,
+      occurrences: [definition(symbol, 0, 21, 29)],
+      symbols: [{
+        symbol,
+        documentation: [],
+        relationships: [],
+        kind: 0,
+        displayName: "SETTINGS",
+      }],
+    };
+
+    const fact = normalizeScipProviderFacts({
+      repoId: REPO_ID,
+      generationId: "gen-declaration-file",
+      providerId: PROVIDER_ID,
+      providerVersion: PROVIDER_VERSION,
+      documents: [document],
+      sourceTextByPath: new Map([[
+        relPath,
+        [
+          "export declare const SETTINGS: {",
+          "  enabled: boolean;",
+          "};",
+        ].join("\n"),
+      ]]),
+    }).symbols[0];
+
+    assert.deepEqual(fact.range, {
+      startLine: 1,
+      startCol: 0,
+      endLine: 3,
+      endCol: 2,
+    });
+  });
 });

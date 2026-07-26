@@ -46,7 +46,8 @@ export function findTypeScriptVariableStatementRange(
       jsx: ts.JsxEmit.Preserve,
       target: ts.ScriptTarget.Latest,
     },
-    fileName: relPath,
+    // Declaration inputs emit no JavaScript, which makes transpileModule fail.
+    fileName: relPath.replace(/\.d\.ts$/i, ".ts"),
     reportDiagnostics: true,
   }).diagnostics;
   const statementEnd = statement.getEnd();
