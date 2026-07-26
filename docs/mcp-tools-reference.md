@@ -38,7 +38,13 @@ The four remaining flat definitions are optional memory tools. Enable memory to 
 
 Return unified runtime, config, logging, Ladybug, and native-addon status.
 
-**Parameters:** none
+**Parameters:**
+
+| Parameter     | Type      | Required | Description                                      |
+| ------------- | --------- | -------- | ------------------------------------------------ |
+| `redactPaths` | `boolean` | No       | Redact machine-specific paths from the response. |
+
+With `redactPaths: true`, config, LadybugDB, and native-addon paths are reduced to basenames; a non-null `logging.path` becomes the literal `"<redacted>"`, while disabled file logging remains `null`. A fallback warning that includes the log path uses the same placeholder.
 
 **Response includes:**
 
@@ -465,6 +471,8 @@ The returned card includes identity, signature, summary, invariants, side effect
 **Response:** Either `{ card: SymbolCard }` or `{ notModified: true, etag, ledgerVersion }`.
 
 If a natural reference is ambiguous or not found, the error response includes structured guidance such as `classification`, `fallbackTools`, `fallbackRationale`, and ranked `candidates`.
+
+For missing natural references, recovery candidates use an inclusive minimum score of `0.35` and are capped at three. The human-readable “Did you mean” text and structured `candidates` are generated from the same ordered set. When no candidate reaches the threshold, `candidates` is empty and the text hint is omitted. These recovery bounds apply anywhere the shared natural-symbol resolver is used; exact and high-confidence auto-resolution thresholds are unchanged.
 
 **Examples:**
 
@@ -989,6 +997,8 @@ Context budgets reject unknown fields. `maxCards` returns guidance to call `slic
 In **broad** mode (default, compact): `taskId`, `taskType`, `success`, `summary`, `answer`, `finalEvidence`, `nextBestAction?`, `retrievalEvidence?`, `diagnostics?`, `error?` — the fields `actionsTaken`, `path`, and `metrics` are omitted from the model-visible response. `finalEvidence` is the primary evidence surface. `retrievalEvidence` carries `sources`, `candidateCountPerSource`, `topRanksPerSource`, `fusionLatencyMs`, `diagnosticTimings`, `ftsAvailable`, and `vectorAvailable` from hybrid seeding when available. `diagnostics` is returned only when `includeDiagnostics: true`. The `answer` field is always preserved on successful responses. When answer-first evidence is insufficient, the response preserves evidence and continuation while returning `success: false` and `status: "partial"`.
 
 In **precise** mode: `taskId`, `taskType`, `success`, `path`, `finalEvidence`, `metrics` — envelope fields stripped for token efficiency.
+
+In broad mode, a task that names exactly one high-signal identifier can use a narrower deterministic evidence projection when that name resolves uniquely by exact symbol name, carries named-concept retrieval provenance, and the caller supplied no explicit `focusSymbols` or `focusPaths`. The projection places all `symbolCard`, `skeleton`, and `hotPath` evidence for the exact subject first, then the same symbol-shaped evidence for up to two secondary subjects selected by a skeleton or non-zero-match hot path, then every non-symbol evidence item; relative order within each partition is preserved. A zero-match hot path cannot select a subject but remains when another rich item selected that subject. Generic text, multiple identifiers, explicit caller focus, ambiguous/fuzzy-only matches, and exact subjects without rich evidence keep the existing broad response.
 
 Planner token estimates: card ~50, skeleton ~200, hotPath ~500, raw ~2000. When over budget, the planner trims rungs based on confidence tier: high-confidence retrievals trim to cheapest rungs, low-confidence retrievals preserve diagnostic depth.
 

@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SDL tool QA reliability**: Windows PowerShell runtimes preserve the parent `PATHEXT` needed by nested native commands; path-redacted `sdl.info` responses use a process-stable logging placeholder; broad context for one uniquely resolved named concept prioritizes its rich evidence plus up to two secondary subjects; and missing natural-symbol references return at most three suggestions scoring at least `0.35`.
 - **Provider-first TypeScript declaration files**: Provider normalization now validates bounded `.d.ts` variable fragments as ordinary TypeScript, preventing `transpileModule`'s no-output failure from silently sending `auto` indexing into legacy Pass 1.
 - **Empty checkpoints**: `sdl.buffer.checkpoint` returns a minimal static no-op result when no buffers are pending, instead of volatile checkpoint metadata.
 - **LadybugDB open boundary**: Database startup now awaits LadybugDB's lazy native initialization and WAL replay before recording the active path or logging a successful open. Initialization failures close the partial wrapper and direct operators to preserve the database family and use stopped safe rebuild recovery instead of deleting or retrying it in place.
