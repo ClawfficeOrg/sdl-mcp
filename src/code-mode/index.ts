@@ -678,7 +678,14 @@ function renderTypescript(catalog: ActionCatalogEntry[]): string {
   ];
 
   for (const descriptor of catalog) {
+    const topLevelOnly =
+      descriptor.kind === "meta" && descriptor.action !== "action.search";
     lines.push(`/** ${descriptor.description} */`);
+    if (topLevelOnly) {
+      lines.push(
+        `// Top-level only: call sdl.${descriptor.action} directly; not valid as an sdl.workflow step.`,
+      );
+    }
     if (descriptor.disabled) {
       lines.push(`// Disabled: ${descriptor.disabledReason ?? "not enabled"}`);
     }
@@ -699,9 +706,17 @@ function renderTypescript(catalog: ActionCatalogEntry[]): string {
             `${field.name}${field.required ? "" : "?"}: ${renderTypescriptFieldType(field)}`,
         )
         .join("; ");
-      lines.push(`function ${descriptor.fn}(p: { ${params} }): object`);
+      lines.push(
+        topLevelOnly
+          ? `// sdl.${descriptor.action}(p: { ${params} }): object`
+          : `function ${descriptor.fn}(p: { ${params} }): object`,
+      );
     } else {
-      lines.push(`function ${descriptor.fn}(p: object): object`);
+      lines.push(
+        topLevelOnly
+          ? `// sdl.${descriptor.action}(p: object): object`
+          : `function ${descriptor.fn}(p: object): object`,
+      );
     }
     if (descriptor.schemaSummary) {
       for (const field of descriptor.schemaSummary.fields) {
@@ -738,6 +753,8 @@ function renderMarkdown(catalog: ActionCatalogEntry[]): string {
   ];
 
   for (const descriptor of catalog) {
+    const topLevelOnly =
+      descriptor.kind === "meta" && descriptor.action !== "action.search";
     lines.push(`## \`${descriptor.fn}\` (\`${descriptor.action}\`)`);
     lines.push("");
     lines.push(descriptor.description);
@@ -749,6 +766,11 @@ function renderMarkdown(catalog: ActionCatalogEntry[]): string {
     }
 
     lines.push(`- **Kind**: ${descriptor.kind}`);
+    lines.push(
+      topLevelOnly
+        ? `- **Invocation**: top-level tool \`sdl.${descriptor.action}\` only; not an \`sdl.workflow\` step`
+        : "- **Invocation**: `sdl.workflow` step",
+    );
     lines.push(`- **Tags**: ${descriptor.tags.join(", ")}`);
     if (descriptor.prerequisites.length > 0) {
       lines.push(`- **Prerequisites**: ${descriptor.prerequisites.join(", ")}`);

@@ -1,5 +1,18 @@
 import type { Evidence } from "./types.js";
 
+/** Detects empty hot-path probes, including executor-prefixed summaries. */
+export function isZeroMatchHotPathEvidence(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === "hotPath" &&
+    "summary" in value &&
+    typeof value.summary === "string" &&
+    /(?:^| \| )Hot path \(0 matches\b/u.test(value.summary)
+  );
+}
+
 export class EvidenceCapture {
   private evidence: Map<string, Evidence[]> = new Map();
 

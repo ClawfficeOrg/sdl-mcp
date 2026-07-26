@@ -9,6 +9,11 @@ import {
   projectContextResultForUsageAccounting,
   projectToolResultForModelContent,
 } from "../../dist/mcp/context-response-projection.js";
+import {
+  clearContinuationStore,
+  getContinuation,
+  storeContinuation,
+} from "../../dist/code-mode/workflow-truncation.js";
 
 describe("context-response-projection", () => {
   const broadResult = {
@@ -414,6 +419,186 @@ describe("context-response-projection", () => {
           },
         ],
       });
+    });
+
+    it("projects continuation evidence without mutating raw workflow data", () => {
+      const rawEvidence = [
+        {
+          type: "hotPath",
+          reference: "hotpath:zero",
+          summary: "Hot path (0 matches, ~80 tokens): function-adjacent fallback",
+          timestamp: 111,
+        },
+        {
+          type: "hotPath",
+          reference: "hotpath:match",
+          summary: "Hot path (1 matches, ~80 tokens): targetIdentifier()",
+          timestamp: 222,
+        },
+      ];
+      const projected = projectToolResultForModelContent(
+        "sdl.workflow",
+        {
+          results: [
+            {
+              stepIndex: 0,
+              fn: "workflowContinuationGet",
+              args: { path: "finalEvidence" },
+              result: { data: rawEvidence, totalTokens: 80, hasMore: false },
+              status: "ok",
+            },
+          ],
+        },
+        {},
+      );
+
+      assert.deepEqual(projected, {
+        results: [
+          {
+            fn: "workflowContinuationGet",
+            result: {
+              data: [
+                {
+                  type: "hotPath",
+                  reference: "hotpath:match",
+                  summary: "Hot path (1 matches, ~80 tokens): targetIdentifier()",
+                },
+              ],
+              hasMore: false,
+            },
+          },
+        ],
+      });
+      assert.deepEqual(
+        rawEvidence.map((evidence) => evidence.timestamp),
+        [111, 222],
+      );
+    });
+
+    it("filters continuation evidence before applying path pagination", () => {
+      const rawEvidence = [
+        {
+          type: "hotPath",
+          reference: "hotpath:zero",
+          summary: "Hot path (0 matches, ~80 tokens): function-adjacent fallback",
+          timestamp: 111,
+        },
+        {
+          type: "hotPath",
+          reference: "hotpath:match",
+          summary: "Hot path (1 matches, ~80 tokens): targetIdentifier()",
+          timestamp: 222,
+        },
+      ];
+      const handle = storeContinuation({ finalEvidence: rawEvidence });
+
+      try {
+        const rawPage = getContinuation(handle, 0, 1, "finalEvidence");
+        assert.deepEqual(rawPage?.data, [rawEvidence[0]]);
+
+        const projected = projectToolResultForModelContent(
+          "sdl.workflow",
+          {
+            results: [
+              {
+                stepIndex: 0,
+                fn: "workflowContinuationGet",
+                args: {
+                  handle,
+                  path: "finalEvidence",
+                  offset: 0,
+                  limit: 1,
+                },
+                result: rawPage,
+                status: "ok",
+              },
+            ],
+          },
+          {},
+        );
+
+        assert.deepEqual(projected, {
+          results: [
+            {
+              fn: "workflowContinuationGet",
+              result: {
+                data: [
+                  {
+                    type: "hotPath",
+                    reference: "hotpath:match",
+                    summary:
+                      "Hot path (1 matches, ~80 tokens): targetIdentifier()",
+                  },
+                ],
+                hasMore: false,
+              },
+            },
+          ],
+        });
+      } finally {
+        clearContinuationStore();
+      }
+    });
+
+    it("projects large no-path context continuations before JSON chunking", () => {
+      const rawContext = {
+        taskType: "review",
+        success: true,
+        summary: "Large context",
+        finalEvidence: Array.from({ length: 120 }, (_, index) => ({
+          type: "hotPath",
+          reference: `hotpath:${index}`,
+          summary:
+            `symbol | Hot path (${index === 0 ? 0 : 1} matches, ~80 tokens): ` +
+            "implementation body ".repeat(30),
+          timestamp: 111 + index,
+        })),
+      };
+      const handle = storeContinuation(rawContext);
+
+      try {
+        const rawPage = getContinuation(handle);
+        assert.ok(rawPage);
+        assert.equal(
+          (rawPage.data as { encoding?: unknown }).encoding,
+          "json",
+        );
+        assert.match(
+          (rawPage.data as { content: string }).content,
+          /"timestamp":111/,
+        );
+
+        const projected = projectToolResultForModelContent(
+          "sdl.workflow",
+          {
+            results: [
+              {
+                stepIndex: 0,
+                fn: "workflowContinuationGet",
+                args: { handle },
+                result: rawPage,
+                status: "ok",
+              },
+            ],
+          },
+          {},
+        ) as {
+          results: Array<{
+            result: { data: { content: string; encoding: string } };
+          }>;
+        };
+        const projectedChunk = projected.results[0]?.result.data;
+
+        assert.equal(projectedChunk?.encoding, "json");
+        assert.doesNotMatch(projectedChunk.content, /"timestamp":/);
+        assert.doesNotMatch(projectedChunk.content, /Hot path \(0 matches,/);
+        assert.match(
+          (rawPage.data as { content: string }).content,
+          /"timestamp":111/,
+        );
+      } finally {
+        clearContinuationStore();
+      }
     });
 
     it("keeps intermediateResultsSuppressed immediately after workflow results", () => {

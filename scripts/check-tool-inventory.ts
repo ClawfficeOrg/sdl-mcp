@@ -126,8 +126,15 @@ function main(): void {
   const flatModeTotal = universalToolCount + flatToolCount;
   const gatewayModeTotal = universalToolCount + gatewayToolCount;
   const gatewayLegacyModeTotal = universalToolCount + gatewayToolCount + flatToolCount;
-  const codeModeExclusiveTotal = codeModeToolCount;
-  const allFlatAndCodeModeNames = new Set([...flatToolNames, ...codeModeToolNames]);
+  const codeModeExclusiveToolNames = normalizeToolNames([
+    ...universalToolNames,
+    ...codeModeToolNames,
+  ]);
+  const codeModeExclusiveTotal = codeModeExclusiveToolNames.length;
+  const allFlatAndCodeModeNames = new Set([
+    ...flatToolNames,
+    ...codeModeExclusiveToolNames,
+  ]);
   const allFlatAndCodeModeActions = allFlatAndCodeModeNames.size;
 
   // Compare

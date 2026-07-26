@@ -59,10 +59,10 @@ The generated [tool inventory](./docs/generated/tool-inventory.md) is the source
 
 | Mode | Registered surface |
 | --- | --- |
-| Flat | 37 tools: 2 universal tools and 35 flat tools |
+| Flat | 38 tools: 2 universal tools and 36 flat tools |
 | Gateway | 6 tools: 2 universal tools and 4 gateway namespaces |
-| Gateway with legacy | 41 tools: 2 universal, 4 gateway, and 35 flat tools |
-| Code Mode exclusive | 6 tools: `sdl.action.search`, `sdl.context`, `sdl.file`, `sdl.manual`, `sdl.retrieve`, and `sdl.workflow` |
+| Gateway with legacy | 42 tools: 2 universal, 4 gateway, and 36 flat tools |
+| Code Mode exclusive | 7 tools: `sdl.action.search`, `sdl.context`, `sdl.file`, `sdl.info`, `sdl.manual`, `sdl.retrieve`, and `sdl.workflow` |
 
 Code Mode provides a compact task-oriented surface. Gateway mode groups the regular actions into `sdl.agent`, `sdl.code`, `sdl.query`, and `sdl.repo`. The [MCP Tools Reference](./docs/mcp-tools-reference.md) explains requests and responses for the installed surface.
 

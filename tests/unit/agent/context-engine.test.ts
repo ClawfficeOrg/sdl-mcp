@@ -770,6 +770,233 @@ describe("ContextEngine", () => {
     assert.equal(typeof completePrecise.taskId, "string");
   });
 
+  it("keeps implementation evidence ahead of trailing broad card noise", async () => {
+    const runtimeQueryRef = "symbol:" + "a".repeat(64);
+    const runtimeExecuteRef = "symbol:" + "c".repeat(64);
+    const card = (
+      reference: string,
+      name: string,
+      file: string,
+    ): Evidence => ({
+      type: "symbolCard",
+      reference,
+      summary: [
+        name,
+        file,
+        reference + " " + "card metadata ".repeat(12),
+      ].join(" | "),
+      timestamp: 1,
+    });
+    const noiseCards = Array.from({ length: 18 }, (_, index) =>
+      card(
+        "symbol:" + (index + 1).toString(16).padStart(64, "b"),
+        "clusterCandidate" + index,
+        "src/unrelated/candidate-" + index + ".ts",
+      ),
+    );
+    const cards = [
+      card(
+        runtimeQueryRef,
+        "handleRuntimeQueryOutput",
+        "src/mcp/tools/runtime-query.ts",
+      ),
+      noiseCards[0],
+      card(
+        runtimeExecuteRef,
+        "handleRuntimeExecute",
+        "src/mcp/tools/runtime.ts",
+      ),
+      ...noiseCards.slice(1),
+    ];
+    const skeletons = cards.slice(0, 5).map(
+      (item, index): Evidence => ({
+        type: "skeleton",
+        reference: item.reference,
+        summary:
+          "Skeleton (" +
+          (index + 1) +
+          " lines): implementation flow " +
+          "implementation body ".repeat(180) +
+          item.reference,
+        timestamp: 2,
+      }),
+    );
+    const evidence = [...cards, ...skeletons];
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => [
+      runtimeQueryRef,
+      runtimeExecuteRef,
+    ]);
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [
+        {
+          id: "broad-cards",
+          type: "getCard",
+          status: "completed",
+          input: {},
+          output: {},
+          timestamp: 1,
+          durationMs: 1,
+          evidence: cards,
+        },
+        {
+          id: "implementation-skeletons",
+          type: "getSkeleton",
+          status: "completed",
+          input: {},
+          output: {},
+          timestamp: 2,
+          durationMs: 1,
+          evidence: skeletons,
+        },
+      ],
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskText:
+          "Diagnose runtimeQueryOutput and identify the runtimeExecute implementation path",
+        budget: { maxTokens: 2_600 },
+        options: { contextMode: "broad", evidenceOptimization: "budgeted" },
+      }),
+    );
+    const references = result.finalEvidence.map(({ reference }) => reference);
+
+    assert.ok(
+      references.includes(runtimeQueryRef),
+      JSON.stringify(result.finalEvidence),
+    );
+    assert.ok(
+      references.includes(runtimeExecuteRef),
+      JSON.stringify(result.finalEvidence),
+    );
+    assert.ok(
+      result.finalEvidence.some(
+        ({ type }) => type === "skeleton" || type === "hotPath",
+      ),
+    );
+    assert.ok(
+      references.filter(
+        (reference) =>
+          reference.startsWith("symbol:") &&
+          reference !== runtimeQueryRef &&
+          reference !== runtimeExecuteRef,
+      ).length <= 3,
+    );
+    assert.ok(estimateTokens(JSON.stringify(result)) <= 2_600);
+  });
+
+  it("preserves a directly selected card after unrelated rich evidence", async () => {
+    const evidence: Evidence[] = [
+      {
+        type: "symbolCard",
+        reference: "symbol:unrelated",
+        summary: "unrelated | " + "broad cluster metadata ".repeat(80),
+        timestamp: 1,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:target",
+        summary: "target | directly selected implementation card",
+        timestamp: 2,
+      },
+      {
+        type: "skeleton",
+        reference: "symbol:unrelated",
+        summary: "Skeleton (1 line): " + "unrelated implementation ".repeat(80),
+        timestamp: 3,
+      },
+    ];
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => ["symbol:target"]);
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [],
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskText: "Review the target implementation",
+        budget: { maxTokens: 700 },
+        options: { contextMode: "broad", evidenceOptimization: "budgeted" },
+      }),
+    );
+
+    assert.ok(
+      result.finalEvidence.some(
+        ({ reference }) => reference === "symbol:target",
+      ),
+      JSON.stringify(result),
+    );
+    assert.ok(estimateTokens(JSON.stringify(result)) <= 700);
+  });
+
+  it("does not let prefixed zero-match hot paths prune later cards", async () => {
+    const cards: Evidence[] = [
+      {
+        type: "symbolCard",
+        reference: "symbol:first",
+        summary: "first | " + "unrelated branch metadata ".repeat(120),
+        timestamp: 1,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:empty-hot-path",
+        summary: "emptyHotPath | " + "adjacent branch metadata ".repeat(120),
+        timestamp: 2,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:target",
+        summary: "target | concise relevant implementation card",
+        timestamp: 3,
+      },
+    ];
+    const zeroMatchHotPath: Evidence = {
+      type: "hotPath",
+      reference: "hotpath:empty-hot-path",
+      summary:
+        "symbol | Hot path (0 matches, ~80 tokens): " +
+        "function-adjacent fallback ".repeat(80),
+      timestamp: 4,
+    };
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => ["symbol:target"]);
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [],
+      evidence: [...cards, zeroMatchHotPath],
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskText: "Review the target implementation",
+        budget: { maxTokens: 700 },
+        options: { contextMode: "broad", evidenceOptimization: "budgeted" },
+      }),
+    );
+    const references = result.finalEvidence.map(({ reference }) => reference);
+
+    assert.ok(references.includes("symbol:target"), JSON.stringify(result));
+    assert.ok(!references.includes("hotpath:empty-hot-path"));
+    assert.ok(estimateTokens(JSON.stringify(result)) <= 700);
+  });
+
   it("enforces planner budget constraints for token and duration", async () => {
     mock.method(Executor.prototype, "execute", async () => ({
       actions: [],

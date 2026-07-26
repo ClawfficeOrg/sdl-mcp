@@ -554,7 +554,7 @@ describe("MCP tool registration", () => {
     assert.ok(!("maxTokens" in sliceBudget));
   });
 
-  it("registers only code-mode tools when exclusive mode is enabled", async () => {
+  it("registers universal and code-mode tools when exclusive mode is enabled", async () => {
     const { names, tools, server } = makeFakeServer();
 
     registerTools(server as any, {}, undefined, {
@@ -593,8 +593,8 @@ describe("MCP tool registration", () => {
       "expected sdl.retrieve in exclusive mode",
     );
     assert.ok(
-      !names.includes("sdl.info"),
-      "sdl.info should NOT be registered in exclusive mode",
+      names.includes("sdl.info"),
+      "expected universal sdl.info in exclusive mode",
     );
     const actionSearch = tools.find(
       (tool) => tool.name === "sdl.action.search",
@@ -605,13 +605,13 @@ describe("MCP tool registration", () => {
       limit: 10,
     }) as { actions?: Array<{ action?: string }> };
     assert.ok(
-      !discovery.actions?.some((action) => action.action === "info"),
-      "exclusive mode discovery must not advertise sdl.info",
+      discovery.actions?.some((action) => action.action === "info"),
+      "exclusive mode discovery should advertise universal sdl.info",
     );
     assert.strictEqual(
       names.length,
-      6,
-      `exclusive mode should register exactly 6 tools, got ${names.length}: ${names.join(", ")}`,
+      7,
+      `exclusive mode should register exactly 7 tools, got ${names.length}: ${names.join(", ")}`,
     );
 
     // No flat tools

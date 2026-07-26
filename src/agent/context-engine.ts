@@ -26,6 +26,7 @@ import {
   toPascalCaseIdentifier,
 } from "./context-seeding.js";
 import { explicitFocusPaths } from "./context-ranking.js";
+import { isZeroMatchHotPathEvidence } from "./evidence.js";
 import { extractIdentifiersFromText } from "./identifier-extraction.js";
 import { randomUUID } from "node:crypto";
 
@@ -102,6 +103,8 @@ interface ContextFinalizationContext {
   success: boolean;
   clusterExpandedCount: number;
   evidenceOptimization?: EvidenceOptimizationMode;
+  /** Context selected before graph expansion must survive broad-noise pruning. */
+  protectedEvidenceReferences?: string[];
   /** Precise-mode direct callers still consume path and metrics when no truncation is needed. */
   preserveUnchangedResult?: boolean;
 }
@@ -131,9 +134,7 @@ function optimizeEvidenceForResponse(
 ): Evidence[] {
   // Empty hot-path probes are control-flow diagnostics, not useful evidence.
   const usefulEvidence = evidence.filter(
-    (item) =>
-      item.type !== "hotPath" ||
-      !/^Hot path \(0 matches\b/.test(item.summary ?? ""),
+    (item) => !isZeroMatchHotPathEvidence(item),
   );
   if (mode !== "dedupe" && mode !== "budgeted" && mode !== "global") {
     return usefulEvidence;
@@ -153,6 +154,45 @@ function optimizeEvidenceForResponse(
 
   return selectBudgetedEvidence(dominated, tokenBudget, exactDeduped).map(
     (candidate) => candidate.evidence,
+  );
+}
+
+function pruneTrailingCardNoise(
+  evidence: Evidence[],
+  protectedReferences: string[] = [],
+): Evidence[] {
+  const richSubjects = new Set(
+    evidence.flatMap((item) => {
+      if (
+        (item.type !== "skeleton" && item.type !== "hotPath") ||
+        isZeroMatchHotPathEvidence(item)
+      ) {
+        return [];
+      }
+      const subject = evidenceSubjectKey(item.reference);
+      return subject === undefined ? [] : [subject];
+    }),
+  );
+  if (richSubjects.size === 0) return evidence;
+
+  // Executor appends richer evidence after ranked cards. Keep the card prefix
+  // with richer support and discard trailing expansion-only cards.
+  const lastRichCardIndex = evidence.reduce(
+    (lastIndex, item, index) =>
+      item.type === "symbolCard" &&
+      richSubjects.has(evidenceSubjectKey(item.reference) ?? "")
+        ? index
+        : lastIndex,
+    -1,
+  );
+  if (lastRichCardIndex < 0) return evidence;
+
+  const protectedReferenceSet = new Set(protectedReferences);
+  return evidence.filter(
+    (item, index) =>
+      item.type !== "symbolCard" ||
+      index <= lastRichCardIndex ||
+      protectedReferenceSet.has(item.reference),
   );
 }
 
@@ -908,6 +948,7 @@ export class ContextEngine {
           success,
           clusterExpandedCount,
           evidenceOptimization,
+          protectedEvidenceReferences: context,
         },
       );
     } catch (error) {
@@ -1274,7 +1315,12 @@ export class ContextEngine {
       effectiveCap - estimateTokens(JSON.stringify(baseEnvelope)),
     );
     let selectedEvidence = optimizeEvidenceForResponse(
-      completeResult.finalEvidence,
+      context.preserveUnchangedResult
+        ? completeResult.finalEvidence
+        : pruneTrailingCardNoise(
+            completeResult.finalEvidence,
+            context.protectedEvidenceReferences,
+          ),
       "budgeted",
       evidenceAllowance,
     );

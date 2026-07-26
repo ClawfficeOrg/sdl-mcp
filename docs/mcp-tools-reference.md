@@ -21,7 +21,7 @@ Complete reference for the SDL-MCP runtime surfaces exposed by `registerTools`.
 
 - `36` flat SDL action definitions and `2` universal tools, for `38` default-mode registrations
 - The default memory-disabled surface activates `34` tools: `2` universal tools and `32` flat tools. All `34` advertise object-root MCP `outputSchema` metadata.
-- Code Mode tools: `sdl.action.search`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file` (`sdl.info` is omitted in Code Mode exclusive)
+- Code Mode exclusive tools: `sdl.action.search`, `sdl.info`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file`
 
 Flat mode and gateway mode share the same handler layer. The CLI `tool` command exposes direct action aliases for the shared handler layer rather than the full MCP surface.
 

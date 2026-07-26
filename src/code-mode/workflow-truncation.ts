@@ -295,18 +295,52 @@ export function getContinuation(
   limit?: number,
   path?: string,
 ): ContinuationResult | null {
+  return getContinuationInternal(handle, offset, limit, path);
+}
+
+/** Projects the selected value before paging while preserving the raw store. */
+export function getContinuationWithProjection(
+  handle: string,
+  projectValue: (value: unknown) => unknown,
+  offset?: number,
+  limit?: number,
+  path?: string,
+): ContinuationResult | null {
+  return getContinuationInternal(
+    handle,
+    offset,
+    limit,
+    path,
+    projectValue,
+  );
+}
+
+function getContinuationInternal(
+  handle: string,
+  offset?: number,
+  limit?: number,
+  path?: string,
+  projectValue?: (value: unknown) => unknown,
+): ContinuationResult | null {
   evictExpired();
   const entry = CONTINUATION_STORE.get(handle);
   if (!entry) return null;
 
-  const parsed: unknown = JSON.parse(entry.data);
-  const totalTokens = estimateTokensCoarse(entry.data);
+  const stored: unknown = JSON.parse(entry.data);
+  const parsed = path === undefined && projectValue
+    ? projectValue(stored)
+    : stored;
+  const serialized = parsed === stored ? entry.data : safeJsonStringify(parsed);
+  const totalTokens = estimateTokensCoarse(serialized);
 
   if (path) {
-    const selected = navigatePath(parsed, path);
-    if (selected === undefined) {
+    const storedSelection = navigatePath(parsed, path);
+    if (storedSelection === undefined) {
       throw new Error(`Continuation path not found: ${path}`);
     }
+    const selected = projectValue
+      ? projectValue(storedSelection)
+      : storedSelection;
     if (Array.isArray(selected)) {
       if (offset !== undefined || limit !== undefined) {
         const start = offset ?? 0;
@@ -358,7 +392,7 @@ export function getContinuation(
 
   const maxInlineTokens = 4000;
   if (offset !== undefined || limit !== undefined || totalTokens > maxInlineTokens) {
-    const source = typeof parsed === "string" ? parsed : entry.data;
+    const source = typeof parsed === "string" ? parsed : serialized;
     return stringChunk(source, offset, limit, typeof parsed === "string" ? "text" : "json");
   }
 

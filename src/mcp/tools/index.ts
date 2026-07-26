@@ -31,7 +31,7 @@ export function registerTools(
       memoryTools:
         services.actionAvailability?.memoryTools
         ?? anyRepoHasMemoryTools(loadConfig()),
-      infoTool: !(codeModeConfig?.enabled && codeModeConfig.exclusive),
+      infoTool: true,
     },
   };
 
@@ -40,12 +40,6 @@ export function registerTools(
 
   // Universal discovery surface
   registerActionSearchTool(server, stableServices);
-
-  // Code Mode exclusive: register action search plus code-mode tools only
-  if (codeModeConfig?.enabled && codeModeConfig?.exclusive) {
-    registerCodeModeTools(server, stableServices, codeModeConfig);
-    return;
-  }
 
   server.registerTool(
     "sdl.info",
@@ -56,6 +50,12 @@ export function registerTools(
     { title: "SDL Info" },
     InfoResponseSchema,
   );
+
+  // Code Mode exclusive: register universal tools plus code-mode tools only
+  if (codeModeConfig?.enabled && codeModeConfig?.exclusive) {
+    registerCodeModeTools(server, stableServices, codeModeConfig);
+    return;
+  }
 
   if (gatewayConfig?.enabled) {
     server.gatewayMode = true;

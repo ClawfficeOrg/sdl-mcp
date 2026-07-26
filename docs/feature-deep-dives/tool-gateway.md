@@ -31,7 +31,7 @@ flowchart LR
 | Flat                | Direct action surface plus universal discovery and diagnostics                |
 | Gateway             | Namespace projection over gateway-routable actions                            |
 | Gateway + legacy    | Gateway projection plus legacy flat actions                                   |
-| Code Mode exclusive | `sdl.action.search`, `sdl.context`, `sdl.file`, `sdl.manual`, `sdl.retrieve`, `sdl.workflow` |
+| Code Mode exclusive | `sdl.action.search`, `sdl.context`, `sdl.file`, `sdl.info`, `sdl.manual`, `sdl.retrieve`, `sdl.workflow` |
 
 The generated source of truth is [tool-inventory.md](../generated/tool-inventory.md).
 
@@ -105,7 +105,7 @@ Gateway, flat, and Code Mode tools share the same outward response contract. Vis
 ## Limits and Gotchas
 
 - `file.write` is outside the four namespace gateway schemas. In Code Mode, use `sdl.file` which unifies `file.read`, `file.write`, and `search.edit` under one tool.
-- `sdl.info` is universal outside Code Mode exclusive. It is not part of the four gateway tools.
+- `sdl.info` is universal in every mode, including Code Mode exclusive. It is not part of the four gateway namespace tools.
 - Code Mode exclusive bypasses the regular gateway and flat surfaces entirely.
 - The CLI `sdl-mcp tool` command is related but not identical. It exposes direct action aliases, including `file.write`, and now proxies only the low-risk metadata tools `action.search` and `manual` (plus `sdl.` aliases). `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file` remain MCP-only wrapper tools. See [CLI Tool Access](./cli-tool-access.md).
 

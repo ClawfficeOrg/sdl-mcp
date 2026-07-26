@@ -110,7 +110,7 @@ function main(): void {
   const flatToolNames = normalizeToolNames(extractFlatToolNames(actionCatalogSource));
   const flatToolCount = flatToolNames.length;
 
-  // --- Universal tools (shared outside Code Mode exclusive) ---
+  // --- Universal tools (shared across every mode) ---
   // sdl.info is registered directly in tools/index.ts via registerTool.
   // sdl.action.search is registered via registerActionSearchTool.
   const universalToolNames = normalizeToolNames([
@@ -145,11 +145,17 @@ function main(): void {
   // Gateway + legacy mode: universal tools + gateway tools + flat tools
   const gatewayLegacyModeTotal = universalToolCount + gatewayToolCount + flatToolCount;
 
-  // Code-mode exclusive tools (only unique ones, excluding shared sdl.action.search)
-  const codeModeExclusiveTotal = codeModeToolCount;
+  const codeModeExclusiveToolNames = normalizeToolNames([
+    ...universalToolNames,
+    ...codeModeToolNames,
+  ]);
+  const codeModeExclusiveTotal = codeModeExclusiveToolNames.length;
 
-  // All unique action names across flat + code-mode (deduplicating sdl.action.search)
-  const allFlatAndCodeModeNames = new Set([...flatToolNames, ...codeModeToolNames]);
+  // All unique action names across flat + exclusive Code Mode.
+  const allFlatAndCodeModeNames = new Set([
+    ...flatToolNames,
+    ...codeModeExclusiveToolNames,
+  ]);
   const allFlatAndCodeModeActions = allFlatAndCodeModeNames.size;
 
   // --- Build JSON output ---
@@ -213,6 +219,10 @@ function buildMarkdown(inventory: {
   gatewayToolNames: string[];
 }): string {
   const lines: string[] = [];
+  const codeModeExclusiveToolNames = normalizeToolNames([
+    ...inventory.universalToolNames,
+    ...inventory.codeModeToolNames,
+  ]);
 
   lines.push("# SDL-MCP Tool Inventory");
   lines.push("");
@@ -228,13 +238,13 @@ function buildMarkdown(inventory: {
   lines.push(`| Flat (default) | ${inventory.counts.flatModeTotal} | ${inventory.counts.universalTools} universal + ${inventory.counts.flatTools} flat |`);
   lines.push(`| Gateway | ${inventory.counts.gatewayModeTotal} | ${inventory.counts.universalTools} universal + ${inventory.counts.gatewayTools} gateway |`);
   lines.push(`| Gateway + legacy | ${inventory.counts.gatewayLegacyModeTotal} | ${inventory.counts.universalTools} universal + ${inventory.counts.gatewayTools} gateway + ${inventory.counts.flatTools} flat |`);
-  lines.push(`| Code Mode exclusive | ${inventory.counts.codeModeExclusiveTotal} | ${inventory.codeModeToolNames.map((name) => `\`${name}\``).join(", ")} |`);
+  lines.push(`| Code Mode exclusive | ${inventory.counts.codeModeExclusiveTotal} | ${codeModeExclusiveToolNames.map((name) => `\`${name}\``).join(", ")} |`);
   lines.push(`| All unique actions | ${inventory.counts.allFlatAndCodeModeActions} | flat + code-mode unique |`);
   lines.push("");
 
   lines.push("## Universal Tools");
   lines.push("");
-  lines.push("Shared outside Code Mode exclusive. `sdl.action.search` is still available in exclusive mode via Code Mode registration; `sdl.info` is not.");
+  lines.push("Shared across every mode, including Code Mode exclusive.");
   lines.push("");
   for (const name of inventory.universalToolNames) {
     lines.push(`- \`${name}\``);
@@ -252,7 +262,7 @@ function buildMarkdown(inventory: {
 
   lines.push(`## Code-Mode Tools (${inventory.codeModeToolNames.length})`);
   lines.push("");
-  lines.push("Registered when Code Mode is enabled. In exclusive mode, this is the full Code Mode surface.");
+  lines.push("Registered when Code Mode is enabled. Exclusive mode also includes the universal tools above.");
   lines.push("");
   for (const name of inventory.codeModeToolNames) {
     lines.push(`- \`${name}\``);

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { registerCodeModeTools } from "../../dist/code-mode/index.js";
+import { registerTools } from "../../dist/mcp/tools/index.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import { AgentContextRequestSchema } from "../../dist/mcp/tools.js";
 
@@ -412,4 +413,91 @@ describe("code-mode tool validation", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+});
+
+it("keeps sdl.info callable and discoverable in exclusive Code Mode", async () => {
+  const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+  const fakeServer = {
+    registerPostDispatchHook() {},
+    registerTool(
+      name: string,
+      _description: string,
+      _schema: unknown,
+      handler: (args: unknown) => Promise<unknown>,
+    ) {
+      handlers.set(name, handler);
+    },
+  };
+
+  registerTools(
+    fakeServer as any,
+    { actionAvailability: { memoryTools: false } } as any,
+    undefined,
+    {
+      enabled: true,
+      exclusive: true,
+      maxWorkflowSteps: 20,
+      maxWorkflowTokens: 50_000,
+      maxWorkflowDurationMs: 30_000,
+      ladderValidation: "warn",
+      etagCaching: true,
+    },
+  );
+
+  assert.ok(handlers.has("sdl.info"));
+
+  const searchResponse = (await handlers.get("sdl.action.search")?.({
+    query: "sdl.info server information version capabilities",
+    limit: 5,
+  })) as { actions: Array<{ action: string }> };
+  assert.equal(searchResponse.actions[0]?.action, "info");
+
+  const manualResponse = (await handlers.get("sdl.manual")?.({
+    format: "json",
+    actions: ["info"],
+  })) as { actions: Array<{ action: string }> };
+  assert.deepEqual(manualResponse.actions.map((action) => action.action), ["info"]);
+});
+
+it("labels top-level-only Code Mode gateways instead of workflow functions", async () => {
+  let manualHandler: ((args: unknown) => Promise<unknown>) | undefined;
+  const fakeServer = {
+    registerTool(
+      name: string,
+      _description: string,
+      _schema: unknown,
+      handler: (args: unknown) => Promise<unknown>,
+    ) {
+      if (name === "sdl.manual") manualHandler = handler;
+    },
+  };
+
+  registerCodeModeTools(
+    fakeServer as any,
+    { actionAvailability: { memoryTools: false, infoTool: true } } as any,
+    {
+      enabled: true,
+      exclusive: true,
+      maxWorkflowSteps: 20,
+      maxWorkflowTokens: 50_000,
+      maxWorkflowDurationMs: 30_000,
+      ladderValidation: "warn",
+      etagCaching: true,
+    },
+  );
+
+  assert.ok(manualHandler);
+  const response = (await manualHandler({
+    format: "typescript",
+    actions: ["context", "retrieve", "file", "manual"],
+    includeSchemas: true,
+  })) as { manual: string };
+
+  for (const action of ["context", "retrieve", "file", "manual"]) {
+    assert.match(
+      response.manual,
+      new RegExp(`Top-level only: call sdl\\.${action} directly`),
+    );
+    assert.doesNotMatch(response.manual, new RegExp(`function ${action}\\(`));
+  }
 });

@@ -3,7 +3,9 @@
  * limits. Final MCP text content applies the stricter model projection below.
  */
 
+import { isZeroMatchHotPathEvidence } from "../agent/evidence.js";
 import type { TaskType } from "../agent/types.js";
+import { getContinuationWithProjection } from "../code-mode/workflow-truncation.js";
 import {
   getResponseProjectionRule,
   getWorkflowChildAction,
@@ -294,23 +296,22 @@ export function projectSymbolCardEvidenceForTask(
 }
 
 function projectEvidenceForModel(value: unknown): unknown {
-  if (!Array.isArray(value)) {
-    return value;
-  }
-
-  return value.map((item) => {
-    if (!isRecord(item)) {
-      return item;
-    }
+  const projectItem = (item: unknown): unknown => {
+    if (!isRecord(item)) return item;
 
     const projected: Record<string, unknown> = {};
     for (const [key, itemValue] of Object.entries(item)) {
-      if (key !== "timestamp") {
-        projected[key] = itemValue;
-      }
+      if (key !== "timestamp") projected[key] = itemValue;
     }
     return projected;
-  });
+  };
+  if (Array.isArray(value)) {
+    // Function-adjacent fallbacks do not prove relevance to the requested identifiers.
+    return value
+      .filter((item) => !isZeroMatchHotPathEvidence(item))
+      .map(projectItem);
+  }
+  return isZeroMatchHotPathEvidence(value) ? null : projectItem(value);
 }
 
 function normalizedDetail(value: unknown): ProjectionDetail {
@@ -632,6 +633,67 @@ function projectContextResultForModel(
   return projected;
 }
 
+function projectWorkflowContinuationForModel(
+  result: unknown,
+  args: unknown,
+  options: ModelContentProjectionOptions,
+): unknown {
+  const projected = projectGenericValueForModel("workflow", result, options);
+  if (!isRecord(result) || !isRecord(projected) || !("data" in result)) {
+    return projected;
+  }
+
+  const path = isRecord(args) && typeof args.path === "string" ? args.path : undefined;
+  const isEvidencePath = path === "finalEvidence"
+    || path?.startsWith("finalEvidence.")
+    || path?.startsWith("finalEvidence[");
+  if (
+    isEvidencePath &&
+    isRecord(args) &&
+    typeof args.handle === "string"
+  ) {
+    const projectedPage = getContinuationWithProjection(
+      args.handle,
+      projectEvidenceForModel,
+      typeof args.offset === "number" ? args.offset : undefined,
+      typeof args.limit === "number" ? args.limit : undefined,
+      path,
+    );
+    if (projectedPage) {
+      return projectGenericValueForModel("workflow", projectedPage, options);
+    }
+  }
+  if (
+    path === undefined &&
+    isRecord(args) &&
+    typeof args.handle === "string" &&
+    isRecord(result.data) &&
+    result.data.encoding === "json"
+  ) {
+    let projectedContext = false;
+    const projectedPage = getContinuationWithProjection(
+      args.handle,
+      (stored) => {
+        if (!isRecord(stored) || !("finalEvidence" in stored)) return stored;
+        projectedContext = true;
+        return projectContextResultForModel(stored, options);
+      },
+      typeof args.offset === "number" ? args.offset : undefined,
+      typeof args.limit === "number" ? args.limit : undefined,
+    );
+    if (projectedContext && projectedPage) {
+      return projectGenericValueForModel("workflow", projectedPage, options);
+    }
+  }
+  const data = isEvidencePath
+    ? projectEvidenceForModel(result.data)
+    : path === undefined && isRecord(result.data) && "finalEvidence" in result.data
+      ? projectContextResultForModel(result.data, options)
+      : projected.data;
+
+  return { ...projected, data };
+}
+
 function projectCompactFailureTrace(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
@@ -732,6 +794,9 @@ function projectWorkflowStepResultForModel(
   }
   if (childProjectionRule?.projector === "usage") {
     return isRecord(result) ? projectUsageStatsForModel(result) : result;
+  }
+  if (fn === "workflowContinuationGet") {
+    return projectWorkflowContinuationForModel(result, args, childOptions);
   }
 
   return projectGenericValueForModel(childToolName, result, childOptions);

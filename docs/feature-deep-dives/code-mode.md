@@ -107,6 +107,8 @@ Supported filters:
 - `includeSchemas` / `includeExamples` for richer output
 - `detail` for shallow `compact` schemas (the default) or recursive `full` schemas
 
+TypeScript and Markdown manuals label `info`, `manual`, `context`, `file`, `retrieve`, and `workflow` as top-level-only tools. Call them directly as `sdl.<name>`; do not use those names as `sdl.workflow` steps. `action.search` remains the meta-tool exception that is also workflow-callable.
+
 ### `sdl.context`
 
 Use this for task-shaped context retrieval inside Code Mode.
@@ -330,9 +332,9 @@ The workflow engine also provides:
 | Mode | Registered tools |
 |:-----|:-----------------|
 | Disabled | Base flat or gateway tools, plus universal `sdl.action.search` and `sdl.info` |
-| Enabled + gateway | Gateway tools plus `sdl.action.search`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file` |
-| Enabled + flat | Flat tools plus `sdl.action.search`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file` |
-| Exclusive | `sdl.action.search`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file` only |
+| Enabled + gateway | Gateway tools plus `sdl.action.search`, `sdl.info`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file` |
+| Enabled + flat | Flat tools plus `sdl.action.search`, `sdl.info`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file` |
+| Exclusive | `sdl.action.search`, `sdl.info`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file` only |
 
 ---
 

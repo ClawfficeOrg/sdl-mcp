@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-24T18:43:24.522Z",
+  "generatedAt": "2026-07-25T15:02:17.947Z",
   "counts": {
     "flatTools": 36,
     "universalTools": 2,
@@ -8,8 +8,8 @@
     "flatModeTotal": 38,
     "gatewayModeTotal": 6,
     "gatewayLegacyModeTotal": 42,
-    "codeModeExclusiveTotal": 6,
-    "allFlatAndCodeModeActions": 42
+    "codeModeExclusiveTotal": 7,
+    "allFlatAndCodeModeActions": 43
   },
   "flatToolNames": [
     "sdl.agent.feedback",
