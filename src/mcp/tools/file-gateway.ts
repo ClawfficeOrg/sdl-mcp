@@ -388,6 +388,20 @@ export type FileGatewayResponse =
   | SymbolEditResponse
   | FileGatewayPreviewWindowResponse;
 
+const FILE_GATEWAY_OUTPUT_KEYS = ["filePath", "mode", "kind"] as const;
+
+// Operation-specific schemas remain authoritative for nested file/edit payloads.
+export const FileGatewayOutputSchema = z
+  .object({
+    filePath: z.string().optional(),
+    mode: z.string().optional(),
+    kind: z.unknown().optional(),
+  })
+  .passthrough()
+  .refine((value) => FILE_GATEWAY_OUTPUT_KEYS.some((key) => key in value), {
+    message: "Unrecognized sdl.file response shape",
+  });
+
 function findPlanPreviewEntry(
   plan: StoredPlan,
   relPath: string,

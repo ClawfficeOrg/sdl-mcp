@@ -276,6 +276,16 @@ export function resolveStartNodes(
     }
   }
 
+  // Explicit entries define roots; graph traversal expands relationships downstream.
+  if ((request.entrySymbols?.length ?? 0) > 0) {
+    return {
+      startNodes: Array.from(startNodes, ([symbolId, source]) => ({
+        symbolId,
+        source,
+      })),
+    };
+  }
+
   const limits = computeStartNodeLimits(request, explicitEntrySymbols.length);
 
   // Text-only mode: no explicit entry points of any kind, only taskText provided.
@@ -436,6 +446,16 @@ export async function resolveStartNodesLadybug(
       explicitEntrySymbols.push(symbolId);
       addStartNode(symbolId, "entrySymbol");
     }
+  }
+
+  // Explicit entries define roots; graph traversal expands relationships downstream.
+  if ((request.entrySymbols?.length ?? 0) > 0) {
+    return {
+      startNodes: Array.from(startNodes, ([symbolId, source]) => ({
+        symbolId,
+        source,
+      })),
+    };
   }
 
   const limits = computeStartNodeLimits(request, explicitEntrySymbols.length);

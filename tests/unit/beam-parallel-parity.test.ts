@@ -474,6 +474,62 @@ describe("Beam Search Parallel Parity", () => {
     assert.strictEqual(result.sliceCards.size, 0);
   });
 
+  it("keeps direct imports within the card cap in sync and async modes", async () => {
+    const { beamSearch, beamSearchAsync } =
+      await import("../../dist/graph/slice/beam-search-engine.js");
+
+    const graph = createMockGraph(
+      [
+        createMockSymbol("entry", "entry"),
+        createMockSymbol("a", "a"),
+        createMockSymbol("b", "b"),
+      ],
+      [
+        createMockEdge("entry", "a", "import"),
+        createMockEdge("entry", "b", "import"),
+      ],
+    );
+    const budget: Required<SliceBudget> = {
+      maxCards: 2,
+      maxEstimatedTokens: 10_000,
+    };
+    const request = { entrySymbols: ["entry"] };
+    const startNodes = [
+      { symbolId: "entry", source: "entrySymbol" as StartNodeSource },
+    ];
+    const edgeWeights = { call: 1.0, import: 0.6, config: 0.8 };
+
+    const sequential = beamSearch(
+      graph,
+      startNodes,
+      budget,
+      request,
+      edgeWeights,
+      0.5,
+    );
+    const asyncResult = await beamSearchAsync(
+      graph,
+      startNodes,
+      budget,
+      request,
+      edgeWeights,
+      0.5,
+      { parallelScorer: { enabled: false } },
+    );
+
+    const sequentialCards = [...sequential.sliceCards];
+    const asyncCards = [...asyncResult.sliceCards];
+    assert.strictEqual(sequentialCards.length, 2);
+    assert.strictEqual(asyncCards.length, 2);
+    assert.ok(sequentialCards.includes("entry"));
+    assert.ok(asyncCards.includes("entry"));
+    assert.strictEqual(
+      sequentialCards.filter((symbolId) => symbolId !== "entry").length,
+      1,
+    );
+    assert.deepStrictEqual(asyncCards.sort(), sequentialCards.sort());
+  });
+
   it("should auto-fallback on worker failure", async () => {
     const { beamSearchAsync, resetScorerPool } =
       await import("../../dist/graph/slice/beam-search-engine.js");

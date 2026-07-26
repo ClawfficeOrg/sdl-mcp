@@ -21,7 +21,7 @@ Complete reference for the SDL-MCP runtime surfaces exposed by `registerTools`.
 
 - `36` flat SDL action definitions and `2` universal tools, for `38` default-mode registrations
 - The default memory-disabled surface activates `34` tools: `2` universal tools and `32` flat tools. All `34` advertise object-root MCP `outputSchema` metadata.
-- Code Mode exclusive tools: `sdl.action.search`, `sdl.info`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file`
+- Code Mode registers `sdl.action.search`, `sdl.info`, `sdl.manual`, `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file`. All seven advertise object-root MCP `outputSchema` metadata. The multi-operation `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file` schemas expose compact stable outer result keys; operation and action schemas remain authoritative for nested payloads.
 
 Flat mode and gateway mode share the same handler layer. The CLI `tool` command exposes direct action aliases for the shared handler layer rather than the full MCP surface.
 
@@ -584,7 +584,7 @@ When you use `symbolRefs`, the batch resolves each reference independently. Mixe
 
 ### `sdl.slice.build`
 
-Build a task-scoped graph slice. `taskText` alone is sufficient — it triggers auto-discovery of relevant symbols via full-text search in a single round trip. Adding `entrySymbols` improves precision.
+Build a task-scoped graph slice. `taskText` alone triggers auto-discovery of relevant symbols. When supplied, `entrySymbols` are the authoritative start nodes: task text and other hints do not add roots, but graph traversal still expands connected relationships. `relationshipNote` appears only when at least one supplied explicit entry resolves as a selected start and the slice has no edges, frontier, or spillover. The note recommends a connected-entry retry.
 
 **Parameters:**
 
@@ -938,8 +938,8 @@ Retrieve task-shaped code context with rung path selection and evidence capture.
 
 **Context modes:**
 
-- **`"precise"`** — Returns minimal, chain-efficient context. Tight cluster expansion (max 4 symbols), stripped response envelope (no `actionsTaken`, `summary`, `answer`, `nextBestAction`). Designed to beat manual `sdl.workflow` on token efficiency.
-- **`"broad"`** (default) — Returns richer surrounding context with graph-guided cluster expansion (max 10 symbols, diversity-scored). Compact response envelope with `answer` always preserved on success. Explicit `focusPaths` are still the fastest way to constrain broad investigations.
+- **`"precise"`** — Returns minimal, chain-efficient context with tight cluster expansion (max 4 symbols) and a stripped response envelope. Focused explain requests add a hot path when explicit scope or chat mentions identify an implementation target.
+- **`"broad"`** (default) — Returns richer surrounding context with graph-guided cluster expansion (max 10 symbols, diversity-scored). Exact named handlers and focused evidence stay on the first page ahead of unrelated lexical or semantic cards. Successful responses always preserve `answer`.
 
 **Parameters:**
 
@@ -986,7 +986,7 @@ Context budgets reject unknown fields. `maxCards` returns guidance to call `slic
 
 **Response:**
 
-In **broad** mode (default, compact): `taskId`, `taskType`, `success`, `summary`, `answer`, `finalEvidence`, `nextBestAction?`, `retrievalEvidence?`, `diagnostics?`, `error?` — the fields `actionsTaken`, `path`, and `metrics` are omitted from the model-visible response. `finalEvidence` is the primary evidence surface. `retrievalEvidence` carries `sources`, `candidateCountPerSource`, `topRanksPerSource`, `fusionLatencyMs`, `diagnosticTimings`, `ftsAvailable`, and `vectorAvailable` from hybrid seeding when available. `diagnostics` is returned only when `includeDiagnostics: true`. The `answer` field is always preserved on successful responses.
+In **broad** mode (default, compact): `taskId`, `taskType`, `success`, `summary`, `answer`, `finalEvidence`, `nextBestAction?`, `retrievalEvidence?`, `diagnostics?`, `error?` — the fields `actionsTaken`, `path`, and `metrics` are omitted from the model-visible response. `finalEvidence` is the primary evidence surface. `retrievalEvidence` carries `sources`, `candidateCountPerSource`, `topRanksPerSource`, `fusionLatencyMs`, `diagnosticTimings`, `ftsAvailable`, and `vectorAvailable` from hybrid seeding when available. `diagnostics` is returned only when `includeDiagnostics: true`. The `answer` field is always preserved on successful responses. When answer-first evidence is insufficient, the response preserves evidence and continuation while returning `success: false` and `status: "partial"`.
 
 In **precise** mode: `taskId`, `taskType`, `success`, `path`, `finalEvidence`, `metrics` — envelope fields stripped for token efficiency.
 
@@ -996,12 +996,12 @@ When Code Mode is enabled, `sdl.context` accepts the same task envelope and shou
 
 **Precise mode rung strategies:**
 
-| Task Type   | Precise Rungs   | Broad Rungs               |
-| ----------- | --------------- | ------------------------- |
-| `debug`     | card + hotPath  | card + skeleton + hotPath |
-| `explain`   | card + skeleton | card + skeleton           |
-| `review`    | card            | card + skeleton           |
-| `implement` | card + skeleton | card + skeleton + hotPath |
+| Task Type   | Precise Rungs                     | Broad Rungs               |
+| ----------- | --------------------------------- | ------------------------- |
+| `debug`     | card + hotPath                    | card + skeleton + hotPath |
+| `explain`   | card + skeleton + scoped hotPath | card + skeleton           |
+| `review`    | card                              | card + skeleton           |
+| `implement` | card + skeleton                   | card + skeleton + hotPath |
 
 **Examples:**
 
@@ -1394,7 +1394,7 @@ Get cumulative token usage statistics and savings metrics for the current sessio
 
 ---
 
-## Code Mode (6 tools)
+## Code Mode (7 registered tools)
 
 ### `sdl.context`
 
@@ -1404,7 +1404,7 @@ Use `sdl.context` first for `debug`, `review`, `implement`, and `explain` reques
 
 `budget.maxTokens` and its `maxEstimatedTokens` alias have a minimum request value of `512` and cap the complete serialized response, not only individual actions or evidence. When a response is truncated, use `workflowContinuationGet` with `truncation.continuationHandle` to retrieve the complete context. For precise context, an explicit request for an implementation or handler resolves implementation-oriented handler aliases so the returned actions and evidence match the requested implementation intent.
 
-For byte-stability checks, use `responseMode: "inline"` with `refsMode: "off"`. Response-artifact handles and session refs are intentionally session-scoped and may vary between calls.
+For byte-stability checks, use `responseMode: "inline"` with `refsMode: "off"`. Response-artifact handles and session refs are intentionally session-scoped and may vary between calls. If `response.get` rejects a JSON path, its error lists the valid keys in sorted order and supplies a retry call that reuses the same handle.
 
 ### `sdl.workflow`
 

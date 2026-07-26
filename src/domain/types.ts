@@ -470,6 +470,8 @@ export interface SliceBuildResponse {
   lease: SliceLease;
   sliceEtag?: SliceEtag;
   slice: GraphSlice;
+  /** How to inspect candidate relationships when the slice has no edges. */
+  relationshipNote?: string;
 }
 
 export type PolicyDecisionType =

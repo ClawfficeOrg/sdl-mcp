@@ -189,6 +189,24 @@ describe("Agent Planner", () => {
       assert.strictEqual(path.rungs.length, 2);
       assert.deepStrictEqual(path.rungs, ["card", "skeleton"]);
     });
+
+    it("adds hotPath for precise explain with explicit symbol scope", () => {
+      const task = createTask("explain", {
+        options: { contextMode: "precise", focusSymbols: ["symbol1"] },
+      });
+      const path = planner.plan(task);
+
+      assert.deepStrictEqual(path.rungs, ["card", "skeleton", "hotPath"]);
+    });
+
+    it("adds hotPath for precise explain with explicit chat mention scope", () => {
+      const task = createTask("explain", {
+        options: { contextMode: "precise", chatMentions: ["handleThing"] },
+      });
+      const path = planner.plan(task);
+
+      assert.deepStrictEqual(path.rungs, ["card", "skeleton", "hotPath"]);
+    });
   });
 
   describe("Budget Constraints", () => {

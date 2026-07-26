@@ -23,6 +23,7 @@ import type {
 } from "../../scip/types.js";
 import { generateFileId } from "../../util/hashing.js";
 import { normalizePath } from "../../util/paths.js";
+import { findTypeScriptVariableStatementRange } from "./typescript-variable-range.js";
 import type {
   IndexProgress,
   IndexProgressSubstage,
@@ -200,6 +201,7 @@ export function normalizeScipProviderFacts(
         const symbolFact = symbolInfoToFact(
           context,
           info,
+          document.language,
           relPath,
           definitionOccurrencesBySymbol,
         );
@@ -654,26 +656,58 @@ function fileFact(
 function symbolInfoToFact(
   context: NormalizedScipContext,
   info: ScipSymbolInfo,
+  documentLanguage: string,
   relPath: string,
   definitionOccurrencesBySymbol: ReadonlyMap<string, ScipOccurrence>,
 ): SymbolFact | null {
   const kind = mapScipKind(info.symbol, info.kind);
   if (kind.skip) return null;
+
+  let definitionRange = findDefinitionRange(
+    definitionOccurrencesBySymbol,
+    info.symbol,
+  );
+  const sourceLines = context.sourceLinesByPath.get(relPath);
+  let symbolKind = kind.sdlKind;
+  if (
+    documentLanguage === "typescript" &&
+    (info.kind === undefined || info.kind === 0) &&
+    symbolKind === "class" &&
+    definitionRange &&
+    /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?interface\b/.test(
+      sourceLines?.get(definitionRange.startLine - 1) ?? "",
+    )
+  ) {
+    symbolKind = "interface";
+  }
+
   if (
     !shouldMaterializeSymbolInfo(
       context,
       info.symbol,
       relPath,
-      kind.sdlKind,
+      symbolKind,
     )
   ) {
     return null;
   }
 
-  const definitionRange = findDefinitionRange(
-    definitionOccurrencesBySymbol,
-    info.symbol,
-  );
+  if (
+    documentLanguage === "typescript" &&
+    symbolKind === "variable" &&
+    definitionRange &&
+    sourceLines
+  ) {
+    const statementRange = findTypeScriptVariableStatementRange(
+      sourceLines,
+      definitionRange,
+      relPath,
+    );
+    if (statementRange) {
+      definitionRange = statementRange;
+    }
+  }
+
   const symbolId = createProviderSymbolId({
     repoId: context.base.repoId,
     providerType: "scip",
@@ -690,7 +724,7 @@ function symbolInfoToFact(
     symbolId,
     providerSymbolId: info.symbol,
     name: displayName(info),
-    symbolKind: kind.sdlKind,
+    symbolKind,
     relPath,
     range: definitionRange,
     signature: info.signatureDocumentation,

@@ -9,6 +9,7 @@ import {
   collectEntryFirstHopSymbols,
   collectEntrySiblingSymbols,
   getStartNodeWhy,
+  resolveStartNodes,
   START_NODE_SOURCE_PRIORITY,
   START_NODE_SOURCE_SCORE,
   TASK_TEXT_STOP_WORDS,
@@ -261,5 +262,67 @@ describe("START_NODE_SOURCE_SCORE", () => {
     assert.ok(
       START_NODE_SOURCE_SCORE.entrySymbol < START_NODE_SOURCE_SCORE.taskText,
     );
+  });
+});
+
+describe("resolveStartNodes", () => {
+  it("keeps valid explicit entries authoritative over inferred starts", () => {
+    const graph = {
+      repoId: "test",
+      symbols: new Map([
+        [
+          "entry",
+          { file_id: 1, name: "entry", kind: "function", exported: 1 },
+        ],
+        [
+          "unrelated",
+          {
+            file_id: 2,
+            name: "UnrelatedTarget",
+            kind: "function",
+            exported: 1,
+          },
+        ],
+      ] as any),
+      edges: [],
+      adjacencyOut: new Map([["entry", []]] as any),
+      adjacencyIn: new Map(),
+    } as any;
+
+    const result = resolveStartNodes(graph, {
+      entrySymbols: ["entry"],
+      taskText: "UnrelatedTarget",
+    });
+
+    assert.deepStrictEqual(result.startNodes, [
+      { symbolId: "entry", source: "entrySymbol" },
+    ]);
+  });
+
+  it("does not infer starts when all explicit entries are invalid", () => {
+    const graph = {
+      repoId: "test",
+      symbols: new Map([
+        [
+          "unrelated",
+          {
+            file_id: 2,
+            name: "UnrelatedTarget",
+            kind: "function",
+            exported: 1,
+          },
+        ],
+      ] as any),
+      edges: [],
+      adjacencyOut: new Map(),
+      adjacencyIn: new Map(),
+    } as any;
+
+    const result = resolveStartNodes(graph, {
+      entrySymbols: ["stale-entry"],
+      taskText: "UnrelatedTarget",
+    });
+
+    assert.deepStrictEqual(result.startNodes, []);
   });
 });

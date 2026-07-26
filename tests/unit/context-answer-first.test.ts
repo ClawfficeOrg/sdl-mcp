@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import { ContextEngine } from "../../dist/agent/context-engine.js";
 import {
   buildAnswerFirstResponse,
   INSUFFICIENT_SUMMARY_COVERAGE,
 } from "../../dist/mcp/context-answer-first.js";
+import { handleAgentContext } from "../../dist/mcp/tools/context.js";
 
 function card(
   symbolId: string,
@@ -25,6 +27,68 @@ function card(
     deps: {},
   };
 }
+
+test("marks answer-first fallback partial without dropping evidence recovery", async (t) => {
+  const finalEvidence = [
+    {
+      type: "symbolCard",
+      reference: "symbol:missing-summary",
+      summary: "Symbol card without reliable summary provenance",
+      timestamp: 1,
+    },
+  ];
+  const truncation = {
+    originalTokens: 2_000,
+    truncatedTokens: 1_000,
+    fieldsAffected: ["finalEvidence"],
+    continuationHandle: "ctx-partial",
+    continuationAction: "workflowContinuationGet" as const,
+  };
+  t.mock.method(ContextEngine.prototype, "buildContext", async () => ({
+    taskId: "task-partial",
+    taskType: "explain" as const,
+    actionsTaken: [],
+    path: {
+      rungs: ["card" as const],
+      estimatedTokens: 100,
+      estimatedDurationMs: 1,
+      reasoning: "test",
+    },
+    finalEvidence,
+    truncation,
+    summary: "Normal evidence remains available.",
+    success: true,
+    metrics: {
+      totalDurationMs: 1,
+      totalTokens: 100,
+      totalActions: 0,
+      successfulActions: 0,
+      failedActions: 0,
+      cacheHits: 0,
+    },
+  }));
+
+  const result = (await handleAgentContext({
+    repoId: "answer-first-partial",
+    taskType: "explain",
+    taskText: "Explain the missing summary symbol",
+    options: { answerFirst: true },
+    refsMode: "off",
+    responseMode: "inline",
+  })) as Record<string, unknown>;
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, "partial");
+  assert.equal(result.answerFirstFallback, INSUFFICIENT_SUMMARY_COVERAGE);
+  assert.deepEqual(result.finalEvidence, [
+    {
+      type: "symbolCard",
+      reference: "symbol:missing-summary",
+      summary: "Symbol card without reliable summary provenance",
+    },
+  ]);
+  assert.deepEqual(result.truncation, truncation);
+});
 
 test("falls back when answer-first summary coverage is too low", () => {
   const result = buildAnswerFirstResponse("explain", [

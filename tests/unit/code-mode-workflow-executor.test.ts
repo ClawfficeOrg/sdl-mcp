@@ -1,6 +1,12 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert";
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import {
+  maybeStoreLargeResponse,
+  readResponseArtifact,
+} from "../../dist/runtime/response-artifacts.js";
 import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
 import { getContinuation } from "../../dist/code-mode/workflow-truncation.js";
 import * as responseProjection from "../../dist/mcp/context-response-projection.js";
@@ -1033,6 +1039,76 @@ describe("code-mode workflow executor", () => {
         nextCall: { tool: "symbol.getCard", args: { symbolId: "sym-1" } },
       },
     ]);
+  });
+
+  it("preserves invalid response.get jsonPath recovery in failure traces", async () => {
+    const artifactBaseDir = mkdtempSync(join(tmpdir(), "sdl-workflow-response-"));
+    try {
+      const stored = await maybeStoreLargeResponse({
+        repoId: "test",
+        toolName: "sdl.context",
+        payload: {
+          summary: "compact summary",
+          finalEvidence: [{ reference: "symbol:target" }],
+        },
+        responseMode: "handle",
+        artifactBaseDir,
+        entropy: () => "0123456789abcdef",
+      });
+      assert.strictEqual(stored.responseMode, "handle");
+      const handle = stored.payload.handle;
+      const actionMap = {
+        ...createMockActionMap(),
+        "response.get": {
+          schema: z.object({
+            repoId: z.string(),
+            handle: z.string(),
+            jsonPath: z.string(),
+          }),
+          handler: async (args: unknown) =>
+            readResponseArtifact({
+              ...(args as { repoId: string; handle: string; jsonPath: string }),
+              artifactBaseDir,
+            }),
+        },
+      };
+      const request: ParsedWorkflowRequest = {
+        repoId: "test",
+        steps: [
+          {
+            fn: "responseGet",
+            action: "response.get",
+            args: { handle, jsonPath: "missing" },
+          },
+        ],
+        onError: "continueAll",
+      };
+
+      const first = await executeWorkflow(request, actionMap, testConfig);
+      const second = await executeWorkflow(request, actionMap, testConfig);
+      const trace = first.results[0].failureTrace;
+
+      assert.strictEqual(Array.isArray(first), false);
+      assert.strictEqual(first.results[0].status, "error");
+      assert.deepStrictEqual(trace?.details?.details, [
+        "Available top-level keys: finalEvidence, summary",
+      ]);
+      assert.deepStrictEqual(trace?.details?.nextCalls, [
+        {
+          action: "response.get",
+          args: {
+            repoId: "test",
+            handle,
+            jsonPath: "finalEvidence",
+            offset: 0,
+            limit: 5,
+          },
+        },
+      ]);
+      assert.deepStrictEqual(trace?.details, second.results[0].failureTrace?.details);
+    } finally {
+      rmSync(artifactBaseDir, { recursive: true, force: true });
+    }
   });
 
   it("onError=continueAll preserves legacy dependent ref-resolution errors", async () => {

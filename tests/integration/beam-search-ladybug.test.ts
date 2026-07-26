@@ -231,22 +231,52 @@ describe("beamSearchLadybug (integration)", () => {
         });
       }
 
-      // Chain: b1 -> b2 -> b3 -> b4 -> b5
-      const edges = [];
-      for (let i = 0; i < symbols.length - 1; i++) {
-        edges.push({
+      await queries.insertEdges(kConn, [
+        {
           repoId,
-          fromSymbolId: symbols[i],
-          toSymbolId: symbols[i + 1],
-          edgeType: "call" as const,
+          fromSymbolId: "b1",
+          toSymbolId: "b2",
+          edgeType: "call",
           weight: 1,
           confidence: 1,
-          resolution: "exact" as const,
+          resolution: "exact",
           provenance: "static",
           createdAt: now,
-        });
-      }
-      await queries.insertEdges(kConn, edges);
+        },
+        {
+          repoId,
+          fromSymbolId: "b2",
+          toSymbolId: "b3",
+          edgeType: "call",
+          weight: 1,
+          confidence: 1,
+          resolution: "exact",
+          provenance: "static",
+          createdAt: now,
+        },
+        {
+          repoId,
+          fromSymbolId: "b3",
+          toSymbolId: "b4",
+          edgeType: "call",
+          weight: 1,
+          confidence: 1,
+          resolution: "exact",
+          provenance: "static",
+          createdAt: now,
+        },
+        {
+          repoId,
+          fromSymbolId: "b4",
+          toSymbolId: "b5",
+          edgeType: "call",
+          weight: 1,
+          confidence: 1,
+          resolution: "exact",
+          provenance: "static",
+          createdAt: now,
+        },
+      ]);
 
       const startNodes = [{ symbolId: "b1", source: "entrySymbol" as const }];
       const budget = { maxCards: 2, maxEstimatedTokens: 100_000 };
@@ -271,6 +301,48 @@ describe("beamSearchLadybug (integration)", () => {
         result.wasTruncated,
         true,
         "wasTruncated should be true when budget exceeded",
+      );
+
+      await queries.insertEdges(kConn, [
+        {
+          repoId,
+          fromSymbolId: "b5",
+          toSymbolId: "b2",
+          edgeType: "import",
+          weight: 1,
+          confidence: 1,
+          resolution: "exact",
+          provenance: "static",
+          createdAt: now,
+        },
+        {
+          repoId,
+          fromSymbolId: "b5",
+          toSymbolId: "b3",
+          edgeType: "import",
+          weight: 1,
+          confidence: 1,
+          resolution: "exact",
+          provenance: "static",
+          createdAt: now,
+        },
+      ]);
+      const importResult = await beamSearch.beamSearchLadybug(
+        kConn,
+        repoId,
+        [{ symbolId: "b5", source: "entrySymbol" as const }],
+        { maxCards: 2, maxEstimatedTokens: 100_000 },
+        { entrySymbols: ["b5"] },
+        edgeWeights,
+        0.0,
+      );
+      const importCards = [...importResult.sliceCards];
+      assert.strictEqual(importCards.length, 2);
+      assert.ok(importCards.includes("b5"));
+      assert.strictEqual(
+        importCards.filter((symbolId) => symbolId === "b2" || symbolId === "b3")
+          .length,
+        1,
       );
     },
   );

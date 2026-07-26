@@ -60,6 +60,9 @@ describe("MCP confidence-aware filtering", () => {
       { symbolId: "sym-entry", name: "entry" },
       { symbolId: "sym-high", name: "highConfidence" },
       { symbolId: "sym-low", name: "lowConfidence" },
+      { symbolId: "sym-isolated", name: "isolated" },
+      { symbolId: "sym-budget-root", name: "budgetRoot" },
+      { symbolId: "sym-budget-import", name: "budgetImport" },
     ];
 
     for (const symbol of symbols) {
@@ -112,6 +115,19 @@ describe("MCP confidence-aware filtering", () => {
         provenance: "heuristic",
         createdAt: now,
       },
+      {
+        repoId,
+        fromSymbolId: "sym-budget-root",
+        toSymbolId: "sym-budget-import",
+        edgeType: "import",
+        weight: 1,
+        confidence: 1,
+        resolution: "exact",
+        resolverId: "pass1-generic",
+        resolutionPhase: "pass1",
+        provenance: "static",
+        createdAt: now,
+      },
     ]);
   });
 
@@ -145,6 +161,7 @@ describe("MCP confidence-aware filtering", () => {
     });
 
     assert.ok("slice" in sliceResponse);
+    assert.ok(!("relationshipNote" in sliceResponse));
     const slice = sliceResponse.slice;
     assert.ok("cards" in slice, "Expected standard wire format with cards");
     const entryCard = slice.cards.find(
@@ -164,5 +181,59 @@ describe("MCP confidence-aware filtering", () => {
         resolutionPhase: "pass2",
       },
     ]);
+  });
+
+  it("omits relationship guidance for inferred empty slices", async () => {
+    const response = await handleSliceBuild({
+      repoId,
+      taskText: "isolated",
+      wireFormat: "standard",
+      budget: { maxCards: 10, maxEstimatedTokens: 10_000 },
+    });
+
+    assert.ok("slice" in response);
+    assert.ok(!("relationshipNote" in response));
+  });
+
+  it("omits relationship guidance when an explicit slice has frontier spillover", async () => {
+    const response = await handleSliceBuild({
+      repoId,
+      entrySymbols: ["sym-budget-root"],
+      wireFormat: "standard",
+      budget: { maxCards: 1, maxEstimatedTokens: 10_000 },
+    });
+
+    assert.ok("slice" in response);
+    assert.ok(typeof response.slice !== "string");
+    assert.strictEqual(response.slice.truncation?.truncated, true);
+    assert.ok(
+      response.slice.frontier?.some(
+        (item: { symbolId: string }) => item.symbolId === "sym-budget-import",
+      ),
+    );
+    assert.ok(!("relationshipNote" in response));
+  });
+
+  it("guides relationship inspection for an edge-empty slice", async () => {
+    const request = {
+      repoId,
+      entrySymbols: ["sym-isolated"],
+      wireFormat: "compact" as const,
+      budget: { maxCards: 10, maxEstimatedTokens: 10_000 },
+    };
+    const response = await handleSliceBuild(request);
+    const repeated = await handleSliceBuild(request);
+
+    assert.ok("slice" in response);
+    assert.strictEqual(
+      response.relationshipNote,
+      "No usable graph path was found from the selected starts. Inspect each start symbol's dependencies, then retry with a connected symbol in entrySymbols.",
+    );
+    assert.ok("slice" in repeated);
+    assert.strictEqual(
+      response.relationshipNote,
+      repeated.relationshipNote,
+      "relationship guidance must be byte-stable across repeated calls",
+    );
   });
 });

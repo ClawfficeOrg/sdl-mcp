@@ -684,6 +684,8 @@ export async function handleAgentContext(
 
       if (answerFirst.kind === "fallback") {
         Object.assign(enrichedResponse as Record<string, unknown>, {
+          success: false,
+          status: "partial",
           answerFirstFallback: answerFirst.answerFirstFallback,
           answer: answerFirst.answer,
           nextBestAction: answerFirst.nextBestAction,

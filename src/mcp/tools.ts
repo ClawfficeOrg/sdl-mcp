@@ -1842,6 +1842,8 @@ export const SliceBuildResponseSchema = z.union([
       }),
       z.string(),
     ]),
+    /** How to inspect candidate relationships when the slice has no edges. */
+    relationshipNote: z.string().optional(),
     /** Per-symbol retrieval evidence. Only populated when includeRetrievalEvidence is true. */
     retrievalEvidence: z.array(RetrievalEvidenceItemSchema).optional(),
     /** Symptom type classification. Only populated when includeRetrievalEvidence is true. */
@@ -2853,6 +2855,10 @@ const AgentContextPayloadSchema = z.object({
     .optional(),
   summary: z.string().describe("Summary of execution"),
   success: z.boolean().describe("Whether execution was successful"),
+  status: z
+    .literal("partial")
+    .optional()
+    .describe("Present when a requested response mode falls back to partial output"),
   error: z.string().optional().describe("Error message if execution failed"),
   metrics: z
     .object({
@@ -2951,6 +2957,26 @@ export const AgentContextResponseSchema = z.union([
   ConditionalNotModifiedResponseSchema,
   ResponseArtifactReferenceSchema,
 ]);
+
+const AGENT_CONTEXT_OUTPUT_KEYS = [
+  "taskType",
+  "answer",
+  "notModified",
+  "kind",
+] as const;
+
+// Advertise stable outer variants without expanding the full context payload.
+export const AgentContextOutputSchema = z
+  .object({
+    taskType: z.unknown().optional(),
+    answer: z.string().optional(),
+    notModified: z.unknown().optional(),
+    kind: z.unknown().optional(),
+  })
+  .passthrough()
+  .refine((value) => AGENT_CONTEXT_OUTPUT_KEYS.some((key) => key in value), {
+    message: "Unrecognized sdl.context response shape",
+  });
 
 export type AgentContextRequest = z.infer<typeof AgentContextRequestSchema>;
 export type AgentContextResponse = z.infer<typeof AgentContextResponseSchema>;

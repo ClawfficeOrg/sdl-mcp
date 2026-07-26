@@ -125,7 +125,7 @@ describe("LadybugDB Slice Build (integration)", () => {
           repoId: "repo",
           fileId: "file-1",
           kind: "function",
-          name: symbolId,
+          name: symbolId === "sym3" ? "UnrelatedTarget" : symbolId,
           exported: true,
           visibility: "public",
           language: "ts",
@@ -172,14 +172,16 @@ describe("LadybugDB Slice Build (integration)", () => {
         versionId: "v1",
         conn: kConn,
         entrySymbols: ["sym1"],
+        taskText: "UnrelatedTarget",
         budget: { maxCards: 10, maxEstimatedTokens: 10_000 },
         cardDetail: "deps",
         minConfidence: 0.5,
       });
 
       assert.strictEqual(result.repoId, "repo");
-      assert.ok(result.startSymbols.includes("sym1"));
+      assert.deepStrictEqual(result.startSymbols, ["sym1"]);
       assert.ok(result.cards.some((c) => c.symbolId === "sym1"));
+      assert.ok(result.cards.some((c) => c.symbolId === "sym2"));
 
       const i1 = result.symbolIndex.indexOf("sym1");
       const i2 = result.symbolIndex.indexOf("sym2");

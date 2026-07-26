@@ -68,6 +68,75 @@ describe("dist stdio smoke", () => {
         "sdl.workflow",
       ]);
 
+      for (const tool of response.tools) {
+        const outputSchema = tool.outputSchema as
+          | Record<string, unknown>
+          | undefined;
+        assert.ok(outputSchema, `${tool.name} must advertise an output schema`);
+        assert.strictEqual(outputSchema.type, "object");
+        for (const combinator of ["anyOf", "oneOf", "allOf"]) {
+          assert.strictEqual(combinator in outputSchema, false);
+        }
+      }
+
+      // Keep truthful outer contracts compact enough for the prompt catalog.
+      const expectedOutputProperties = {
+        "sdl.retrieve": ["results", "card", "slice", "approved"],
+        "sdl.workflow": ["results"],
+        "sdl.context": ["taskType", "answer", "notModified"],
+        "sdl.file": ["filePath", "mode", "kind"],
+      } as const;
+      for (const [name, expectedProperties] of Object.entries(
+        expectedOutputProperties,
+      )) {
+        const outputSchema = response.tools.find(
+          (tool) => tool.name === name,
+        )?.outputSchema;
+        assert.ok(outputSchema);
+        const properties = outputSchema.properties as
+          | Record<string, unknown>
+          | undefined;
+        for (const property of expectedProperties) {
+          assert.ok(property in (properties ?? {}), `${name}.${property}`);
+        }
+        assert.ok(
+          Buffer.byteLength(JSON.stringify(outputSchema), "utf8") <= 512,
+          `${name} output schema must stay compact`,
+        );
+      }
+
+      const workflowResult = await client.callTool({
+        name: "sdl.workflow",
+        arguments: {
+          repoId: "missing-repo",
+          steps: [
+            {
+              fn: "actionSearch",
+              args: { query: "context", limit: 1 },
+            },
+          ],
+        },
+      });
+      assert.notStrictEqual(workflowResult.isError, true);
+      assert.ok(
+        workflowResult.structuredContent &&
+          typeof workflowResult.structuredContent === "object",
+      );
+
+      const retrieveError = await client.callTool({
+        name: "sdl.retrieve",
+        arguments: {
+          repoId: "missing-repo",
+          op: "symbolSearch",
+          args: { query: "context" },
+        },
+      });
+      assert.strictEqual(retrieveError.isError, true);
+      assert.ok(
+        retrieveError.structuredContent &&
+          typeof retrieveError.structuredContent === "object",
+      );
+
       const contextTool = response.tools.find((tool) => tool.name === "sdl.context");
       const workflowTool = response.tools.find((tool) => tool.name === "sdl.workflow");
       assert.strictEqual(contextTool?.title, "SDL Context");

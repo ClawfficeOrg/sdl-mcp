@@ -1718,17 +1718,75 @@ describe("context-response-projection", () => {
         "sdl.context",
         {
           taskType: "explain",
-          success: true,
-          finalEvidence: [],
+          success: false,
+          status: "partial",
+          finalEvidence: [
+            { type: "symbolCard", reference: "symbol:answer-first" },
+          ],
           answerFirstFallback: "insufficient-summary-coverage",
+          truncation: {
+            continuationHandle: "ctx-answer-first",
+            continuationAction: "workflowContinuationGet",
+          },
         },
         {},
       ) as Record<string, unknown>;
 
+      assert.equal(projected.status, "partial");
       assert.equal(
         projected.answerFirstFallback,
         "insufficient-summary-coverage",
       );
+      assert.deepEqual(projected.finalEvidence, [
+        { type: "symbolCard", reference: "symbol:answer-first" },
+      ]);
+      assert.deepEqual(projected.truncation, {
+        continuationHandle: "ctx-answer-first",
+        continuationAction: "workflowContinuationGet",
+      });
+    });
+
+    it("keeps partial status through context continuation projection", () => {
+      const projected = projectToolResultForModelContent(
+        "sdl.workflow",
+        {
+          results: [
+            {
+              stepIndex: 0,
+              fn: "workflowContinuationGet",
+              result: {
+                data: {
+                  taskType: "explain",
+                  success: false,
+                  status: "partial",
+                  answerFirstFallback: "insufficient-summary-coverage",
+                  finalEvidence: [
+                    { type: "symbolCard", reference: "symbol:answer-first" },
+                  ],
+                  truncation: {
+                    continuationHandle: "ctx-answer-first",
+                    continuationAction: "workflowContinuationGet",
+                  },
+                },
+                totalTokens: 100,
+                hasMore: false,
+              },
+              status: "ok",
+            },
+          ],
+        },
+        {},
+      ) as { results: Array<{ result: { data: Record<string, unknown> } }> };
+      const data = projected.results[0]?.result.data;
+
+      assert.equal(data?.status, "partial");
+      assert.deepEqual(data?.finalEvidence, [
+        { type: "symbolCard", reference: "symbol:answer-first" },
+      ]);
+      assert.deepEqual(data?.truncation, {
+        continuationHandle: "ctx-answer-first",
+        continuationAction: "workflowContinuationGet",
+      });
     });
 
     it("does not run action-search validation errors through the success projector", () => {

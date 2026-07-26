@@ -466,6 +466,28 @@ function evidenceSubjectKey(reference: string): string | undefined {
   return undefined;
 }
 
+function prioritizeProtectedEvidence(
+  evidence: Evidence[],
+  protectedReferences: string[] = [],
+): Evidence[] {
+  const protectedSubjects = new Set<string>();
+  for (const reference of protectedReferences) {
+    const subject = evidenceSubjectKey(reference);
+    if (subject) protectedSubjects.add(subject);
+  }
+  if (protectedSubjects.size === 0) return evidence;
+
+  const prioritized: Evidence[] = [];
+  const remaining: Evidence[] = [];
+  for (const item of evidence) {
+    const subject = evidenceSubjectKey(item.reference);
+    (subject && protectedSubjects.has(subject) ? prioritized : remaining).push(item);
+  }
+  return prioritized.length > 0 && remaining.length > 0
+    ? [...prioritized, ...remaining]
+    : evidence;
+}
+
 function evidenceContentValue(summary: string): string {
   const withoutWrapper = summary
     .replace(
@@ -623,6 +645,7 @@ export class ContextEngine {
       recordDiagnosticTiming(diagnosticTimings, "engine.plan", planStartedAt);
       const selectStartedAt = performance.now();
       let context = await this.planner.selectContext(task);
+      const protectedEvidenceReferences = new Set(context);
       recordDiagnosticTiming(
         diagnosticTimings,
         "engine.selectContext",
@@ -644,6 +667,7 @@ export class ContextEngine {
         const exactStartedAt = performance.now();
         try {
           const exactRefs = await this.seedExactMentionedSymbols(task);
+          for (const ref of exactRefs) protectedEvidenceReferences.add(ref);
           exactMentionSeededPreciseContext =
             exactRefs.length > 0 && task.options?.contextMode === "precise";
           context =
@@ -948,7 +972,7 @@ export class ContextEngine {
           success,
           clusterExpandedCount,
           evidenceOptimization,
-          protectedEvidenceReferences: context,
+          protectedEvidenceReferences: [...protectedEvidenceReferences],
         },
       );
     } catch (error) {
@@ -1249,7 +1273,13 @@ export class ContextEngine {
     );
     const completeResult = context.preserveUnchangedResult
       ? result
-      : this.compactBroadResult(result);
+      : this.compactBroadResult({
+          ...result,
+          finalEvidence: prioritizeProtectedEvidence(
+            result.finalEvidence,
+            context.protectedEvidenceReferences,
+          ),
+        });
     const originalTokens = estimateTokens(JSON.stringify(completeResult));
 
     if (originalTokens <= effectiveCap) {

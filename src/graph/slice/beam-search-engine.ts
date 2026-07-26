@@ -228,6 +228,18 @@ export interface DynamicCapState {
   nextFrontierScore: number | null;
 }
 
+// Direct imports remain candidates without becoming roots or bypassing frontier budgets.
+function preserveDirectRootImportScore(
+  score: number,
+  edgeType: EdgeType,
+  fromSymbolId: SymbolId,
+  request: BeamSearchRequest,
+): number {
+  return edgeType === "import" && request.entrySymbols?.includes(fromSymbolId)
+    ? Math.max(score, SLICE_SCORE_THRESHOLD)
+    : score;
+}
+
 export interface BeamSearchResult {
   sliceCards: Set<SymbolId>;
   frontier: FrontierItem[];
@@ -931,9 +943,14 @@ export function beamSearch(
           file,
           centralityStats,
         );
-      const finalScore = applyCentralityTiebreak(
-        primaryScore * edgeWeight + clusterBoost,
-        centralitySignal,
+      const finalScore = preserveDirectRootImportScore(
+        applyCentralityTiebreak(
+          primaryScore * edgeWeight + clusterBoost,
+          centralitySignal,
+        ),
+        edge.type,
+        current.symbolId,
+        request,
       );
       const neighborScore = -finalScore;
 
@@ -1371,9 +1388,14 @@ export async function beamSearchLadybug(
               relatedClusterIds,
             })
           : 0;
-        const finalScore = applyCentralityTiebreak(
-          primaryScore * edgeWeight + cohesionBoost,
-          centralitySignal,
+        const finalScore = preserveDirectRootImportScore(
+          applyCentralityTiebreak(
+            primaryScore * edgeWeight + cohesionBoost,
+            centralitySignal,
+          ),
+          edge.edgeType,
+          currentSymbolId,
+          request,
         );
         const neighborScore = -finalScore;
 
@@ -1857,17 +1879,22 @@ export async function beamSearchAsync(
       for (const candidate of candidates) {
         const neighborId = candidate.symbolId;
         const scored = scoredResults.get(neighborId);
+        const edge = edgeByTarget.get(neighborId);
 
-        if (!scored) continue;
-        if (!scored.passed) {
+        if (!scored || !edge) continue;
+        const preservedScore = preserveDirectRootImportScore(
+          scored.score,
+          edge.type,
+          currentSymbolId,
+          request,
+        );
+        if (!scored.passed && preservedScore < SLICE_SCORE_THRESHOLD) {
           st.droppedCandidates++;
           continue;
         }
 
         st.visited.add(neighborId);
-        const neighborScore = -scored.score;
-        const edge = edgeByTarget.get(neighborId);
-        if (!edge) continue;
+        const neighborScore = -preservedScore;
 
         insertCandidateIntoFrontier(
           st,

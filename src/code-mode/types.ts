@@ -142,6 +142,16 @@ export interface WorkflowTrace {
   };
 }
 
+// Step action schemas remain authoritative for each result payload.
+export const WorkflowOutputSchema = z
+  .object({
+    results: z.array(z.unknown()).optional(),
+  })
+  .passthrough()
+  .refine((value) => "results" in value, {
+    message: "Unrecognized sdl.workflow response shape",
+  });
+
 export interface WorkflowResponse {
   /** Step results; onlyFinalResult omits successful intermediate envelopes. */
   results: WorkflowStepResult[];

@@ -230,6 +230,7 @@ function failureDetailsFrom(value: unknown): Record<string, unknown> | undefined
   for (const key of [
     "classification",
     "retryable",
+    "details",
     "fallbackRationale",
     "candidates",
     "runtimeHints",

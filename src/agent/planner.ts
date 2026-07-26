@@ -185,10 +185,18 @@ export class Planner {
     if (options.contextMode === "precise") {
       // Explain tasks need at least skeleton to show code structure.
       // Card-only is never enough to understand how something works.
+      const rungs: RungType[] = ["card", "skeleton"];
+      if (
+        (options.focusSymbols && options.focusSymbols.length > 0) ||
+        (options.focusPaths && options.focusPaths.length > 0) ||
+        (options.chatMentions && options.chatMentions.length > 0)
+      ) {
+        rungs.push("hotPath");
+      }
       return this.buildRungPath(
-        ["card", "skeleton"],
+        rungs,
         task,
-        "Precise explain: card + skeleton for structural understanding",
+        "Precise explain: card + skeleton with scoped implementation path",
         confidence,
       );
     }

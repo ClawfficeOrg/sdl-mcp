@@ -104,6 +104,116 @@ describe("code-mode tool validation", () => {
     );
   });
 
+  it("registers truthful per-tool output schemas for top-level gateways", () => {
+    type OutputSchema = {
+      safeParse(value: unknown): { success: boolean };
+    };
+    const gatewayNames = [
+      "sdl.retrieve",
+      "sdl.workflow",
+      "sdl.context",
+      "sdl.file",
+    ] as const;
+    const outputSchemas = new Map<string, OutputSchema | undefined>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        _handler: (args: unknown) => Promise<unknown>,
+        _wireSchema?: unknown,
+        _annotations?: unknown,
+        outputSchema?: OutputSchema,
+      ) {
+        if (gatewayNames.includes(name as (typeof gatewayNames)[number])) {
+          outputSchemas.set(name, outputSchema);
+        }
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as any,
+      { liveIndex: undefined } as any,
+      {
+        enabled: true,
+        exclusive: true,
+        maxWorkflowSteps: 20,
+        maxWorkflowTokens: 50_000,
+        maxWorkflowDurationMs: 30_000,
+        ladderValidation: "warn",
+        etagCaching: true,
+      },
+    );
+
+    const representativeSuccesses = new Map<string, object[]>([
+      [
+        "sdl.retrieve",
+        [
+          { results: [] },
+          { card: {} },
+          { cards: [] },
+          { slice: {} },
+          { file: "src/main.ts" },
+          { approved: true },
+          { etag: "etag-demo" },
+          { kind: "responseArtifact" },
+        ],
+      ],
+      [
+        "sdl.workflow",
+        [{ results: [], totalTokens: 0, durationMs: 0, truncated: false }],
+      ],
+      [
+        "sdl.context",
+        [
+          { taskType: "explain" },
+          { answer: "Use the registered handler." },
+          { notModified: true },
+          {
+            responseMode: "handle",
+            kind: "responseArtifact",
+            handle: "response-demo",
+            action: "response.get",
+            metadata: {
+              handle: "response-demo",
+              toolName: "sdl.context",
+              originalBytes: 1,
+              contentKind: "json",
+            },
+          },
+        ],
+      ],
+      [
+        "sdl.file",
+        [
+          { filePath: "README.md", content: "# Demo" },
+          { mode: "preview", planHandle: "plan-demo" },
+          { kind: "responseArtifact", handle: "response-demo" },
+        ],
+      ],
+    ]);
+
+    const schemas = gatewayNames.map((name) => outputSchemas.get(name));
+    for (const [index, schema] of schemas.entries()) {
+      const name = gatewayNames[index];
+      assert.ok(schema, `missing ${name} output schema`);
+      for (const success of representativeSuccesses.get(name) ?? []) {
+        assert.equal(schema.safeParse(success).success, true, name);
+      }
+      assert.equal(
+        schema.safeParse({ actionSpecific: true }).success,
+        false,
+        `${name} must reject unknown-only objects`,
+      );
+      assert.equal(
+        schema.safeParse([]).success,
+        false,
+        `${name} must reject arrays`,
+      );
+    }
+    assert.equal(new Set(schemas).size, gatewayNames.length);
+  });
+
   it("advertises plan-bound file window operations in sdl.file wire schema", () => {
     let fileWireSchema: { properties?: Record<string, unknown> } | null = null;
     const fakeServer = {

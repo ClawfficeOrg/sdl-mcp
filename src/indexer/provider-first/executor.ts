@@ -31,18 +31,10 @@ import type {
   SymbolInformation,
 } from "vscode-languageserver-protocol";
 import { createScipDecoder } from "../../scip/decoder-factory.js";
-import {
-  isClangStyleSymbolScheme,
-  parseScipSymbol,
-} from "../../scip/kind-mapping.js";
 import type {
   ScipFailureDiagnostic,
   ScipGeneratedIndexDiagnostic,
 } from "../../scip/diagnostics.js";
-import {
-  SCIP_ROLE_DEFINITION,
-  SCIP_ROLE_IMPORT,
-} from "../../scip/symbol-matcher.js";
 import type { ScipDocument, ScipExternalSymbol } from "../../scip/types.js";
 import { logger } from "../../util/logger.js";
 import { hashValue } from "../../util/hashing.js";
@@ -77,9 +69,12 @@ import {
   type LspProviderDocument,
 } from "./lsp-normalizer.js";
 
+import {
+  collectNeededSourceLines,
+  selectNeededLines,
+} from "./scip-source-lines.js";
+
 const SOURCE_TEXT_READ_CONCURRENCY = 32;
-const SOURCE_TEXT_IMPORT_ALIAS_BLOCK_SCAN_LIMIT = 80;
-const CPP_CALL_PROOF_LINE_WINDOW_RADIUS = 2;
 const PROVIDER_FIRST_DOCUMENT_PROGRESS_INTERVAL = 250;
 const PROVIDER_FIRST_SOURCE_LINE_PROGRESS_INTERVAL = 250;
 const PROVIDER_FIRST_PROGRESS_HEARTBEAT_MS = 2_000;
@@ -2284,87 +2279,6 @@ async function loadDocumentSourceLines(
   return { sourceLinesByPath, sourceLineUnavailableReasonByPath };
 }
 
-function collectNeededSourceLines(
-  documents: readonly ScipDocument[],
-): Map<string, Set<number>> {
-  const neededLinesByPath = new Map<string, Set<number>>();
-  for (const document of documents) {
-    const relPath = normalizePath(document.relativePath);
-    const isCppDocument = isCppLikeScipDocument(document);
-    for (const occurrence of document.occurrences) {
-      if ((occurrence.symbolRoles & SCIP_ROLE_DEFINITION) !== 0) continue;
-      if ((occurrence.symbolRoles & SCIP_ROLE_IMPORT) !== 0) {
-        const lines = neededLinesByPath.get(relPath) ?? new Set<number>();
-        // Import alias recovery only needs the wide block scan when the import
-        // line contains an alias. `selectNeededLines` expands those lines after
-        // reading the file, which avoids retaining broad import windows for the
-        // common no-alias case in large provider-first runs.
-        lines.add(occurrence.range.startLine);
-        neededLinesByPath.set(relPath, lines);
-        continue;
-      }
-      if (occurrence.range.startLine !== occurrence.range.endLine) continue;
-
-      const lines = neededLinesByPath.get(relPath) ?? new Set<number>();
-      if (isCppDocument || isClangStyleSymbol(occurrence.symbol)) {
-        addLineWindow(
-          lines,
-          occurrence.range.startLine,
-          CPP_CALL_PROOF_LINE_WINDOW_RADIUS,
-        );
-      } else {
-        lines.add(occurrence.range.startLine);
-      }
-      neededLinesByPath.set(relPath, lines);
-    }
-  }
-  return neededLinesByPath;
-}
-
-function isCppLikeScipDocument(document: ScipDocument): boolean {
-  return /^(c|cc|cpp|c\+\+|cxx|objc|objective-c)$/i.test(document.language);
-}
-
-function isClangStyleSymbol(symbol: string): boolean {
-  return isClangStyleSymbolScheme(parseScipSymbol(symbol).scheme);
-}
-
-function addLineWindow(
-  lines: Set<number>,
-  lineNumber: number,
-  radius: number,
-): void {
-  const startLine = Math.max(0, lineNumber - radius);
-  const endLine = lineNumber + radius;
-  for (let currentLine = startLine; currentLine <= endLine; currentLine++) {
-    lines.add(currentLine);
-  }
-}
-
-function selectNeededLines(
-  sourceText: string,
-  neededLines: ReadonlySet<number>,
-): ReadonlyMap<number, string> {
-  const sourceLines = sourceText.split(/\r?\n/);
-  const selectedLineNumbers = new Set(neededLines);
-  for (const lineNumber of neededLines) {
-    const line = sourceLines[lineNumber];
-    if (!line?.includes(" as ")) continue;
-    addLineWindow(
-      selectedLineNumbers,
-      lineNumber,
-      SOURCE_TEXT_IMPORT_ALIAS_BLOCK_SCAN_LIMIT,
-    );
-  }
-
-  const selected = new Map<number, string>();
-  for (const [lineNumber, line] of sourceLines.entries()) {
-    if (selectedLineNumbers.has(lineNumber)) {
-      selected.set(lineNumber, line);
-    }
-  }
-  return selected;
-}
 
 function resolveSourceTextMaxBytes(
   repoId: string,

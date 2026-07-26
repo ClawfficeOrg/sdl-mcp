@@ -17,6 +17,7 @@ import { CARD_WIRE_FIELD_ORDER } from "./tools/symbol-utils.js";
 const BROAD_MODEL_VISIBLE_FIELDS = new Set([
   "taskType",
   "success",
+  "status",
   "summary",
   "answer",
   "finalEvidence",
@@ -97,6 +98,7 @@ const COMPACT_FAILURE_TRACE_FIELDS = new Set([
   "status",
   "message",
   "fallbackTools",
+  "details",
 ]);
 
 const COMPACT_DEBUG_MODEL_FIELDS = new Set([
@@ -608,6 +610,7 @@ function projectContextResultForModel(
 
   copyIfPresent(result, projected, "taskType");
   copyIfPresent(result, projected, "success");
+  copyIfPresent(result, projected, "status");
   copyIfPresent(result, projected, "answer");
   copyIfPresent(result, projected, "confidence");
   copyIfPresent(result, projected, "evidence");

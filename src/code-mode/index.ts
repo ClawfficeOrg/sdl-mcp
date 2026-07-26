@@ -4,10 +4,14 @@ import { ValidationError } from "../domain/errors.js";
 import { buildCompactJsonSchema } from "../gateway/compact-schema.js";
 import type { ToolServices } from "../gateway/index.js";
 import { createActionMap, type ActionMap } from "../gateway/router.js";
-import { AgentContextRequestSchema } from "../mcp/tools.js";
+import {
+  AgentContextOutputSchema,
+  AgentContextRequestSchema,
+} from "../mcp/tools.js";
 import { handleAgentContext } from "../mcp/tools/context.js";
 import { projectWorkflowChildResultForModel } from "../mcp/context-response-projection.js";
 import {
+  FileGatewayOutputSchema,
   FileGatewayRequestSchema,
   handleFileGateway,
 } from "../mcp/tools/file-gateway.js";
@@ -33,6 +37,7 @@ import { INTERNAL_TRANSFORM_NAMES } from "./transforms.js";
 import {
   buildRetrieveWireSchema,
   handleRetrieve,
+  RetrieveOutputSchema,
   RetrieveRequestSchema,
 } from "./retrieve.js";
 import { executeWorkflow } from "./workflow-executor.js";
@@ -43,7 +48,11 @@ import {
 } from "./manual-generator.js";
 import { parseWorkflowRequest } from "./workflow-parser.js";
 
-import { WorkflowRequestSchema, WorkflowTraceOptionsSchema } from "./types.js";
+import {
+  WorkflowOutputSchema,
+  WorkflowRequestSchema,
+  WorkflowTraceOptionsSchema,
+} from "./types.js";
 
 const TRANSFORM_HINT =
   '\n\n> **Tip:** Data transforms (dataPick, dataMap, dataFilter, dataSort, dataTemplate) are available as sdl.workflow steps. Use sdl.manual({ actions: ["dataPick", "dataMap", "dataFilter", "dataSort", "dataTemplate"] }) for schemas.';
@@ -491,6 +500,8 @@ export function registerCodeModeTools(
     async (rawArgs: unknown, context?: ToolContext) =>
       handleRetrieve(rawArgs, actionMap, context),
     buildRetrieveWireSchema(actionMap),
+    undefined,
+    RetrieveOutputSchema,
   );
 
   server.registerTool(
@@ -547,6 +558,8 @@ export function registerCodeModeTools(
       required: ["repoId", "steps"],
       additionalProperties: false,
     },
+    undefined,
+    WorkflowOutputSchema,
   );
 
   server.registerTool(
@@ -556,6 +569,8 @@ export function registerCodeModeTools(
     async (rawArgs: unknown, context?: ToolContext) =>
       handleAgentContext(rawArgs, context),
     buildCompactJsonSchema(AgentContextRequestSchema),
+    undefined,
+    AgentContextOutputSchema,
   );
 
   server.registerTool(
@@ -640,6 +655,8 @@ export function registerCodeModeTools(
       required: ["op", "repoId"],
       additionalProperties: false,
     },
+    undefined,
+    FileGatewayOutputSchema,
   );
 }
 

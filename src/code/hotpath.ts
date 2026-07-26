@@ -12,6 +12,7 @@ import {
 } from "../config/constants.js";
 import { logger } from "../util/logger.js";
 import { getAbsolutePathFromRepoRoot } from "../util/paths.js";
+import { findVariableDeclarationEndLine } from "../util/source-lines.js";
 import { estimateTokens as estimateTokenCount } from "../util/tokenize.js";
 import { getLadybugConn } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
@@ -128,23 +129,7 @@ function filterVisibleIdentifiers(
   );
 }
 
-export function findVariableDeclarationEndLine(
-  lines: string[],
-  startLine: number,
-): number {
-  let depth = 0;
-  const startIdx = Math.max(0, startLine - 1);
-  const endIdx = Math.min(lines.length, startIdx + 200);
-  for (let i = startIdx; i < endIdx; i++) {
-    for (const char of lines[i]) {
-      if (char === "{" || char === "(" || char === "[") depth++;
-      if (char === "}" || char === ")" || char === "]") depth = Math.max(0, depth - 1);
-    }
-    // ponytail: bounded scan for chained const initializers; parser-backed ranges can replace this if needed.
-    if (depth === 0 && lines[i].trimEnd().endsWith(";")) return i + 1;
-  }
-  return startLine;
-}
+export { findVariableDeclarationEndLine };
 
 export function buildHotPathExcerpt(
   lines: string[],

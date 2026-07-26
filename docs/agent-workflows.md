@@ -50,7 +50,7 @@ flowchart LR
 
 ## Complete Tool Reference
 
-SDL-MCP exposes flat, gateway, and Code Mode tool surfaces. Exact tool counts move with the generated inventory, so use `npm run docs:tools:check` for current schema coverage. Agents should prefer `responseMode: "auto"` for large responses and run repo-local commands through `runtimeExecute`. Call `usageStats` only when the user asks for token savings, when debugging telemetry, or when persisting/reporting a usage snapshot; when explicitly needed, include the returned `formattedSummary` verbatim in a fenced `text` block.
+SDL-MCP exposes flat, gateway, and Code Mode tool surfaces. Exact tool counts move with the generated inventory, so use `npm run docs:tools:check` for current schema coverage. All seven tools registered in Code Mode advertise object-root MCP `outputSchema` metadata, including the universal `sdl.info` tool and the six Code Mode-specific tools. The multi-operation `sdl.context`, `sdl.retrieve`, `sdl.workflow`, and `sdl.file` schemas expose compact stable outer result keys; operation and action schemas remain authoritative for nested payloads. Agents should prefer `responseMode: "auto"` for large responses and run repo-local commands through `runtimeExecute`. Call `usageStats` only when the user asks for token savings, when debugging telemetry, or when persisting/reporting a usage snapshot; when explicitly needed, include the returned `formattedSummary` verbatim in a fenced `text` block.
 
 | Category                   | Tool                       | Purpose                                                                                                                                                              |
 | :------------------------- | :------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -131,7 +131,9 @@ Use this order unless task constraints force escalation:
    - Use `wireFormat: "readable"` only when debugging slice payloads or developing integrations.
    - Set budget early, for example: `{ "maxCards": 30, "maxEstimatedTokens": 4000 }`.
    - Use `minConfidence` and `minCallConfidence` to drop low-trust edges when precision matters.
-   - Provide `entrySymbols` when available; otherwise use auto-discovery with `taskText`, `stackTrace`, `failingTestPath`, or `editedFiles`.
+   - Provide `entrySymbols` when available. Explicit entries are the authoritative start nodes; task text and other hints do not add roots, while graph traversal still expands connected relationships.
+   - `relationshipNote` appears only when at least one supplied explicit entry resolves as a selected start and the slice has no edges, frontier, or spillover. Use it to inspect dependencies and retry with a connected entry.
+   - Without `entrySymbols`, use auto-discovery with `taskText`, `stackTrace`, `failingTestPath`, or `editedFiles`.
    - `sdl.workflow` seeds `knownCardEtags` automatically. Pass them manually only when calling `sdl.slice.build` directly outside a workflow.
    - Use `adaptiveDetail: true` or a low `cardDetail` (`"minimal"`/`"signature"`) before asking for full cards.
 4. `sdl.repo.overview` only when the task needs repository shape, directory stats, or hotspots rather than task-shaped code context. Start with `level: "stats"`; use `directories`/`full` only when needed.
@@ -218,12 +220,12 @@ Stale buffer pushes (version ≤ current) are rejected automatically.
 ### 5) Task Context (`sdl.context`) guidance
 
 - Always provide a budget (`maxTokens`, `maxActions`, optionally `maxDurationMs`).
-- Scope with `focusSymbols` and/or `focusPaths` when you have them. Explicit scope and exact symbol mentions stay on the fast path and are the best option for targeted work. If broad mode is noisy or precise mode under-covers a subsystem, use `sdl.symbol.search`/`symbolSearch` for exact symbols before escalating to skeletons or hot paths.
+- Scope with `focusSymbols` and/or `focusPaths` when you have them. Exact and focused implementation evidence stays on the first page ahead of unrelated lexical or semantic cards. Precise explain tasks add a hot path when explicit scope or chat mentions identify an implementation target. If broad mode is noisy or precise mode under-covers a subsystem, use `sdl.symbol.search`/`symbolSearch` for exact symbols before escalating further.
 - Broad mode (the default) enables semantic seeding and path-aware selection unless `options.semantic: false`. Inferred paths are soft ranking hints, while explicit `focusPaths` constrain the scope strictly. Set `options.semantic: true` to force hybrid retrieval, and set `options.semantic: false` for lexical-only debugging or tests.
 - Use `contextMode: "precise"` for targeted lookups (max 4 cluster-expanded symbols, minimal tokens — beats manual workflow assembly). Use `"broad"` (default) for investigation tasks needing surrounding context (max 10 cluster-expanded symbols with diversity scoring).
 - Avoid `requireDiagnostics` unless needed; it can add a raw rung.
 - Task types: `"debug"`, `"review"`, `"implement"`, `"explain"`.
-- Precise mode plans fewer rungs per task type: debug = card + hotPath, explain = card + skeleton, review = card + skeleton + hotPath, implement = card + skeleton.
+- Precise mode plans fewer rungs per task type: debug = card + hotPath, explain = card + skeleton (plus hotPath for explicit scope or chat mentions), review = card + skeleton + hotPath, implement = card + skeleton.
 - Planner token estimates are approximately:
   - `card`: `50`
   - `skeleton`: `200`
@@ -231,6 +233,7 @@ Stale buffer pushes (version ≤ current) are rejected automatically.
   - `raw`: `2000`
 - When over budget, planner trims rungs based on confidence tier: high-confidence retrievals trim to cheapest rungs, low-confidence retrievals preserve diagnostic depth. At least one rung is always kept.
 - Broad mode returns a compact response by default: `taskId`, `taskType`, `success`, `summary`, `answer`, `finalEvidence`, and `nextBestAction` (when relevant). The fields `actionsTaken`, `path`, `metrics`, and `retrievalEvidence` are not part of the model-visible broad response. `finalEvidence` and `answer` are the primary model-visible fields. The `answer` field is always preserved on successful responses.
+- When answer-first evidence is insufficient, the response preserves its evidence and continuation but returns `success: false` and `status: "partial"`. Follow `nextBestAction` instead of treating the fallback as a complete answer.
 - Precise mode strips the response further. Only `taskId`, `taskType`, `success`, `path`, `finalEvidence`, and `metrics` are returned.
 
 ### 6) Runtime execution (`sdl.runtime.execute` + `sdl.runtime.queryOutput`)
@@ -281,9 +284,10 @@ Then, if needed:
 
 ### 7) Code Mode (`sdl.context`, `sdl.retrieve`, `sdl.workflow`, `sdl.file`)
 
-When `codeMode.enabled: true` is set in config, Code Mode registers six tools:
+When `codeMode.enabled: true` is set in config, Code Mode registers seven tools. Every registration advertises an object-root MCP `outputSchema`:
 
 - `sdl.action.search` — returns the most relevant SDL actions for a query, optionally with schema and example metadata.
+- `sdl.info` — reports runtime and capability status without repository state.
 - `sdl.manual` — returns a compact filtered API reference for all or part of the action surface.
 - `sdl.context` — retrieves task-shaped context inside Code Mode. Use it for explain/debug/review/implement understanding, not as a wrapper around exact symbol lookup or edit planning.
 - `sdl.retrieve` — runs one exact retrieval step inside Code Mode without the overhead of a workflow.
@@ -302,6 +306,7 @@ Workflow guidance:
 - Use `sdl.manual(query|actions)` to avoid loading the full manual when a subset is enough.
 - Each step has `fn` (action name) and `args`. Use `$N.path.to.field` to reference step N's result (0-based). `$N` piping uses raw step data even when a returned page is model-projected or `onlyFinalResult` omits its public envelope.
 - Retrieve a truncated step with `workflowContinuationGet`: array paths page in items, JSON/text values page in characters, and `limit` is capped at `1000`.
+- If `response.get` rejects a JSON path, choose from the sorted valid keys in the error and retry the suggested call with the same response handle.
 - Set `budget`: `{ maxTotalTokens, maxSteps, maxDurationMs }`; `maxTokens` is accepted as an alias for `maxTotalTokens`.
 - `onError`: `"continue"` (default, skip only dependency-blocked steps), `"continueAll"` (legacy run-every-later-step behavior), or `"stop"` (halt on first error).
 - The workflow enforces the same context-ladder escalation rules as individual tools.

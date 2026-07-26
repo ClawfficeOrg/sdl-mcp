@@ -574,7 +574,7 @@ describe("ContextEngine", () => {
     assert.equal(result.truncation, undefined);
   });
 
-  it("enforces maxTokens on the complete response with continuation recovery", async () => {
+  it("protects exact handlers ahead of lexical cards during first-page budgeting", async () => {
     const handlerDetail =
       " if(value[index]){return persistArtifact(result);}".repeat(12);
     const unrelatedDetail =
@@ -605,12 +605,9 @@ describe("ContextEngine", () => {
         timestamp: 4,
       },
       ...Array.from({ length: 6 }, (_, index): Evidence => ({
-        type: index % 2 === 0 ? "searchResult" : "skeleton",
-        reference:
-          index % 2 === 0
-            ? `search:unrelated-${index}`
-            : `file:src/unrelated-${index}.ts`,
-        summary: `Unrelated lane ${index}.${unrelatedDetail}`,
+        type: "symbolCard",
+        reference: `symbol:unrelated-${index}`,
+        summary: `Unrelated lexical card ${index}.${unrelatedDetail}`,
         timestamp: 5 + index,
       })),
     ];
@@ -639,10 +636,28 @@ describe("ContextEngine", () => {
 
     mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
     mock.method(Planner.prototype, "plan", () => defaultPath);
-    mock.method(Planner.prototype, "selectContext", () => [
-      "symbol:handleRuntimeQueryOutput",
-      "symbol:handleRuntimeExecute",
-    ]);
+    mock.method(Planner.prototype, "selectContext", () => []);
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedExactMentionedSymbols",
+      async () => [
+        "symbol:handleRuntimeQueryOutput",
+        "symbol:handleRuntimeExecute",
+      ],
+    );
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedContext",
+      async (): Promise<ContextSeedResult> => ({
+        candidates: Array.from({ length: 6 }, (_, index) => ({
+          contextRef: `symbol:unrelated-${index}`,
+          source: "fts",
+          score: 1 - index / 10,
+          sourceRank: index,
+        })),
+        sources: { semantic: 0, lexical: 6, feedback: 0 },
+      }),
+    );
     mock.method(Executor.prototype, "execute", async () => ({
       actions,
       evidence,
@@ -664,8 +679,9 @@ describe("ContextEngine", () => {
     assert.ok(references.includes("symbol:handleRuntimeQueryOutput"));
     assert.ok(references.includes("symbol:handleRuntimeExecute"));
     assert.ok(references.some((reference) => reference.startsWith("hotpath:handleRuntime")));
-    assert.ok(
-      references.filter((reference) => reference.includes("unrelated")).length < 6,
+    assert.equal(
+      references.some((reference) => reference.includes("unrelated")),
+      false,
     );
     assert.match(
       result.summary,
@@ -889,6 +905,113 @@ describe("ContextEngine", () => {
           reference !== runtimeExecuteRef,
       ).length <= 3,
     );
+    assert.ok(estimateTokens(JSON.stringify(result)) <= 2_600);
+  });
+
+  it("orders exact code evidence before unrelated cards within budget", async () => {
+    const exactQueryRef = "symbol:handleRuntimeQueryOutput";
+    const exactExecuteRef = "symbol:handleRuntimeExecute";
+    const evidence: Evidence[] = [
+      {
+        type: "symbolCard",
+        reference: exactQueryRef,
+        summary: "Exact runtime query handler card",
+        timestamp: 1,
+      },
+      {
+        type: "symbolCard",
+        reference: exactExecuteRef,
+        summary: "Exact runtime execute handler card",
+        timestamp: 2,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:unrelated-a",
+        summary: "First unrelated lexical card",
+        timestamp: 3,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:unrelated-b",
+        summary: "Second unrelated lexical card",
+        timestamp: 4,
+      },
+      {
+        type: "skeleton",
+        reference: exactQueryRef,
+        summary: "Exact runtime query handler skeleton",
+        timestamp: 5,
+      },
+      {
+        type: "hotPath",
+        reference: `hotpath:${exactExecuteRef.slice("symbol:".length)}`,
+        summary: "Exact runtime execute handler hot path",
+        timestamp: 6,
+      },
+    ];
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => []);
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedExactMentionedSymbols",
+      async () => [exactQueryRef, exactExecuteRef],
+    );
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedContext",
+      async (): Promise<ContextSeedResult> => ({
+        candidates: [
+          {
+            contextRef: "symbol:unrelated-a",
+            source: "fts",
+            score: 1,
+            sourceRank: 0,
+          },
+          {
+            contextRef: "symbol:unrelated-b",
+            source: "fts",
+            score: 0.9,
+            sourceRank: 1,
+          },
+        ],
+        sources: { semantic: 0, lexical: 2, feedback: 0 },
+      }),
+    );
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [],
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskType: "explain",
+        taskText: "Explain handleRuntimeQueryOutput and handleRuntimeExecute",
+        budget: { maxTokens: 2_600 },
+        options: {
+          contextMode: "broad",
+          evidenceOptimization: "global",
+          chatMentions: ["handleRuntimeQueryOutput", "handleRuntimeExecute"],
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      result.finalEvidence.map(({ reference }) => reference),
+      [
+        exactQueryRef,
+        exactExecuteRef,
+        exactQueryRef,
+        `hotpath:${exactExecuteRef.slice("symbol:".length)}`,
+        "symbol:unrelated-a",
+        "symbol:unrelated-b",
+      ],
+    );
+    assert.equal(result.truncation, undefined);
     assert.ok(estimateTokens(JSON.stringify(result)) <= 2_600);
   });
 

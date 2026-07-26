@@ -697,6 +697,17 @@ async function handleSliceBuildInternal(
       lease,
       sliceEtag,
       slice: wireResult.payload as never,
+      ...(resolvedEntrySymbols?.some((symbolId) =>
+        slice.startSymbols.includes(symbolId),
+      ) === true &&
+      slice.edges.length === 0 &&
+      (slice.frontier?.length ?? 0) === 0 &&
+      spilloverPayload === null
+        ? {
+            relationshipNote:
+              "No usable graph path was found from the selected starts. Inspect each start symbol's dependencies, then retry with a connected symbol in entrySymbols.",
+          }
+        : {}),
       ...(sliceWasTruncated && spilloverPayload
         ? { spilloverHandle: handle }
         : {}),

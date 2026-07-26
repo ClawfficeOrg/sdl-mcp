@@ -19,6 +19,34 @@ export const RETRIEVE_ACTION_BY_OP = {
   codeNeedWindow: "code.needWindow",
 } as const;
 
+const RETRIEVE_OUTPUT_KEYS = [
+  "results",
+  "card",
+  "cards",
+  "slice",
+  "file",
+  "approved",
+  "etag",
+  "kind",
+] as const;
+
+// Keep the top-level catalog compact; action schemas validate the nested payloads.
+export const RetrieveOutputSchema = z
+  .object({
+    results: z.unknown().optional(),
+    card: z.unknown().optional(),
+    cards: z.unknown().optional(),
+    slice: z.unknown().optional(),
+    file: z.unknown().optional(),
+    approved: z.unknown().optional(),
+    etag: z.unknown().optional(),
+    kind: z.unknown().optional(),
+  })
+  .passthrough()
+  .refine((value) => RETRIEVE_OUTPUT_KEYS.some((key) => key in value), {
+    message: "Unrecognized sdl.retrieve response shape",
+  });
+
 /** Publish each available retrieve operation's authoritative nested arguments. */
 export function buildRetrieveWireSchema(
   actionMap: ActionMap,
