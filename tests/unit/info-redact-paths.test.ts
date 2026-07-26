@@ -2,13 +2,13 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { basename } from "path";
 
-import { handleInfo } from "../../dist/mcp/tools/info.js";
+import { handleInfo, redactInfoPaths } from "../../dist/mcp/tools/info.js";
 
 // ---------------------------------------------------------------------------
 // Regression guard for the info.ts path disclosure fix. Confirms that passing
-// { redactPaths: true } replaces the absolute paths that handleInfo normally
-// returns with their basenames, so HTTP-transport or multi-tenant deployments
-// can avoid leaking the server's filesystem layout.
+// { redactPaths: true } replaces config/LadybugDB/native paths with basenames
+// and logging paths with a stable marker, so HTTP-transport or multi-tenant
+// deployments can avoid leaking the server's filesystem layout.
 // ---------------------------------------------------------------------------
 
 describe("handleInfo path redaction", () => {
@@ -21,7 +21,7 @@ describe("handleInfo path redaction", () => {
     assert.ok("path" in report.config);
   });
 
-  it("redacts absolute paths to basenames when redactPaths: true", async () => {
+  it("redacts config, LadybugDB, and native paths to basenames", async () => {
     const full = await handleInfo();
     const redacted = await handleInfo({ redactPaths: true });
 
@@ -29,13 +29,49 @@ describe("handleInfo path redaction", () => {
     // and no Windows drive letters, and never contain a path separator that
     // is not at the end of the string.
     assert.equal(redacted.config.path, basename(full.config.path));
-    assert.equal(redacted.logging.path, full.logging.path === null ? null : basename(full.logging.path));
+    assert.equal(redacted.logging.path, full.logging.path === null ? null : "<redacted>");
     assert.equal(redacted.ladybug.activePath, full.ladybug.activePath === null ? null : basename(full.ladybug.activePath));
     assert.equal(redacted.native.sourcePath, full.native.sourcePath === null ? null : basename(full.native.sourcePath));
 
     // The basename should not contain path separators.
     assert.ok(!redacted.config.path.includes("/"));
     assert.ok(!redacted.config.path.includes("\\"));
+  });
+
+  it("redacts a non-null logging path to a stable marker", async () => {
+    const report = await handleInfo();
+    const redacted = redactInfoPaths({
+      ...report,
+      logging: { ...report.logging, path: "C:\\logs\\sdl-mcp-2026-07-26-1234.log" },
+    });
+
+    assert.equal(redacted.logging.path, "<redacted>");
+  });
+
+  it("preserves a null logging path", async () => {
+    const report = await handleInfo();
+    const redacted = redactInfoPaths({
+      ...report,
+      logging: { ...report.logging, path: null },
+    });
+
+    assert.equal(redacted.logging.path, null);
+  });
+
+  it("redacts the exact fallback warning while preserving unrelated warnings", async () => {
+    const report = await handleInfo();
+    const path = "C:\\logs\\sdl-mcp-2026-07-26-1234.log";
+    const fallbackWarning = `Log path fallback in use: ${path}`;
+    const redacted = redactInfoPaths({
+      ...report,
+      logging: { ...report.logging, path, fallbackUsed: true },
+      warnings: [fallbackWarning, "Unrelated warning"],
+    });
+
+    assert.deepEqual(redacted.warnings, [
+      "Log path fallback in use: <redacted>",
+      "Unrelated warning",
+    ]);
   });
 
   it("leaves non-path fields untouched when redactPaths: true", async () => {

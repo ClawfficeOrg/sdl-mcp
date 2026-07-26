@@ -17,6 +17,12 @@
       }
     },
     {
+      "tool": "sdl.info",
+      "args": {
+        "redactPaths": true
+      }
+    },
+    {
       "tool": "sdl.repo.status",
       "args": {
         "repoId": "{REPO_ID}",
@@ -111,10 +117,6 @@
     }
   ],
   "uncoveredAllowlist": [
-    {
-      "tool": "sdl.info",
-      "reason": "Diagnostic output is path-redacted but intentionally reports process-local runtime and log-file identity."
-    },
     {
       "tool": "sdl.repo.register",
       "reason": "Setup mutation; registration can create versions and enforcement files."
