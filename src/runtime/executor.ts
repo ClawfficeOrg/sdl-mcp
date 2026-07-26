@@ -73,8 +73,12 @@ export function buildScrubbedEnv(
   }
 
   if (IS_WINDOWS) {
+    const pathExt = process.env.PATHEXT;
     const home = process.env.USERPROFILE;
     const temp = process.env.TEMP;
+    if (pathExt) {
+      env.PATHEXT = pathExt;
+    }
     if (home) {
       env.USERPROFILE = home;
     }

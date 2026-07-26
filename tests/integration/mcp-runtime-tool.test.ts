@@ -314,6 +314,42 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
     }
   });
 
+  it(
+    "persists nested native-command output from PowerShell",
+    { skip: process.platform !== "win32" },
+    async () => {
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const { handleRuntimeQueryOutput } =
+        await import("../../dist/mcp/tools/runtime-query.js");
+
+      const run = await handleRuntimeExecute({
+        repoId,
+        runtime: "powershell",
+        code: '& cmd.exe /c echo SDL_NATIVE_OK; Write-Output "EXIT:$LASTEXITCODE"',
+        persistOutput: true,
+        outputMode: "minimal",
+      });
+
+      assert.strictEqual(run.status, "success");
+      assert.ok(run.artifactHandle);
+      const query = await handleRuntimeQueryOutput({
+        repoId,
+        artifactHandle: run.artifactHandle,
+        queryTerms: ["SDL_NATIVE_OK", "EXIT:0"],
+        contextLines: 0,
+        maxExcerpts: 2,
+        stream: "stdout",
+      });
+
+      assert.strictEqual(query.matchStatus, "matched");
+      assert.deepEqual(
+        query.excerpts.map((excerpt) => excerpt.content.replace(/\r$/, "")),
+        ["SDL_NATIVE_OK", "EXIT:0"],
+      );
+    },
+  );
+
   it("should not warn about balanced quotes inside direct argv code", async () => {
     const { handleRuntimeExecute } =
       await import("../../dist/mcp/tools/runtime.js");

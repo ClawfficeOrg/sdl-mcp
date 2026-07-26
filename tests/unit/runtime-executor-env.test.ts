@@ -41,4 +41,17 @@ describe("buildScrubbedEnv with requiredEnvKeys", () => {
     assert.strictEqual(env.MY_ALLOWED, "yes");
     delete process.env.MY_ALLOWED;
   });
+
+  it(
+    "preserves PATHEXT case-insensitively for nested native commands on Windows",
+    { skip: process.platform !== "win32" },
+    () => {
+      delete process.env.PATHEXT;
+      process.env.PathExt = ".COM;.EXE;.BAT;.CMD";
+
+      const env = buildScrubbedEnv([]);
+
+      assert.strictEqual(env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
+    },
+  );
 });
