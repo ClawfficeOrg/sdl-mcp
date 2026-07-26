@@ -47,6 +47,26 @@ interface RankedCandidate extends SymbolRefCandidate {
 const SEARCH_LIMIT = 25;
 const MIN_FUZZY_AUTO_RESOLVE_SCORE = 120;
 const MIN_FUZZY_SCORE_GAP = 20;
+const MIN_SYMBOL_REF_SUGGESTION_SCORE = 0.35;
+const MAX_SYMBOL_REF_SUGGESTIONS = 3;
+
+export function buildSymbolRefSuggestionRecovery(
+  candidates: SymbolRefCandidate[],
+): { candidates: SymbolRefCandidate[]; hint: string } {
+  const suggestions = candidates
+    .filter((candidate) => candidate.score >= MIN_SYMBOL_REF_SUGGESTION_SCORE)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, MAX_SYMBOL_REF_SUGGESTIONS);
+  return {
+    candidates: suggestions,
+    hint:
+      suggestions.length === 0
+        ? ""
+        : ` Did you mean: ${suggestions
+            .map(({ name, file }) => `"${name}" (${file})`)
+            .join(", ")}?`,
+  };
+}
 
 /**
  * Perform a broader fuzzy search to find candidate suggestions when exact match fails.
@@ -85,9 +105,7 @@ async function fuzzySearchCandidates(
       exported: true,
       score: Math.round(computeRelevance(row.name, name) * 100) / 100,
     }))
-    .filter((c) => c.score >= 0.15)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+    .sort((a, b) => b.score - a.score);
 }
 export async function resolveSymbolRef(
   conn: Connection,
@@ -97,14 +115,13 @@ export async function resolveSymbolRef(
   const rows = await searchSymbolsWithOverlay(conn, repoId, symbolRef.name, SEARCH_LIMIT);
   if (rows.length === 0) {
     // No exact search results — try broader fuzzy search for suggestions
-    const fuzzyCandidates = await fuzzySearchCandidates(conn, repoId, symbolRef.name, SEARCH_LIMIT);
-    const hint = fuzzyCandidates.length > 0
-      ? ` Did you mean: ${fuzzyCandidates.slice(0, 3).map(c => `"${c.name}" (${c.file})`).join(", ")}?`
-      : "";
+    const recovery = buildSymbolRefSuggestionRecovery(
+      await fuzzySearchCandidates(conn, repoId, symbolRef.name, SEARCH_LIMIT),
+    );
     return {
       status: "not_found",
-      message: `No symbol matching "${symbolRef.name}" was found in repo "${repoId}".${hint}`,
-      candidates: fuzzyCandidates,
+      message: `No symbol matching "${symbolRef.name}" was found in repo "${repoId}".${recovery.hint}`,
+      candidates: recovery.candidates,
     };
   }
 
@@ -154,25 +171,20 @@ export async function resolveSymbolRef(
   if (ranked.length === 0) {
     const qualifier = normalizedFile ? ` in file "${normalizedFile}"` : "";
     // We had search results but none passed filters — use original rows as fuzzy suggestions
-    const fuzzyCandidates = rows
-      .map((row) => ({
+    const recovery = buildSymbolRefSuggestionRecovery(
+      rows.map((row) => ({
         symbolId: row.symbolId,
         name: row.name,
         file: row.filePath,
         kind: row.kind,
         exported: row.exported,
         score: Math.round(computeRelevance(row.name, symbolRef.name) * 100) / 100,
-      }))
-      .filter((candidate) => candidate.score >= 0.1)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
-    const hint = fuzzyCandidates.length > 0
-      ? ` Did you mean: ${fuzzyCandidates.slice(0, 3).map(c => `"${c.name}" (${c.file})`).join(", ")}?`
-      : "";
+      })),
+    );
     return {
       status: "not_found",
-      message: `No symbol matching "${symbolRef.name}"${qualifier} was found in repo "${repoId}".${hint}`,
-      candidates: fuzzyCandidates,
+      message: `No symbol matching "${symbolRef.name}"${qualifier} was found in repo "${repoId}".${recovery.hint}`,
+      candidates: recovery.candidates,
     };
   }
 
