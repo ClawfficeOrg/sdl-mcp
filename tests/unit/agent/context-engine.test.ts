@@ -45,6 +45,136 @@ const defaultMetrics: ExecutionMetrics = {
   cacheHits: 0,
 };
 
+function exactIdentifierEvidence(): Evidence[] {
+  return [
+    {
+      type: "searchResult",
+      reference: "search:kept",
+      summary: "Search result kept",
+      timestamp: 1,
+    },
+    {
+      type: "symbolCard",
+      reference: "symbol:secondary-a",
+      summary: "Secondary A card",
+      timestamp: 2,
+    },
+    {
+      type: "symbolCard",
+      reference: "symbol:ExactTarget",
+      summary: "Exact target card",
+      timestamp: 3,
+    },
+    {
+      type: "skeleton",
+      reference: "symbol:secondary-a",
+      summary: "Secondary A skeleton",
+      timestamp: 4,
+    },
+    {
+      type: "hotPath",
+      reference: "hotpath:secondary-a",
+      summary: "Hot path (0 matches, adjacent context only)",
+      timestamp: 5,
+    },
+    {
+      type: "diagnostic",
+      reference: "diagnostic:kept",
+      summary: "Diagnostic kept",
+      timestamp: 6,
+    },
+    {
+      type: "hotPath",
+      reference: "hotpath:ExactTarget",
+      summary: "Hot path (2 matches): exact implementation",
+      timestamp: 7,
+    },
+    {
+      type: "skeleton",
+      reference: "symbol:secondary-b",
+      summary: "Secondary B skeleton",
+      timestamp: 8,
+    },
+    {
+      type: "symbolCard",
+      reference: "symbol:card-only",
+      summary: "Card-only expansion",
+      timestamp: 9,
+    },
+    {
+      type: "hotPath",
+      reference: "hotpath:secondary-c",
+      summary: "Hot path (1 match): third secondary implementation",
+      timestamp: 10,
+    },
+    {
+      type: "symbolCard",
+      reference: "symbol:secondary-b",
+      summary: "Secondary B card",
+      timestamp: 11,
+    },
+    {
+      type: "hotPath",
+      reference: "hotpath:secondary-d",
+      summary: "Hot path (0 matches, adjacent context only)",
+      timestamp: 12,
+    },
+  ];
+}
+
+function unchangedExactIdentifierEvidence(): Evidence[] {
+  return [
+    {
+      type: "symbolCard",
+      reference: "symbol:ExactTarget",
+      summary: "Exact target card",
+      timestamp: 1,
+    },
+    {
+      type: "hotPath",
+      reference: "hotpath:ExactTarget",
+      summary: "Hot path (2 matches): exact implementation",
+      timestamp: 2,
+    },
+    {
+      type: "symbolCard",
+      reference: "symbol:secondary-a",
+      summary: "Secondary A card",
+      timestamp: 3,
+    },
+    {
+      type: "searchResult",
+      reference: "search:kept",
+      summary: "Search result kept",
+      timestamp: 4,
+    },
+    {
+      type: "skeleton",
+      reference: "symbol:secondary-a",
+      summary: "Secondary A skeleton",
+      timestamp: 5,
+    },
+    {
+      type: "symbolCard",
+      reference: "symbol:secondary-b",
+      summary: "Secondary B card",
+      timestamp: 6,
+    },
+    {
+      type: "skeleton",
+      reference: "symbol:secondary-b",
+      summary: "Secondary B skeleton",
+      timestamp: 7,
+    },
+    {
+      type: "hotPath",
+      reference: "hotpath:secondary-c",
+      summary: "Hot path (1 match): third secondary implementation",
+      timestamp: 8,
+    },
+  ];
+}
+
 afterEach(() => {
   mock.restoreAll();
   clearContinuationStore();
@@ -1506,6 +1636,346 @@ describe("ContextEngine", () => {
       "symbol:exact-handleSymbolSearch",
       "symbol:semantic-related",
     ]);
+  });
+
+  it("narrows broad evidence for one uniquely resolved named concept", async () => {
+    const evidence = exactIdentifierEvidence();
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => []);
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedExactMentionedSymbols",
+      async (
+        _task: AgentTask,
+        mentioned?: string[],
+        directExactRefs?: Set<string>,
+      ) => {
+        assert.deepEqual(mentioned, ["ExactTarget"]);
+        assert.ok(directExactRefs);
+        directExactRefs.add("symbol:ExactTarget");
+        return ["symbol:ExactTarget"];
+      },
+    );
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedContext",
+      async (): Promise<ContextSeedResult> => ({
+        candidates: [
+          {
+            contextRef: "symbol:ExactTarget",
+            source: "lexical",
+            score: 1,
+            sourceRank: 0,
+            expansionReason: "namedConcept",
+          },
+        ],
+        sources: { semantic: 0, lexical: 1, feedback: 0 },
+      }),
+    );
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [],
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskType: "explain",
+        taskText: "Explain ExactTarget",
+        options: {
+          contextMode: "broad",
+          semantic: false,
+          inferredFocusPaths: ["src/inferred-hint.ts"],
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      result.finalEvidence.map(({ reference }) => reference),
+      [
+        "symbol:ExactTarget",
+        "hotpath:ExactTarget",
+        "symbol:secondary-a",
+        "symbol:secondary-a",
+        "hotpath:secondary-a",
+        "symbol:secondary-b",
+        "symbol:secondary-b",
+        "search:kept",
+        "diagnostic:kept",
+      ],
+    );
+    const serialized = JSON.stringify(result);
+    assert.doesNotMatch(serialized, /symbol:card-only/);
+    assert.doesNotMatch(serialized, /hotpath:secondary-c/);
+    assert.doesNotMatch(serialized, /hotpath:secondary-d/);
+  });
+
+  it("preserves selected zero-match context during final budget optimization", async () => {
+    const evidence = exactIdentifierEvidence();
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => []);
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedExactMentionedSymbols",
+      async (
+        _task: AgentTask,
+        _mentioned?: string[],
+        directExactRefs?: Set<string>,
+      ) => {
+        assert.ok(directExactRefs);
+        directExactRefs.add("symbol:ExactTarget");
+        return ["symbol:ExactTarget"];
+      },
+    );
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedContext",
+      async (): Promise<ContextSeedResult> => ({
+        candidates: [
+          {
+            contextRef: "symbol:ExactTarget",
+            source: "lexical",
+            score: 1,
+            sourceRank: 0,
+            expansionReason: "namedConcept",
+          },
+        ],
+        sources: { semantic: 0, lexical: 1, feedback: 0 },
+      }),
+    );
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [],
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskType: "explain",
+        taskText: "Explain ExactTarget",
+        budget: { maxTokens: 700 },
+        options: { contextMode: "broad", semantic: false },
+      }),
+    );
+    const references = result.finalEvidence.map(({ reference }) => reference);
+
+    assert.ok(result.truncation, "fixture must exercise final budget selection");
+    assert.ok(references.includes("hotpath:secondary-a"), references.join(","));
+    assert.equal(references.includes("symbol:card-only"), false);
+    assert.equal(references.includes("hotpath:secondary-c"), false);
+    assert.equal(references.includes("hotpath:secondary-d"), false);
+  });
+
+  const unchangedCases: Array<{
+    name: string;
+    taskText: string;
+    options?: AgentTask["options"];
+    directExact: boolean;
+    expansionReason?: string;
+    candidateRef?: string;
+    expectTrackingSet: boolean;
+    expectExactSeedCall?: boolean;
+  }> = [
+    {
+      name: "generic task text",
+      taskText: "Explain the relevant implementation",
+      directExact: false,
+      expectTrackingSet: false,
+    },
+    {
+      name: "multiple high-signal identifiers",
+      taskText: "Explain ExactTarget and OtherTarget",
+      directExact: false,
+      expectTrackingSet: false,
+    },
+    {
+      name: "explicit focus symbols",
+      taskText: "Explain ExactTarget",
+      options: {
+        contextMode: "broad",
+        focusSymbols: ["ExactTarget"],
+      },
+      directExact: true,
+      expansionReason: "namedConcept",
+      expectTrackingSet: false,
+    },
+    {
+      name: "explicit focus paths",
+      taskText: "Explain ExactTarget",
+      options: {
+        contextMode: "broad",
+        focusPaths: ["src/explicit.ts"],
+      },
+      directExact: false,
+      expansionReason: "namedConcept",
+      expectTrackingSet: false,
+      expectExactSeedCall: false,
+    },
+    {
+      name: "precise mode",
+      taskText: "Explain ExactTarget",
+      options: { contextMode: "precise" },
+      directExact: true,
+      expansionReason: "namedConcept",
+      expectTrackingSet: false,
+    },
+    {
+      name: "fuzzy or ambiguous resolution",
+      taskText: "Explain ExactTarget",
+      directExact: false,
+      expansionReason: "namedConcept",
+      expectTrackingSet: true,
+    },
+    {
+      name: "missing named-concept provenance",
+      taskText: "Explain ExactTarget",
+      directExact: true,
+      expansionReason: "queryResult",
+      candidateRef: "symbol:related-only",
+      expectTrackingSet: true,
+    },
+  ];
+
+  for (const testCase of unchangedCases) {
+    it(`keeps evidence order unchanged for ${testCase.name}`, async () => {
+      const evidence = unchangedExactIdentifierEvidence();
+      let exactSeedCalled = false;
+      let capturedDirectExactRefs: Set<string> | undefined;
+
+      mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+      mock.method(Planner.prototype, "plan", () => defaultPath);
+      mock.method(Planner.prototype, "selectContext", () => []);
+      mock.method(
+        ContextEngine.prototype as Record<string, unknown>,
+        "seedExactMentionedSymbols",
+        async (
+          _task: AgentTask,
+          _mentioned?: string[],
+          directExactRefs?: Set<string>,
+        ) => {
+          exactSeedCalled = true;
+          capturedDirectExactRefs = directExactRefs;
+          if (testCase.directExact) {
+            directExactRefs?.add("symbol:ExactTarget");
+          }
+          return ["symbol:ExactTarget"];
+        },
+      );
+      mock.method(
+        ContextEngine.prototype as Record<string, unknown>,
+        "seedContext",
+        async (): Promise<ContextSeedResult> => ({
+          candidates: [
+            {
+              contextRef: testCase.candidateRef ?? "symbol:ExactTarget",
+              source: "lexical",
+              score: 1,
+              sourceRank: 0,
+              ...(testCase.expansionReason
+                ? { expansionReason: testCase.expansionReason }
+                : {}),
+            },
+          ],
+          sources: { semantic: 0, lexical: 1, feedback: 0 },
+        }),
+      );
+      mock.method(Executor.prototype, "execute", async () => ({
+        actions: [],
+        evidence,
+        success: true,
+      }));
+      mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+      mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+      const result = await new ContextEngine().buildContext(
+        createTask({
+          taskType: "explain",
+          taskText: testCase.taskText,
+          options: testCase.options ?? {
+            contextMode: "broad",
+            semantic: false,
+          },
+        }),
+      );
+
+      assert.equal(exactSeedCalled, testCase.expectExactSeedCall !== false);
+      if (exactSeedCalled) {
+        assert.equal(
+          capturedDirectExactRefs !== undefined,
+          testCase.expectTrackingSet,
+        );
+      }
+      assert.deepEqual(
+        result.finalEvidence.map(({ reference }) => reference),
+        evidence.map(({ reference }) => reference),
+      );
+    });
+  }
+
+  it("keeps evidence unchanged when the exact subject has only a card", async () => {
+    const evidence = unchangedExactIdentifierEvidence().filter(
+      ({ reference }) => reference !== "hotpath:ExactTarget",
+    );
+
+    mock.method(Planner.prototype, "validateTask", () => ({ valid: true }));
+    mock.method(Planner.prototype, "plan", () => defaultPath);
+    mock.method(Planner.prototype, "selectContext", () => []);
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedExactMentionedSymbols",
+      async (
+        _task: AgentTask,
+        _mentioned?: string[],
+        directExactRefs?: Set<string>,
+      ) => {
+        directExactRefs?.add("symbol:ExactTarget");
+        return ["symbol:ExactTarget"];
+      },
+    );
+    mock.method(
+      ContextEngine.prototype as Record<string, unknown>,
+      "seedContext",
+      async (): Promise<ContextSeedResult> => ({
+        candidates: [
+          {
+            contextRef: "symbol:ExactTarget",
+            source: "lexical",
+            score: 1,
+            sourceRank: 0,
+            expansionReason: "namedConcept",
+          },
+        ],
+        sources: { semantic: 0, lexical: 1, feedback: 0 },
+      }),
+    );
+    mock.method(Executor.prototype, "execute", async () => ({
+      actions: [],
+      evidence,
+      success: true,
+    }));
+    mock.method(Executor.prototype, "getMetrics", () => defaultMetrics);
+    mock.method(Executor.prototype, "getNextBestAction", () => "none");
+
+    const result = await new ContextEngine().buildContext(
+      createTask({
+        taskType: "explain",
+        taskText: "Explain ExactTarget",
+        options: { contextMode: "broad", semantic: false },
+      }),
+    );
+
+    assert.deepEqual(
+      result.finalEvidence.map(({ reference }) => reference),
+      evidence.map(({ reference }) => reference),
+    );
   });
 
   it("lets exact symbol mention seeds override inferred paths in precise mode", async () => {

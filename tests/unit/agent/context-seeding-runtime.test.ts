@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it, mock } from "node:test";
 
 import type {
   AgentTask,
   ContextSeedCandidate,
   ContextSeedResult,
+  Evidence,
 } from "../../../dist/agent/types.js";
 
 const REPO_ID = "context-seeding-runtime-repo";
@@ -46,6 +47,27 @@ let ContextEngineClass: typeof import(
   "../../../dist/agent/context-engine.js"
 ).ContextEngine;
 let closeLadybugDb: () => Promise<void>;
+
+type ExactSeedHarness = {
+  seedExactMentionedSymbols(
+    task: AgentTask,
+    mentioned?: string[],
+    directExactRefs?: Set<string>,
+  ): Promise<string[]>;
+};
+
+function seedExact(
+  engine: object,
+  task: AgentTask,
+  mentioned?: string[],
+  directExactRefs?: Set<string>,
+): Promise<string[]> {
+  return (engine as ExactSeedHarness).seedExactMentionedSymbols(
+    task,
+    mentioned,
+    directExactRefs,
+  );
+}
 
 const previousConfig = process.env.SDL_CONFIG;
 const previousConfigPath = process.env.SDL_CONFIG_PATH;
@@ -198,6 +220,37 @@ describe("context seeding runtime lanes", () => {
         signatureJson: null,
         summary: `Quasar theta propagation candidate ${index}`,
         searchText: `quasar theta propagation candidate ${index}`,
+        invariantsJson: null,
+        sideEffectsJson: null,
+        updatedAt: now,
+      });
+    }
+
+    const exactSymbols = [
+      ["exact-unique", "UniqueExactTarget"],
+      ["exact-duplicate-a", "DuplicateExactTarget"],
+      ["exact-duplicate-b", "DuplicateExactTarget"],
+      ["exact-alias", "handleAliasTarget"],
+      ["exact-fuzzy-neighbor", "FuzzyExactTarget"],
+    ] as const;
+    for (const [index, [symbolId, name]] of exactSymbols.entries()) {
+      await queries.upsertSymbol(conn, {
+        symbolId,
+        repoId: REPO_ID,
+        fileId: "file-quasar",
+        kind: "function",
+        name,
+        exported: true,
+        visibility: "public",
+        language: "typescript",
+        rangeStartLine: index + 10,
+        rangeStartCol: 0,
+        rangeEndLine: index + 10,
+        rangeEndCol: 1,
+        astFingerprint: `${symbolId}-fingerprint`,
+        signatureJson: null,
+        summary: `${name} exact seed fixture`,
+        searchText: `${name} exact seed fixture`,
         invariantsJson: null,
         sideEffectsJson: null,
         updatedAt: now,
@@ -524,6 +577,157 @@ describe("context seeding runtime lanes", () => {
 
     assert.equal(result.diagnosticTimings?.["seed.semanticEntitySearch"], undefined);
     assert.ok(result.diagnosticTimings?.["seed.lexicalFallback"] !== undefined);
+  });
+
+  it("tracks one unique exact identifier from the production query", async () => {
+    const directExactRefs = new Set<string>();
+    const refs = await seedExact(
+      new ContextEngineClass(),
+      {
+        repoId: REPO_ID,
+        taskType: "explain",
+        taskText: "Explain UniqueExactTarget",
+      },
+      undefined,
+      directExactRefs,
+    );
+
+    assert.deepEqual([...directExactRefs], ["symbol:exact-unique"]);
+    assert.ok(refs.includes("symbol:exact-unique"));
+  });
+
+  it("tags an existing broad production seed so exact evidence narrowing is reachable", async () => {
+    const evidence: Evidence[] = [
+      {
+        type: "searchResult",
+        reference: "search:kept",
+        summary: "Search result kept",
+        timestamp: 1,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:secondary-a",
+        summary: "Secondary A card",
+        timestamp: 2,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:exact-unique",
+        summary: "Unique exact target card",
+        timestamp: 3,
+      },
+      {
+        type: "skeleton",
+        reference: "symbol:secondary-a",
+        summary: "Secondary A skeleton",
+        timestamp: 4,
+      },
+      {
+        type: "hotPath",
+        reference: "hotpath:exact-unique",
+        summary: "Hot path (1 match): unique exact target",
+        timestamp: 5,
+      },
+      {
+        type: "symbolCard",
+        reference: "symbol:card-only",
+        summary: "Unrelated card-only expansion",
+        timestamp: 6,
+      },
+    ];
+    const task: AgentTask = {
+      repoId: REPO_ID,
+      taskType: "explain",
+      taskText: "Explain UniqueExactTarget",
+      options: { contextMode: "broad", semantic: false },
+    };
+    let capturedSeedResult: ContextSeedResult | undefined;
+
+    mock.method(
+      ContextEngineClass.prototype as Record<string, unknown>,
+      "seedContext",
+      async (seedTask: AgentTask) => {
+        capturedSeedResult = await buildSeedContext(seedTask);
+        return capturedSeedResult;
+      },
+    );
+    mock.method(ExecutorClass.prototype, "execute", async () => ({
+      actions: [],
+      evidence,
+      success: true,
+    }));
+
+    try {
+      const result = await new ContextEngineClass().buildContext(task);
+      const exactCandidate = capturedSeedResult?.candidates.find(
+        ({ contextRef }) => contextRef === "symbol:exact-unique",
+      );
+
+      assert.ok(exactCandidate, "fixture must produce the exact broad seed");
+      assert.equal(exactCandidate.expansionReason, "namedConcept");
+      assert.deepEqual(
+        result.finalEvidence.map(({ reference }) => reference),
+        [
+          "symbol:exact-unique",
+          "hotpath:exact-unique",
+          "symbol:secondary-a",
+          "symbol:secondary-a",
+          "search:kept",
+        ],
+      );
+    } finally {
+      mock.restoreAll();
+    }
+  });
+
+  it("does not track a duplicated exact identifier", async () => {
+    const directExactRefs = new Set<string>();
+    await seedExact(
+      new ContextEngineClass(),
+      {
+        repoId: REPO_ID,
+        taskType: "explain",
+        taskText: "Explain DuplicateExactTarget",
+      },
+      undefined,
+      directExactRefs,
+    );
+
+    assert.deepEqual([...directExactRefs], []);
+  });
+
+  it("keeps implementation-alias seeding without treating it as direct exact", async () => {
+    const directExactRefs = new Set<string>();
+    const refs = await seedExact(
+      new ContextEngineClass(),
+      {
+        repoId: REPO_ID,
+        taskType: "explain",
+        taskText: "Explain AliasTarget implementation",
+      },
+      undefined,
+      directExactRefs,
+    );
+
+    assert.deepEqual([...directExactRefs], []);
+    assert.ok(refs.includes("symbol:exact-alias"));
+  });
+
+  it("does not track a fuzzy near-neighbor as an exact identifier", async () => {
+    const directExactRefs = new Set<string>();
+    const refs = await seedExact(
+      new ContextEngineClass(),
+      {
+        repoId: REPO_ID,
+        taskType: "explain",
+        taskText: "Explain FuzzyExactTargot",
+      },
+      undefined,
+      directExactRefs,
+    );
+
+    assert.deepEqual([...directExactRefs], []);
+    assert.equal(refs.includes("symbol:exact-fuzzy-neighbor"), false);
   });
 
   it("keeps a stronger later lexical batch contribution", async () => {

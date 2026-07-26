@@ -22,6 +22,7 @@ import { BROAD_VISIBLE_FIELDS } from "../mcp/context-response-projection.js";
 import {
   buildSeedContext,
   seedResultToContext,
+  tagExistingSeedCandidate,
   inferFocusPathsFromTaskText,
   toPascalCaseIdentifier,
 } from "./context-seeding.js";
@@ -107,6 +108,7 @@ interface ContextFinalizationContext {
   protectedEvidenceReferences?: string[];
   /** Precise-mode direct callers still consume path and metrics when no truncation is needed. */
   preserveUnchangedResult?: boolean;
+  preserveSelectedZeroMatchEvidence?: boolean;
 }
 
 const EVIDENCE_DOMINANCE_RANK: Partial<Record<Evidence["type"], number>> = {
@@ -131,11 +133,12 @@ function optimizeEvidenceForResponse(
   evidence: Evidence[],
   mode: EvidenceOptimizationMode | undefined,
   tokenBudget?: number,
+  preserveZeroMatchEvidence = false,
 ): Evidence[] {
   // Empty hot-path probes are control-flow diagnostics, not useful evidence.
-  const usefulEvidence = evidence.filter(
-    (item) => !isZeroMatchHotPathEvidence(item),
-  );
+  const usefulEvidence = preserveZeroMatchEvidence
+    ? evidence
+    : evidence.filter((item) => !isZeroMatchHotPathEvidence(item));
   if (mode !== "dedupe" && mode !== "budgeted" && mode !== "global") {
     return usefulEvidence;
   }
@@ -194,6 +197,55 @@ function pruneTrailingCardNoise(
       index <= lastRichCardIndex ||
       protectedReferenceSet.has(item.reference),
   );
+}
+
+function narrowSingleExactIdentifierEvidence(
+  evidence: Evidence[],
+  exactReference: string,
+): Evidence[] {
+  const exactSubject = evidenceSubjectKey(exactReference);
+  if (!exactSubject) return evidence;
+
+  const isSymbolEvidence = (item: Evidence): boolean =>
+    item.type === "symbolCard" ||
+    item.type === "skeleton" ||
+    item.type === "hotPath";
+  const isRichEvidence = (item: Evidence): boolean =>
+    (item.type === "skeleton" || item.type === "hotPath") &&
+    !isZeroMatchHotPathEvidence(item);
+  const hasRichExactEvidence = evidence.some(
+    (item) =>
+      isRichEvidence(item) &&
+      evidenceSubjectKey(item.reference) === exactSubject,
+  );
+  if (!hasRichExactEvidence) return evidence;
+
+  const secondarySubjects = new Set<string>();
+  for (const item of evidence) {
+    if (!isRichEvidence(item)) continue;
+    const subject = evidenceSubjectKey(item.reference);
+    if (!subject || subject === exactSubject || secondarySubjects.has(subject)) {
+      continue;
+    }
+    secondarySubjects.add(subject);
+    if (secondarySubjects.size === 2) break;
+  }
+
+  const exactEvidence: Evidence[] = [];
+  const secondaryEvidence: Evidence[] = [];
+  const nonSymbolEvidence: Evidence[] = [];
+  for (const item of evidence) {
+    if (!isSymbolEvidence(item)) {
+      nonSymbolEvidence.push(item);
+      continue;
+    }
+    const subject = evidenceSubjectKey(item.reference);
+    if (subject === exactSubject) exactEvidence.push(item);
+    else if (subject && secondarySubjects.has(subject)) {
+      secondaryEvidence.push(item);
+    }
+  }
+  return [...exactEvidence, ...secondaryEvidence, ...nonSymbolEvidence];
 }
 
 function normalizeEvidenceCandidate(
@@ -561,6 +613,27 @@ function isLikelyExactSymbolMention(identifier: string): boolean {
   );
 }
 
+function extractExactMentionSeedCandidates(taskText: string): string[] {
+  const codeQuoted =
+    taskText
+      .match(/`([A-Za-z_$][A-Za-z0-9_$]*)`/g)
+      ?.map((match) => match.slice(1, -1)) ?? [];
+  const extracted = extractIdentifiersFromText(taskText, taskText).filter(
+    (identifier) =>
+      isLikelyExactSymbolMention(identifier) && taskText.includes(identifier),
+  );
+  return [...new Set([...codeQuoted, ...extracted])];
+}
+
+function extractExactMentionedIdentifiers(taskText: string): string[] {
+  return extractExactMentionSeedCandidates(taskText).filter((identifier) => {
+    const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`,
+    ).test(taskText);
+  });
+}
+
 function implementationAliases(identifier: string): string[] {
   return [`handle${toPascalCaseIdentifier(identifier)}`, identifier];
 }
@@ -652,6 +725,16 @@ export class ContextEngine {
         selectStartedAt,
       );
       let exactMentionSeededPreciseContext = false;
+      const exactMentionedIdentifiers = extractExactMentionedIdentifiers(
+        task.taskText,
+      );
+      const directExactTrackingEligible =
+        task.options?.contextMode !== "precise" &&
+        !hasExplicitScope &&
+        exactMentionedIdentifiers.length === 1;
+      const directExactMentionRefs = directExactTrackingEligible
+        ? new Set<string>()
+        : undefined;
 
       // Exact code identifiers mentioned in task text should anchor the
       // response before broader lexical/semantic seeding. This preserves the
@@ -666,7 +749,11 @@ export class ContextEngine {
       if (shouldSeedExactSymbols) {
         const exactStartedAt = performance.now();
         try {
-          const exactRefs = await this.seedExactMentionedSymbols(task);
+          const exactRefs = await this.seedExactMentionedSymbols(
+            task,
+            exactMentionedIdentifiers,
+            directExactMentionRefs,
+          );
           for (const ref of exactRefs) protectedEvidenceReferences.add(ref);
           exactMentionSeededPreciseContext =
             exactRefs.length > 0 && task.options?.contextMode === "precise";
@@ -712,6 +799,20 @@ export class ContextEngine {
             seedResult.diagnosticTimings,
           );
           seedCandidates = seedResult.candidates;
+          if (
+            directExactTrackingEligible &&
+            directExactMentionRefs?.size === 1
+          ) {
+            const directExactRef =
+              directExactMentionRefs.values().next().value;
+            if (directExactRef) {
+              tagExistingSeedCandidate(
+                seedCandidates,
+                directExactRef,
+                "namedConcept",
+              );
+            }
+          }
           if (hasExplicitFocusPaths && seedCandidates.length > 0) {
             shouldExpandDirectoryFocusPaths = false;
           }
@@ -826,11 +927,30 @@ export class ContextEngine {
             ? "off"
             : "dedupe"
           : evidenceOptimization;
+      const directExactReference =
+        directExactMentionRefs?.size === 1
+          ? directExactMentionRefs.values().next().value
+          : undefined;
+      const responseEvidence =
+        directExactTrackingEligible &&
+        directExactReference !== undefined &&
+        seedCandidates.some(
+          (candidate) =>
+            candidate.contextRef === directExactReference &&
+            candidate.expansionReason === "namedConcept",
+        )
+          ? narrowSingleExactIdentifierEvidence(
+              evidence,
+              directExactReference,
+            )
+          : evidence;
+      const preserveSelectedZeroMatchEvidence = responseEvidence !== evidence;
       const optimizeStartedAt = performance.now();
       const optimizedEvidence = optimizeEvidenceForResponse(
-        evidence,
+        responseEvidence,
         finalEvidenceOptimization,
         task.budget?.maxTokens,
+        preserveSelectedZeroMatchEvidence,
       );
       recordDiagnosticTiming(
         diagnosticTimings,
@@ -973,6 +1093,7 @@ export class ContextEngine {
           clusterExpandedCount,
           evidenceOptimization,
           protectedEvidenceReferences: [...protectedEvidenceReferences],
+          preserveSelectedZeroMatchEvidence,
         },
       );
     } catch (error) {
@@ -1353,6 +1474,7 @@ export class ContextEngine {
           ),
       "budgeted",
       evidenceAllowance,
+      context.preserveSelectedZeroMatchEvidence,
     );
     let candidate = buildEvidenceResult(selectedEvidence);
     let candidateTokens = estimateTokens(JSON.stringify(candidate));
@@ -1440,23 +1562,17 @@ export class ContextEngine {
    * expansion. Natural-language terms are intentionally excluded here; hybrid
    * seeding still owns broad conceptual discovery.
    */
-  private async seedExactMentionedSymbols(task: AgentTask): Promise<string[]> {
-    const codeQuoted =
-      task.taskText
-        .match(/`([A-Za-z_$][A-Za-z0-9_$]*)`/g)
-        ?.map((match) => match.slice(1, -1)) ?? [];
-    const extracted = extractIdentifiersFromText(
-      task.taskText,
-      task.taskText,
-    ).filter(
-      (identifier) =>
-        isLikelyExactSymbolMention(identifier) &&
-        task.taskText.includes(identifier),
-    );
-    const mentioned = [...new Set([...codeQuoted, ...extracted])];
+  private async seedExactMentionedSymbols(
+    task: AgentTask,
+    mentioned = extractExactMentionedIdentifiers(task.taskText),
+    directExactRefs?: Set<string>,
+  ): Promise<string[]> {
+    // Keep legacy seed candidates intact; `mentioned` only narrows the new
+    // direct-uniqueness tracking lane.
+    const seedMentions = extractExactMentionSeedCandidates(task.taskText);
     const inferredCandidates = explicitlyRequestsImplementation(task.taskText)
-      ? mentioned.flatMap(implementationAliases)
-      : mentioned;
+      ? seedMentions.flatMap(implementationAliases)
+      : seedMentions;
     const candidates = [
       ...new Set([
         ...(task.options?.focusSymbols ?? []).filter((mention) =>
@@ -1477,6 +1593,21 @@ export class ContextEngine {
     const focusPaths =
       task.options?.inferredFocusPaths ?? task.options?.focusPaths ?? [];
     for (const name of candidates) {
+      if (
+        directExactRefs &&
+        mentioned.length === 1 &&
+        name === mentioned[0]
+      ) {
+        const directRows = await ladybugDb.findRetrievalSeedSymbolsByName(
+          conn,
+          task.repoId,
+          name,
+          "exact",
+        );
+        if (directRows.length === 1) {
+          directExactRefs.add(`symbol:${directRows[0].symbolId}`);
+        }
+      }
       let row: ExactSymbolCandidate | null | undefined;
       if (focusPaths.length > 0) {
         const rows = await ladybugDb.searchSymbols(conn, task.repoId, name, 50);
