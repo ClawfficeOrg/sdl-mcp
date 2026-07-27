@@ -1,5 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,8 +17,53 @@ import { performance } from "node:perf_hooks";
  * live benchmark index is unavailable.
  */
 
-const CORPUS = (process.env.SDL_CONTEXT_QUALITY_CORPUS ??
-  "sdl-mcp") as BenchmarkCorpus;
+type BenchmarkCorpus = "sdl-mcp" | "neutral";
+
+class BenchmarkProvenanceError extends Error {}
+
+function parseBenchmarkCorpus(value: string | undefined): BenchmarkCorpus {
+  const corpus = value ?? "sdl-mcp";
+  if (corpus !== "sdl-mcp" && corpus !== "neutral") {
+    throw new BenchmarkProvenanceError(
+      `Unknown context quality corpus: ${corpus}`,
+    );
+  }
+  return corpus;
+}
+
+function verifyPinnedCheckoutSha(
+  repoRoot: string,
+  expectedSha: string,
+): string {
+  let actualSha: string;
+  try {
+    actualSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      timeout: 5_000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true,
+    })
+      .trim()
+      .toLowerCase();
+  } catch (error) {
+    throw new BenchmarkProvenanceError(
+      `Unable to resolve context benchmark checkout HEAD for ${repoRoot}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  const normalizedExpectedSha = expectedSha.toLowerCase();
+  if (actualSha !== normalizedExpectedSha) {
+    throw new BenchmarkProvenanceError(
+      `Context benchmark checkout HEAD mismatch for ${repoRoot}: expected ${normalizedExpectedSha}, actual ${actualSha}`,
+    );
+  }
+  return actualSha;
+}
+
+const CORPUS = parseBenchmarkCorpus(process.env.SDL_CONTEXT_QUALITY_CORPUS);
 const REPO_ID = process.env.SDL_CONTEXT_QUALITY_REPO_ID ?? "sdl-mcp";
 const REQUIRE_LIVE_INDEX =
   process.env.SDL_CONTEXT_QUALITY_REQUIRE_INDEX === "1";
@@ -51,8 +97,6 @@ const REPORT_CASE_IDS = new Set([
   "review-broad-tool-contract-relevance",
 ]);
 
-type BenchmarkCorpus = "sdl-mcp" | "neutral";
-
 interface BenchmarkCase {
   id: string;
   corpus?: BenchmarkCorpus;
@@ -72,6 +116,17 @@ interface BenchmarkCase {
   requireAnswer: boolean;
   expectedUsefulSymbols?: string[];
   unexpectedSymbols?: string[];
+}
+
+function assertBenchmarkCasesSelected(
+  corpus: BenchmarkCorpus,
+  selectedCases: readonly BenchmarkCase[],
+): void {
+  if (selectedCases.length === 0) {
+    throw new BenchmarkProvenanceError(
+      `No context quality cases selected for corpus ${corpus}`,
+    );
+  }
 }
 
 interface Evidence {
@@ -460,8 +515,6 @@ function buildBenchmarkManifest(input: {
       JSON.stringify({
         corpus: input.corpus,
         repoSha: input.repoSha,
-        configDigest,
-        graphIntegrityDigest: input.graphIntegrityDigest,
       }),
     )
     .digest("hex")
@@ -1141,6 +1194,7 @@ describe("context quality benchmarks", () => {
     const casesPath = join(import.meta.dirname, "context-quality-cases.json");
     allCases = JSON.parse(readFileSync(casesPath, "utf-8")) as BenchmarkCase[];
     cases = allCases.filter((c) => (c.corpus ?? "sdl-mcp") === CORPUS);
+    assertBenchmarkCasesSelected(CORPUS, cases);
     metrics.totalCases = cases.length;
 
     try {
@@ -1181,6 +1235,17 @@ describe("context quality benchmarks", () => {
       estimateBenchmarkTokens = tokenize.estimateTokens;
       const configPath = activateCliConfigPath(process.env.SDL_CONFIG);
       const config = loadConfig(configPath);
+      const repoConfig = config.repos.find(({ repoId }) => repoId === REPO_ID);
+      if (!repoConfig) {
+        throw new Error(
+          `Context benchmark config does not contain repo ${REPO_ID}`,
+        );
+      }
+      // Pin checkout provenance before LadybugDB opens or restores graph state.
+      const checkoutRepoSha = verifyPinnedCheckoutSha(
+        repoConfig.rootPath,
+        PINNED_REPO_SHA,
+      );
       await initGraphDb(config, configPath);
       closeLadybugDb = ladybug.closeLadybugDb;
       contextEngine = engine.contextEngine;
@@ -1218,7 +1283,7 @@ describe("context quality benchmarks", () => {
       );
       metrics.manifest = buildBenchmarkManifest({
         corpus: CORPUS,
-        repoSha: PINNED_REPO_SHA,
+        repoSha: checkoutRepoSha,
         configText: readFileSync(
           process.env.SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH ?? configPath,
           "utf8",
@@ -1234,6 +1299,7 @@ describe("context quality benchmarks", () => {
       metrics.repoAvailable = true;
       metrics.availabilityReason = `using verified graph for repo ${REPO_ID}`;
     } catch (err) {
+      if (err instanceof BenchmarkProvenanceError) throw err;
       metrics.repoAvailable = false;
       metrics.availabilityReason =
         err instanceof Error ? err.message : String(err);
@@ -1247,6 +1313,22 @@ describe("context quality benchmarks", () => {
   });
 
   describe("case structure validation", () => {
+    it("parses only supported corpus identifiers", () => {
+      assert.equal(parseBenchmarkCorpus(undefined), "sdl-mcp");
+      assert.equal(parseBenchmarkCorpus("neutral"), "neutral");
+      assert.throws(
+        () => parseBenchmarkCorpus("invalid"),
+        /unknown context quality corpus: invalid/i,
+      );
+    });
+
+    it("rejects an empty corpus selection", () => {
+      assert.throws(
+        () => assertBenchmarkCasesSelected("neutral", []),
+        /no context quality cases selected for corpus neutral/i,
+      );
+    });
+
     it("preserves 27 legacy cases and adds the QA and neutral corpora", () => {
       assert.equal(
         allCases.filter(({ id }) => !/^(?:qa|neutral)-/.test(id)).length,
@@ -1420,10 +1502,23 @@ describe("context quality benchmarks", () => {
         graphIntegrityDigest: "b".repeat(64),
       };
       const manifest = buildBenchmarkManifest(input);
+      const relocatedManifest = buildBenchmarkManifest({
+        ...input,
+        configText:
+          '{"graphDatabase":{"path":"D:/disposable-clone/graph.lbug"}}',
+        graphIntegrityDigest: "c".repeat(64),
+      });
       assert.match(manifest.configDigest, /^[a-f0-9]{64}$/);
       assert.equal(buildBenchmarkManifest(input).cacheKey, manifest.cacheKey);
+      assert.notEqual(relocatedManifest.configDigest, manifest.configDigest);
+      assert.equal(relocatedManifest.graphIntegrityDigest, "c".repeat(64));
+      assert.equal(relocatedManifest.cacheKey, manifest.cacheKey);
       assert.notEqual(
         buildBenchmarkManifest({ ...input, corpus: "neutral" }).cacheKey,
+        manifest.cacheKey,
+      );
+      assert.notEqual(
+        buildBenchmarkManifest({ ...input, repoSha: "d".repeat(40) }).cacheKey,
         manifest.cacheKey,
       );
       assert.match(manifest.cacheKey, /corpus-[a-f0-9]{12}$/);
@@ -1431,6 +1526,13 @@ describe("context quality benchmarks", () => {
         () =>
           buildBenchmarkManifest({ ...input, graphIntegrityState: "failed" }),
         /verified graph integrity/i,
+      );
+    });
+
+    it("rejects a checkout whose HEAD differs from the pinned SHA", () => {
+      assert.throws(
+        () => verifyPinnedCheckoutSha(process.cwd(), "0".repeat(40)),
+        /checkout HEAD mismatch.*expected 0{40}.*actual [a-f0-9]{40}/i,
       );
     });
 
