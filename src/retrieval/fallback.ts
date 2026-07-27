@@ -79,20 +79,13 @@ export function buildRetrievalCapabilitiesFromIndexHealth(
 // ---------------------------------------------------------------------------
 
 /**
- * Probe the current runtime to determine which retrieval backends are
- * available.
+ * Inspect strict retrieval health for the active database and repository.
  *
- * Fast path: if the underlying extension is not loaded the corresponding
- * index cannot exist, so we short-circuit to `false` without hitting the
- * database.  When the extension *is* loaded we query the actual FTS and
- * vector indexes via {@link checkIndexHealth} so the returned capabilities
- * reflect reality rather than just theoretical availability.
+ * The strict health checker validates the real FTS and vector indexes against
+ * the active semantic configuration. If inspection fails, this adapter returns
+ * unavailable capabilities with a degradation reason so callers fail closed.
  *
- * If the index health check fails for any reason (e.g. the DB is not
- * initialised yet) we fall back to the extension-based proxy so the
- * caller still gets a best-effort answer.
- *
- * @param _repoId - Repository ID (reserved for future per-repo index scoping).
+ * @param repoId - Repository ID used for repository-scoped health inspection.
  */
 export async function checkRetrievalHealth(
   repoId = "",

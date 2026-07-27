@@ -103,6 +103,20 @@ describe("request-scoped retrieval work", () => {
     );
   });
 
+  it("uses the stable ID tie-break for non-finite vector distances", () => {
+    const rows = [
+      { node: { symbolId: "b" }, distance: Number.POSITIVE_INFINITY },
+      { node: { symbolId: "a" }, distance: Number.POSITIVE_INFINITY },
+    ];
+
+    for (const permutation of [rows, [...rows].reverse()]) {
+      assert.deepEqual(
+        sortVectorRowsByDistance(permutation).map((row) => row.node?.symbolId),
+        ["a", "b"],
+      );
+    }
+  });
+
   it("runs zero downstream work when graph integrity rejects admission", async () => {
     const conn = {} as unknown as Connection;
     let healthCalls = 0;

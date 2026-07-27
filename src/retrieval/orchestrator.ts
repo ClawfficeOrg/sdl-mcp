@@ -107,6 +107,7 @@ const DEFAULT_FTS_TOP_K = 75;
 const DEFAULT_FTS_BM25_K = 1.2;
 const DEFAULT_VECTOR_TOP_K = 75;
 const DEFAULT_FTS_INDEX_NAME = "symbol_search_text_v1";
+const FTS_SCORE_QUANTIZATION = 1_000_000_000_000;
 // ---------------------------------------------------------------------------
 // FTS retrieval
 // ---------------------------------------------------------------------------
@@ -259,15 +260,40 @@ export function getOrCreateEmbeddingPromise(
   return created;
 }
 
+function quantizedFtsScore(row: FtsRawRow): number {
+  const score = Number(row.score ?? row._score);
+  return Number.isFinite(score)
+    ? Math.round(score * FTS_SCORE_QUANTIZATION)
+    : Number.NEGATIVE_INFINITY;
+}
+
+/** Order raw FTS rows by score and logical identity before assigning ranks. */
+function sortFtsRowsByScore(
+  rows: readonly FtsRawRow[],
+  identity: (row: FtsRawRow) => string,
+): FtsRawRow[] {
+  return [...rows].sort((a, b) => {
+    const aScore = quantizedFtsScore(a);
+    const bScore = quantizedFtsScore(b);
+    if (aScore !== bScore) {
+      return aScore > bScore ? -1 : 1;
+    }
+    const aId = identity(a);
+    const bId = identity(b);
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  });
+}
+
 /** Order raw HNSW results before assigning ranks; Ladybug does not guarantee order. */
 export function sortVectorRowsByDistance(
   rows: readonly VectorRawRow[],
   idField = "symbolId",
 ): VectorRawRow[] {
   return [...rows].sort((a, b) => {
-    const distanceOrder = vectorDistance(a) - vectorDistance(b);
-    if (distanceOrder !== 0) {
-      return distanceOrder;
+    const aDistance = vectorDistance(a);
+    const bDistance = vectorDistance(b);
+    if (aDistance !== bDistance) {
+      return aDistance < bDistance ? -1 : 1;
     }
     const aId = vectorRowId(a, idField);
     const bId = vectorRowId(b, idField);
@@ -597,11 +623,10 @@ export async function hybridSearch(
 
     if (ftsRows.length > 0) {
       const ranks = new Map<string, number>();
-      for (let i = 0; i < ftsRows.length; i++) {
-        const sid =
-          ftsRows[i].symbolId ??
-          ftsRows[i].node?.symbolId ??
-          ftsRows[i]._node?.symbolId;
+      const rowIdentity = (row: FtsRawRow) => vectorRowId(row);
+      const rankedRows = sortFtsRowsByScore(ftsRows, rowIdentity);
+      for (let i = 0; i < rankedRows.length; i++) {
+        const sid = rowIdentity(rankedRows[i]);
         if (sid && !ranks.has(sid)) {
           ranks.set(sid, i + 1); // 1-based rank
         }
@@ -1086,14 +1111,11 @@ export async function entitySearch(
 
       if (ftsRows.length > 0) {
         const ranks = new Map<string, number>();
-        for (let i = 0; i < ftsRows.length; i++) {
-          // ID field varies by entity type; fall back through defensive paths.
-          const idVal =
-            ((ftsRows[i] as Record<string, unknown>)[entityCfg.idField] as
-              | string
-              | undefined) ??
-            (ftsRows[i].node?.[entityCfg.idField] as string | undefined) ??
-            (ftsRows[i]._node?.[entityCfg.idField] as string | undefined);
+        const rowIdentity = (row: FtsRawRow) =>
+          vectorRowId(row, entityCfg.idField);
+        const rankedRows = sortFtsRowsByScore(ftsRows, rowIdentity);
+        for (let i = 0; i < rankedRows.length; i++) {
+          const idVal = rowIdentity(rankedRows[i]);
           if (idVal && !ranks.has(idVal)) {
             ranks.set(idVal, i + 1); // 1-based rank
           }
