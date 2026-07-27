@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { basename } from "path";
+import { tmpdir } from "os";
+import { basename, join } from "path";
 
 import { handleInfo, redactInfoPaths } from "../../dist/mcp/tools/info.js";
 
@@ -72,6 +73,32 @@ describe("handleInfo path redaction", () => {
       "Log path fallback in use: <redacted>",
       "Unrelated warning",
     ]);
+  });
+
+  it("redacts a missing config path from the complete response", async () => {
+    const previousConfig = process.env.SDL_CONFIG;
+    const missingConfigPath = join(
+      tmpdir(),
+      `sdl-info-redaction-missing-${process.pid}`,
+      "private",
+      "sdl.config.json",
+    );
+    try {
+      process.env.SDL_CONFIG = missingConfigPath;
+      const redacted = await handleInfo({ redactPaths: true });
+
+      assert.equal(redacted.config.path, basename(missingConfigPath));
+      assert.equal(
+        JSON.stringify(redacted).includes(missingConfigPath),
+        false,
+      );
+      assert.deepEqual(redacted.misconfigurations, [
+        `Config file not found: ${basename(missingConfigPath)}`,
+      ]);
+    } finally {
+      if (previousConfig === undefined) delete process.env.SDL_CONFIG;
+      else process.env.SDL_CONFIG = previousConfig;
+    }
   });
 
   it("leaves non-path fields untouched when redactPaths: true", async () => {

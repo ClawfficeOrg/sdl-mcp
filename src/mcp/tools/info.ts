@@ -25,17 +25,26 @@ export async function handleInfo(args?: unknown): Promise<InfoReport> {
 export function redactInfoPaths(report: InfoReport): InfoReport {
   const redact = (p: string | null): string | null =>
     p === null ? null : basename(p);
+  const pathReplacements: Array<[string | null, string]> = [
+    [report.config.path, basename(report.config.path)],
+    [report.logging.path, "<redacted>"],
+    [report.ladybug.activePath, basename(report.ladybug.activePath ?? "")],
+    [report.native.sourcePath, basename(report.native.sourcePath ?? "")],
+  ];
+  // Free-form diagnostics can echo structured paths, so scrub the same known
+  // values before returning a response intended for multi-tenant callers.
+  const redactDiagnostic = (message: string): string =>
+    pathReplacements.reduce(
+      (redacted, [path, replacement]) =>
+        path ? redacted.replaceAll(path, replacement) : redacted,
+      message,
+    );
   return {
     ...report,
     config: { ...report.config, path: basename(report.config.path) },
     logging: { ...report.logging, path: report.logging.path === null ? null : "<redacted>" },
-    warnings: report.logging.path === null
-      ? report.warnings
-      : report.warnings.map((warning) =>
-          warning === `Log path fallback in use: ${report.logging.path}`
-            ? "Log path fallback in use: <redacted>"
-            : warning,
-        ),
+    warnings: report.warnings.map(redactDiagnostic),
+    misconfigurations: report.misconfigurations.map(redactDiagnostic),
     ladybug: {
       ...report.ladybug,
       activePath: redact(report.ladybug.activePath),
@@ -43,6 +52,7 @@ export function redactInfoPaths(report: InfoReport): InfoReport {
     native: {
       ...report.native,
       sourcePath: redact(report.native.sourcePath),
+      reason: redactDiagnostic(report.native.reason),
     },
   };
 }
