@@ -49,10 +49,9 @@ import type {
   GraphSlice,
 } from "../domain/types.js";
 import { logger } from "../util/logger.js";
-import {
-  checkRetrievalHealth,
-  isHybridRetrievalAvailable,
-} from "../retrieval/fallback.js";
+import { loadConfig } from "../config/loadConfig.js";
+import { isHybridRetrievalAvailable } from "../retrieval/fallback.js";
+import { checkRetrievalHealth } from "../retrieval/health.js";
 import {
   createRetrievalQueryContext,
   getOrCreateHealthPromise,
@@ -1309,11 +1308,12 @@ export class Executor {
           task.options?.semantic !== false &&
           (await isHybridRetrievalAvailable(task.repoId, async () => {
             const conn = await this.getConn();
+            const semanticConfig = loadConfig().semantic;
             return runAfterGraphRetrievalAdmission(conn, task.repoId, () =>
               getOrCreateHealthPromise(
                 queryContext,
                 task.repoId,
-                () => checkRetrievalHealth(task.repoId),
+                () => checkRetrievalHealth(conn, task.repoId, semanticConfig),
               ),
             );
           }));

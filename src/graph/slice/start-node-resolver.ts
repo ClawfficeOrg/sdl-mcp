@@ -18,10 +18,9 @@ import type { Connection } from "kuzu";
 import type { RepoId, SymbolId } from "../../domain/types.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import { tokenize } from "../../util/tokenize.js";
-import {
-  checkRetrievalHealth,
-  isHybridRetrievalAvailable,
-} from "../../retrieval/fallback.js";
+import { loadConfig } from "../../config/loadConfig.js";
+import { isHybridRetrievalAvailable } from "../../retrieval/fallback.js";
+import { checkRetrievalHealth } from "../../retrieval/health.js";
 import { logger } from "../../util/logger.js";
 import {
   createRetrievalQueryContext,
@@ -485,12 +484,13 @@ export async function resolveStartNodesLadybug(
     : limits.maxTaskTextStartNodes;
 
   // Check once, after graph admission, and share the promise with every lane.
+  const semanticConfig = loadConfig().semantic;
   const useHybrid = await isHybridRetrievalAvailable(repoId, () =>
     runAfterGraphRetrievalAdmission(conn, repoId, () =>
       getOrCreateHealthPromise(
         queryContext,
         repoId,
-        () => checkRetrievalHealth(repoId),
+        () => checkRetrievalHealth(conn, repoId, semanticConfig),
       ),
     ),
   );
