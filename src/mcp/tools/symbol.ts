@@ -35,12 +35,12 @@ import {
 } from "../../live-index/overlay-reader.js";
 
 import {
-  checkRetrievalHealth,
   createRetrievalQueryContext,
   getOrCreateHealthPromise,
   runAfterGraphRetrievalAdmission,
   shouldFallbackToLegacy,
 } from "../../retrieval/index.js";
+import { checkRetrievalHealth } from "../../retrieval/health.js";
 import type { RetrievalEvidence } from "../../retrieval/types.js";
 import { autoExtractMentions } from "../../retrieval/seed-resolver.js";
 import { logger } from "../../util/logger.js";
@@ -52,6 +52,7 @@ import {
   resolveSymbolRef,
   type SymbolRefResolution,
 } from "../../util/resolve-symbol-ref.js";
+import { IndexError } from "../../domain/errors.js";
 import { DatabaseError, NotFoundError, ValidationError } from "../errors.js";
 import type { ToolContext } from "../../server.js";
 
@@ -356,7 +357,8 @@ export async function handleSymbolSearch(
       const caps = await getOrCreateHealthPromise(
         queryContext,
         request.repoId,
-        () => checkRetrievalHealth(request.repoId),
+        () =>
+          checkRetrievalHealth(conn, request.repoId, semanticConfig),
       );
       if (!shouldFallbackToLegacy(caps, retrievalConfig)) {
         useHybrid = true;
@@ -408,6 +410,7 @@ export async function handleSymbolSearch(
       retrievalEvidence = evidence;
       semanticEnabled = true;
     } catch (err) {
+      if (err instanceof IndexError) throw err;
       // Graceful degradation: fall back to legacy search
       logger.warn(
         `[symbol.search] Hybrid search failed, falling back to legacy: ${err instanceof Error ? err.message : String(err)}`,

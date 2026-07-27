@@ -1033,13 +1033,21 @@ export async function entitySearch(
   const fusionStart = performance.now();
 
   // ----- FTS retrieval (per entity type) -----
-  if (ftsEnabled && caps.fts) {
+  if (ftsEnabled && (caps.fts || caps.fileSummaryFts)) {
     const ftsTopK = config.fts.topK ?? DEFAULT_FTS_TOP_K;
     const ftsConjunctive = config.fts.conjunctive ?? false;
 
     for (const entityType of entityTypes) {
       const entityCfg = ENTITY_FTS_CONFIG[entityType];
       if (!entityCfg) continue; // skip unknown entity types
+      const entityFtsAvailable =
+        entityType === "fileSummary" ? caps.fileSummaryFts : caps.fts;
+      if (!entityFtsAvailable) {
+        logger.debug(
+          `[entity-search] Skipping FTS for '${entityType}' -- capability unavailable`,
+        );
+        continue;
+      }
       // Use the per-entity FTS index name; fall back to the symbol default for
       // "symbol" so that a config override on config.fts.indexName still applies.
       const indexName =
@@ -1107,13 +1115,30 @@ export async function entitySearch(
 
     for (const [modelName, modelInfo] of Object.entries(EMBEDDING_MODELS)) {
       const source = vectorSourceForModel(modelName);
-      const capAvailable =
+      const legacyModelAvailable =
         (source === "vector:nomic" && caps.vectorNomic) ||
         (source === "vector:jinacode" && caps.vectorJinaCode);
+      const vectorEntityTypes = entityTypes.filter((entityType) => {
+        if (!ENTITY_VECTOR_CONFIG[entityType]?.[modelName]) return false;
+        if (entityType === "symbol") {
+          const symbolAvailability = caps.vectorByEntityModel?.symbol;
+          return symbolAvailability
+            ? symbolAvailability[modelName] === true
+            : legacyModelAvailable;
+        }
+        if (entityType === "fileSummary") {
+          const fileSummaryAvailability =
+            caps.vectorByEntityModel?.fileSummary;
+          return fileSummaryAvailability
+            ? fileSummaryAvailability[modelName] === true
+            : legacyModelAvailable;
+        }
+        return legacyModelAvailable;
+      });
 
-      if (!capAvailable) {
+      if (vectorEntityTypes.length === 0) {
         logger.debug(
-          `[entity-search] Skipping vector model '${modelName}' -- capability unavailable`,
+          `[entity-search] Skipping vector model '${modelName}' -- capability unavailable for requested entities`,
         );
         continue;
       }
@@ -1173,8 +1198,8 @@ export async function entitySearch(
         );
       }
 
-      // Query each entity type that supports this model's vector index.
-      for (const entityType of entityTypes) {
+      // Query only entity types with an exact healthy index for this model.
+      for (const entityType of vectorEntityTypes) {
         const entityVecCfg = ENTITY_VECTOR_CONFIG[entityType]?.[modelName];
         if (!entityVecCfg) {
           // This entity type has no vector index for this model.
@@ -1273,14 +1298,23 @@ export async function entitySearch(
     };
   }
 
-  const entityVectorCoveragePermille = Math.min(
-    entityTypes.includes("symbol")
-      ? caps.coveragePermille.symbolVector
-      : 1000,
-    entityTypes.includes("fileSummary")
-      ? caps.coveragePermille.fileSummaryVector
-      : 1000,
+  const vectorEntityTypes = new Set(
+    rankings
+      .filter((ranking) => ranking.source.startsWith("vector:"))
+      .map((ranking) => ranking.entityType),
   );
+  const activeVectorCoverage = [
+    ...(vectorEntityTypes.has("symbol")
+      ? [caps.coveragePermille.symbolVector]
+      : []),
+    ...(vectorEntityTypes.has("fileSummary")
+      ? [caps.coveragePermille.fileSummaryVector]
+      : []),
+  ];
+  const entityVectorCoveragePermille =
+    activeVectorCoverage.length > 0
+      ? Math.min(...activeVectorCoverage)
+      : 1000;
   const fusedResults = rrfFuseEntities(rankings, rrfK, limit, {
     weights: coverageAdjustedFusionWeights(
       config.fusion.weights,

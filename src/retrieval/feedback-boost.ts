@@ -14,6 +14,8 @@
 
 import type { Connection } from "kuzu";
 
+import type { RetrievalQueryContext } from "./types.js";
+
 /**
  * Parsed feedback result with extracted fields for boost computation.
  */
@@ -76,6 +78,7 @@ export function mergeFeedbackBoosts(
 export async function queryFeedbackBoosts(
   conn: Connection,
   options: FeedbackBoostOptions,
+  queryContext?: RetrievalQueryContext,
 ): Promise<{
   boosts: Map<string, number>;
   feedbackHits: FeedbackBoostResult[];
@@ -95,13 +98,16 @@ export async function queryFeedbackBoosts(
       return { boosts: new Map(), feedbackHits: [] };
     }
 
-    const searchResult = await entitySearch({
-      repoId: options.repoId,
-      query: options.query,
-      limit,
-      entityTypes: ["agentFeedback"],
-      includeEvidence: false,
-    });
+    const searchResult = await entitySearch(
+      {
+        repoId: options.repoId,
+        query: options.query,
+        limit,
+        entityTypes: ["agentFeedback"],
+        includeEvidence: false,
+      },
+      queryContext,
+    );
 
     if (searchResult.results.length === 0) {
       return { boosts: new Map(), feedbackHits: [] };

@@ -18,6 +18,8 @@ export interface SemanticEmbeddingModelPlan {
   profile: SemanticEmbeddingProfile;
   symbolEmbeddingModels: string[];
   fileSummaryEmbeddingModels: string[];
+  unsupportedSymbolEmbeddingModels: string[];
+  unsupportedFileSummaryEmbeddingModels: string[];
   unsupportedModels: string[];
 }
 
@@ -106,6 +108,8 @@ export function resolveSemanticEmbeddingModelPlan(
     profile,
     symbolEmbeddingModels: symbol.supported,
     fileSummaryEmbeddingModels: fileSummary.supported,
+    unsupportedSymbolEmbeddingModels: symbol.unsupported,
+    unsupportedFileSummaryEmbeddingModels: fileSummary.unsupported,
     unsupportedModels,
   };
 }

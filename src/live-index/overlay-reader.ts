@@ -500,15 +500,28 @@ export async function searchSymbolsHybridWithOverlay(
     }));
   const merged = mergeSearchResults(durableRows, rankedOverlayRows, query, limit);
 
-  // 5. Update evidence with overlay-only candidate count.
-  const overlayOnlyCount = overlayRows.filter((r) => r.overlayOnly).length;
-  const evidence = hybridResult.evidence;
-  if (evidence && overlayOnlyCount > 0) {
-    evidence.candidateCountPerSource = {
-      ...evidence.candidateCountPerSource,
-      overlay: overlayOnlyCount,
-    };
-  }
+  // 5. Preserve overlay provenance without mutating durable evidence.
+  const overlayCandidateCount = overlayRows.length;
+  const overlayTopRanks = merged.flatMap((row, index) =>
+    row.sourceRanks?.overlay !== undefined ? [index + 1] : [],
+  );
+  const evidence =
+    hybridResult.evidence && overlayCandidateCount > 0
+      ? {
+          ...hybridResult.evidence,
+          sources: Array.from(
+            new Set([...hybridResult.evidence.sources, "overlay" as const]),
+          ),
+          topRanksPerSource: {
+            ...hybridResult.evidence.topRanksPerSource,
+            overlay: overlayTopRanks,
+          },
+          candidateCountPerSource: {
+            ...hybridResult.evidence.candidateCountPerSource,
+            overlay: overlayCandidateCount,
+          },
+        }
+      : hybridResult.evidence;
 
   return { rows: merged, evidence };
 }

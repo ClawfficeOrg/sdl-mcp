@@ -88,6 +88,22 @@ export interface RetrievalCapabilities {
   fileSummaryFts: boolean;
   vectorNomic: boolean;
   vectorJinaCode: boolean;
+  /**
+   * Exact vector availability for entity/model lanes. Optional only for
+   * compatibility with older internal fixtures; strict health always sets it.
+   */
+  vectorByEntityModel?: {
+    symbol: Record<string, boolean>;
+    fileSummary: Record<string, boolean>;
+  };
+  /**
+   * Internal per-model coverage diagnostics. This is never copied into public
+   * retrieval evidence or score payloads.
+   */
+  modelCoveragePermille?: {
+    symbol: Record<string, number>;
+    fileSummary: Record<string, number>;
+  };
   /** Per-logical-source embedding coverage, rounded once to integer permille. */
   coveragePermille: {
     symbolVector: number;

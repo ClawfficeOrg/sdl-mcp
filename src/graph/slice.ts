@@ -130,7 +130,8 @@ export async function buildSlice(
   // -----------------------------------------------------------------------
   const cachedGraph = getGraphSnapshot(request.repoId);
 
-  const queryContext = createRetrievalQueryContext();
+  const queryContext =
+    request.queryContext ?? createRetrievalQueryContext();
   const startNodeResult = await resolveStartNodesLadybug(
     conn,
     request.repoId,

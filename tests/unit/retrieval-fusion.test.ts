@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  buildEntityEvidence,
   coverageAdjustedFusionWeights,
   rrfFuse,
   rrfFuseEntities,
@@ -201,6 +202,32 @@ describe("weighted entity fusion", () => {
         ["symbol", "same-id"],
       ],
     );
+  });
+
+  it("uses typed deterministic evidence keys for shared physical sources", () => {
+    const rankings = [
+      entityRanking("fts", "symbol", [["same-id", 1]]),
+      entityRanking("fts", "fileSummary", [["same-id", 1]]),
+    ];
+    const fused = rrfFuseEntities(rankings, 60, 10, {
+      weights: equalWeights,
+    });
+    const evidence = buildEntityEvidence(rankings, fused, 0);
+
+    assert.deepEqual(evidence.topRanksPerSource, {
+      "fts:fileSummary": [1],
+      "fts:symbol": [2],
+    });
+    assert.deepEqual(evidence.candidateCountPerSource, { fts: 2 });
+
+    const reversed = buildEntityEvidence(
+      [...rankings].reverse(),
+      rrfFuseEntities([...rankings].reverse(), 60, 10, {
+        weights: equalWeights,
+      }),
+      0,
+    );
+    assert.deepEqual(reversed, evidence);
   });
 
   it("emits typed entity pins even when ordinary lanes do not contain them", () => {

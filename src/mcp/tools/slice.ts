@@ -21,7 +21,10 @@ import { buildSlice } from "../../graph/slice.js";
 import type { RetrievalSource } from "../../retrieval/types.js";
 import { getBeamExplainStore } from "../../observability/index.js";
 import { classifySymptomType } from "../../retrieval/evidence.js";
-import { entitySearch } from "../../retrieval/index.js";
+import {
+  createRetrievalQueryContext,
+  entitySearch,
+} from "../../retrieval/index.js";
 import {
   type SliceErrorResponse,
   sliceErrorToResponse,
@@ -277,6 +280,7 @@ async function handleSliceBuildInternal(
     memoryLimit,
     includeRetrievalEvidence,
   } = request;
+  const queryContext = createRetrievalQueryContext();
 
   const memCaps = getMemoryCapabilities(loadConfig(), repoId);
   const shouldIncludeMemories =
@@ -389,6 +393,7 @@ async function handleSliceBuildInternal(
     const sliceRequest = {
       repoId,
       versionId: latestVersion.versionId,
+      queryContext,
       taskText,
       stackTrace,
       failingTestPath,
@@ -551,13 +556,16 @@ async function handleSliceBuildInternal(
       // Boost memory surfacing with entity retrieval when taskText is provided
       if (taskText) {
         try {
-          const entityResult = await entitySearch({
-            repoId,
-            query: taskText,
-            limit: 10,
-            entityTypes: ["memory"],
-            includeEvidence: false,
-          });
+          const entityResult = await entitySearch(
+            {
+              repoId,
+              query: taskText,
+              limit: 10,
+              entityTypes: ["memory"],
+              includeEvidence: false,
+            },
+            queryContext,
+          );
           if (entityResult.results.length > 0) {
             const existingIds = new Set(
               (slice.memories ?? []).map((m) => m.memoryId),

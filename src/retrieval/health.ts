@@ -26,9 +26,9 @@ import type {
 export interface RequiredRetrievalIndex {
   model?: string;
   tableName: "Symbol" | "FileSummary";
-  name: string;
+  name: string | null;
   type: IndexInfo["type"];
-  property: string;
+  property: string | null;
 }
 
 export interface RequiredRetrievalIndexes {
@@ -44,16 +44,30 @@ export interface CoverageCount {
   indexHealthy: boolean;
 }
 
+interface ModelCoverageCount extends CoverageCount {
+  model: string;
+}
+
 /** Resolve the exact indexes required by the active semantic model plan. */
 export function resolveRequiredRetrievalIndexes(
   semanticConfig: SemanticConfig | undefined,
 ): RequiredRetrievalIndexes {
   const plan = resolveSemanticEmbeddingModelPlan(semanticConfig);
+  const configuredVectorIndexes = semanticConfig?.retrieval?.vector?.indexes;
+  const symbolModels = [
+    ...plan.symbolEmbeddingModels,
+    ...plan.unsupportedSymbolEmbeddingModels,
+  ];
+  const fileSummaryModels = [
+    ...plan.fileSummaryEmbeddingModels,
+    ...plan.unsupportedFileSummaryEmbeddingModels,
+  ];
 
   return {
     symbolFts: {
       tableName: "Symbol",
-      name: SYMBOL_FTS_INDEX_NAME,
+      name:
+        semanticConfig?.retrieval?.fts?.indexName ?? SYMBOL_FTS_INDEX_NAME,
       type: "fts",
       property: "searchText",
     },
@@ -63,19 +77,28 @@ export function resolveRequiredRetrievalIndexes(
       type: "fts",
       property: "searchText",
     },
-    symbolVectors: plan.symbolEmbeddingModels.flatMap((model) => {
+    symbolVectors: symbolModels.map((model) => {
       const property = getVecPropertyName(model);
-      const name = getVectorIndexName(model);
-      return property && name
-        ? [{ model, tableName: "Symbol" as const, name, type: "vector" as const, property }]
-        : [];
+      const name =
+        configuredVectorIndexes?.[model]?.indexName ??
+        getVectorIndexName(model);
+      return {
+        model,
+        tableName: "Symbol" as const,
+        name: property ? (name ?? null) : null,
+        type: "vector" as const,
+        property: property ?? null,
+      };
     }),
-    fileSummaryVectors: plan.fileSummaryEmbeddingModels.flatMap((model) => {
+    fileSummaryVectors: fileSummaryModels.map((model) => {
       const property = getVecPropertyName(model);
-      const name = getFileSummaryVectorIndexName(property);
-      return property && name
-        ? [{ model, tableName: "FileSummary" as const, name, type: "vector" as const, property }]
-        : [];
+      return {
+        model,
+        tableName: "FileSummary" as const,
+        name: property ? getFileSummaryVectorIndexName(property) : null,
+        type: "vector" as const,
+        property: property ?? null,
+      };
     }),
   };
 }
@@ -85,6 +108,8 @@ export function hasExactHealthyIndex(
   indexes: readonly IndexInfo[],
   required: RequiredRetrievalIndex,
 ): boolean {
+  if (!required.name || !required.property) return false;
+
   return indexes.some(
     (index) =>
       index.tableName === required.tableName &&
@@ -92,7 +117,7 @@ export function hasExactHealthyIndex(
       index.type === required.type &&
       index.property === required.property &&
       index.status === "healthy" &&
-      index.extensionLoaded !== false,
+      index.extensionLoaded === true,
   );
 }
 
@@ -110,9 +135,10 @@ export function aggregateCoveragePermille(
     covered += row.indexHealthy ? Math.min(rowEligible, rowCovered) : 0;
   }
 
-  return eligible === 0
-    ? 1000
-    : Math.round((covered * 1000) / eligible);
+  if (eligible === 0) {
+    return rows.length === 0 || rows.every((row) => row.indexHealthy) ? 1000 : 0;
+  }
+  return Math.round((covered * 1000) / eligible);
 }
 
 /**
@@ -130,48 +156,87 @@ export async function checkRetrievalHealth(
     const indexes = await showIndexesStrict(conn);
     const extensions = getExtensionCapabilities();
     const required = resolveRequiredRetrievalIndexes(semanticConfig);
+    const symbolCoverageFallback =
+      getVecPropertyName("jina-embeddings-v2-base-code") ??
+      FILESUMMARY_EMBEDDING_PROPERTIES.jinaCode.property;
 
-    const symbolFts = extensions.fts && hasExactHealthyIndex(indexes, required.symbolFts);
+    const symbolFts =
+      extensions.fts && hasExactHealthyIndex(indexes, required.symbolFts);
     const fileSummaryFts =
       extensions.fts && hasExactHealthyIndex(indexes, required.fileSummaryFts);
 
-    const symbolRows = await Promise.all(
-      required.symbolVectors.map(async (index) => ({
-        ...(await getSymbolRetrievalCoverage(conn, repoId, index.property)),
-        indexHealthy:
-          extensions.vector && hasExactHealthyIndex(indexes, index),
-      })),
+    const symbolRows: ModelCoverageCount[] = await Promise.all(
+      required.symbolVectors.map(async (index) => {
+        const property = index.property ?? symbolCoverageFallback;
+        return {
+          model: index.model ?? "unknown",
+          ...(await getSymbolRetrievalCoverage(conn, repoId, property)),
+          indexHealthy:
+            extensions.vector && hasExactHealthyIndex(indexes, index),
+        };
+      }),
     );
-    const fileSummaryRows = await Promise.all(
-      required.fileSummaryVectors.map(async (index) => ({
-        ...(await getFileSummaryRetrievalCoverage(conn, repoId, index.property)),
-        indexHealthy:
-          extensions.vector && hasExactHealthyIndex(indexes, index),
-      })),
+    const fileSummaryRows: ModelCoverageCount[] = await Promise.all(
+      required.fileSummaryVectors.map(async (index) => {
+        const property =
+          index.property ?? FILESUMMARY_EMBEDDING_PROPERTIES.nomic.property;
+        return {
+          model: index.model ?? "unknown",
+          ...(await getFileSummaryRetrievalCoverage(conn, repoId, property)),
+          indexHealthy:
+            extensions.vector && hasExactHealthyIndex(indexes, index),
+        };
+      }),
     );
 
-    const healthySymbolModels = new Set(
-      required.symbolVectors
-        .filter(
-          (index) => extensions.vector && hasExactHealthyIndex(indexes, index),
-        )
-        .map((index) => index.model),
-    );
+    const vectorByEntityModel = {
+      symbol: Object.fromEntries(
+        symbolRows.map((row) => [row.model, row.indexHealthy]),
+      ),
+      fileSummary: Object.fromEntries(
+        fileSummaryRows.map((row) => [row.model, row.indexHealthy]),
+      ),
+    };
+    const modelCoveragePermille = {
+      symbol: Object.fromEntries(
+        symbolRows.map((row) => [
+          row.model,
+          aggregateCoveragePermille([row]),
+        ]),
+      ),
+      fileSummary: Object.fromEntries(
+        fileSummaryRows.map((row) => [
+          row.model,
+          aggregateCoveragePermille([row]),
+        ]),
+      ),
+    };
+    const coveragePermille = {
+      symbolVector: aggregateCoveragePermille(symbolRows),
+      fileSummaryVector: aggregateCoveragePermille(fileSummaryRows),
+    };
     const degradationReasons = buildDegradationReasons(
       extensions,
       required,
       indexes,
     );
 
+    logger.debug("[retrieval] strict health coverage", {
+      repoId,
+      coveragePermille,
+      modelCoveragePermille,
+    });
+
     return {
       fts: symbolFts,
       fileSummaryFts,
-      vectorNomic: healthySymbolModels.has("nomic-embed-text-v1.5"),
-      vectorJinaCode: healthySymbolModels.has("jina-embeddings-v2-base-code"),
-      coveragePermille: {
-        symbolVector: aggregateCoveragePermille(symbolRows),
-        fileSummaryVector: aggregateCoveragePermille(fileSummaryRows),
-      },
+      vectorNomic:
+        vectorByEntityModel.symbol["nomic-embed-text-v1.5"] === true,
+      vectorJinaCode:
+        vectorByEntityModel.symbol["jina-embeddings-v2-base-code"] === true,
+      vectorByEntityModel,
+      modelCoveragePermille,
+      coveragePermille,
       degradationReasons,
     };
   } catch (err) {
@@ -232,7 +297,9 @@ function buildDegradationReasons(
     if (!hasExactHealthyIndex(indexes, index)) {
       reasons.push({
         code: "vector-index-missing",
-        message: `Required vector index is missing or unhealthy: ${index.name}`,
+        message: `Required vector index is missing or unhealthy: ${
+          index.name ?? `${index.tableName}:${index.model ?? "unknown"}`
+        }`,
         affects: "vector",
       });
     }
@@ -248,6 +315,14 @@ function unavailableCapabilities(
     fileSummaryFts: false,
     vectorNomic: false,
     vectorJinaCode: false,
+    vectorByEntityModel: {
+      symbol: {},
+      fileSummary: {},
+    },
+    modelCoveragePermille: {
+      symbol: {},
+      fileSummary: {},
+    },
     coveragePermille: {
       symbolVector: 0,
       fileSummaryVector: 0,

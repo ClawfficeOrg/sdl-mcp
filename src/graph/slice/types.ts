@@ -9,7 +9,11 @@
 import type { Connection } from "kuzu";
 import type { RepoId, SymbolId, VersionId } from "../../domain/types.js";
 import type { SliceBudget, GraphSlice, CardDetailLevel } from "../../domain/types.js";
-import type { RetrievalEvidence, HybridSearchResultItem } from "../../retrieval/types.js";
+import type {
+  RetrievalEvidence,
+  HybridSearchResultItem,
+  RetrievalQueryContext,
+} from "../../retrieval/types.js";
 
 export interface SliceBuildInternalResult {
   slice: GraphSlice;
@@ -36,6 +40,8 @@ export interface SliceBuildRequest {
    * Not exposed via MCP tool schemas.
    */
   conn?: Connection;
+  /** Shared cache for all retrieval lanes in one top-level slice request. */
+  queryContext?: RetrievalQueryContext;
   taskText?: string;
   stackTrace?: string;
   failingTestPath?: string;

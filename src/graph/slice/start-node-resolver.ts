@@ -705,11 +705,15 @@ export async function resolveStartNodesLadybug(
   if (request.taskText) {
     try {
       const { queryFeedbackBoosts } = await import("../../retrieval/feedback-boost.js");
-      const { boosts } = await queryFeedbackBoosts(conn, {
-        repoId,
-        query: request.taskText,
-        limit: 10,
-      });
+      const { boosts } = await queryFeedbackBoosts(
+        conn,
+        {
+          repoId,
+          query: request.taskText,
+          limit: 10,
+        },
+        queryContext,
+      );
       if (boosts.size > 0) {
         for (const [symbolId, boost] of boosts) {
           if (startNodes.has(symbolId)) {

@@ -145,4 +145,59 @@ describe("strict retrieval health", () => {
     });
     assert.equal(health.degradationReasons?.[0]?.code, "health-check-error");
   });
+
+  it("requires extension_loaded to be explicitly true", () => {
+    const required = {
+      name: "symbol_search_text_v1",
+      tableName: "Symbol",
+      type: "fts" as const,
+      property: "searchText",
+    };
+    const { extensionLoaded: _extensionLoaded, ...missingExtensionState } =
+      exactIndexes[0];
+
+    assert.equal(
+      hasExactHealthyIndex([missingExtensionState], required),
+      false,
+    );
+  });
+
+  it("uses configured Symbol FTS and vector index names", () => {
+    const required = resolveRequiredRetrievalIndexes({
+      embeddingProfile: "specialized",
+      symbolEmbeddingModels: ["jina-embeddings-v2-base-code"],
+      fileSummaryEmbeddingModels: ["nomic-embed-text-v1.5"],
+      retrieval: {
+        fts: { indexName: "custom_symbol_fts" },
+        vector: {
+          indexes: {
+            "jina-embeddings-v2-base-code": {
+              indexName: "custom_symbol_jina",
+            },
+          },
+        },
+      },
+    } as never);
+
+    assert.equal(required.symbolFts.name, "custom_symbol_fts");
+    assert.equal(required.symbolVectors[0]?.name, "custom_symbol_jina");
+  });
+
+  it("retains unsupported configured models as unavailable zero-coverage lanes", () => {
+    const required = resolveRequiredRetrievalIndexes({
+      symbolEmbeddingModels: ["unsupported-symbol-model"],
+      fileSummaryEmbeddingModels: [],
+    } as never);
+
+    assert.equal(required.symbolVectors.length, 1);
+    assert.equal(required.symbolVectors[0]?.model, "unsupported-symbol-model");
+    assert.equal(required.symbolVectors[0]?.name, null);
+    assert.equal(required.symbolVectors[0]?.property, null);
+    assert.equal(
+      aggregateCoveragePermille([
+        { eligible: 0, covered: 0, indexHealthy: false },
+      ]),
+      0,
+    );
+  });
 });

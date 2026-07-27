@@ -358,24 +358,38 @@ export function buildEntityEvidence(
   fusionLatencyMs: number,
   fallbackReason?: string,
 ): RetrievalEvidence {
-  const sources: RetrievalSource[] = rankings.map((r) => r.source);
+  const orderedRankings = [...rankings].sort(
+    (a, b) =>
+      a.source.localeCompare(b.source) ||
+      a.entityType.localeCompare(b.entityType),
+  );
+  const sources = Array.from(
+    new Set(orderedRankings.map((ranking) => ranking.source)),
+  );
   const candidateCountPerSource: Record<string, number> = {};
-  for (const r of rankings) {
-    // When multiple rankings share the same source (e.g. fts for symbol AND
-    // fts for memory), accumulate counts rather than overwriting.
-    candidateCountPerSource[r.source] =
-      (candidateCountPerSource[r.source] ?? 0) + r.candidateCount;
+  for (const ranking of orderedRankings) {
+    // Candidate counts remain source-kind aggregates for public diagnostics.
+    candidateCountPerSource[ranking.source] =
+      (candidateCountPerSource[ranking.source] ?? 0) +
+      ranking.candidateCount;
   }
 
   const topRanksPerSource: Record<string, number[]> = {};
-  for (const ranking of rankings) {
+  for (const ranking of orderedRankings) {
+    const evidenceKey = `${ranking.source}:${ranking.entityType}`;
     const positions: number[] = [];
     for (let i = 0; i < fusedResults.length; i++) {
-      if (ranking.ranks.has(fusedResults[i].entityId)) {
+      const result = fusedResults[i];
+      if (
+        result.entityType === ranking.entityType &&
+        ranking.ranks.has(result.entityId)
+      ) {
         positions.push(i + 1); // 1-based
       }
     }
-    topRanksPerSource[ranking.source] = positions;
+    topRanksPerSource[evidenceKey] = Array.from(
+      new Set([...(topRanksPerSource[evidenceKey] ?? []), ...positions]),
+    ).sort((a, b) => a - b);
   }
 
   return {

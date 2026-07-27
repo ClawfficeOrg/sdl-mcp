@@ -973,11 +973,15 @@ export async function buildSeedContext(
   const feedbackStartedAt = performance.now();
   try {
     const conn = await getLadybugConn();
-    const { boosts } = await queryFeedbackBoosts(conn, {
-      repoId: task.repoId,
-      query: task.taskText,
-      limit: FEEDBACK_LIMIT,
-    });
+    const { boosts } = await queryFeedbackBoosts(
+      conn,
+      {
+        repoId: task.repoId,
+        query: task.taskText,
+        limit: FEEDBACK_LIMIT,
+      },
+      queryContext,
+    );
 
     if (boosts.size > 0) {
       let feedbackRank = 0;
