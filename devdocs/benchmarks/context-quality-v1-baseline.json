@@ -25,7 +25,7 @@
         "graphIntegrityState": "verified",
         "graphIntegrityVersionId": "v1785128124401",
         "graphIntegrityDigest": "869d921f4da6d50c6572b4af09cf6c68cf05a4079b6fe638a0d4441a9ad75e88",
-        "cacheKey": "win32-x64-schema23-models-4656e5744dd0"
+        "cacheKey": "win32-x64-schema23-models-4656e5744dd0-corpus-2c09710988c8"
       },
       "ladybugClosedBeforeArtifact": true,
       "seedResolutionDiagnostics": {
@@ -48,201 +48,201 @@
         },
         "baseline": {
           "samplesMs": [
-            168.82259999995586,
-            175.56670000002487,
-            106.74520000000484,
-            123.51779999997234,
-            4241.412300000025,
-            4134.002999999968,
-            4148.219800000021,
-            4206.751199999999,
-            210.49760000000242,
-            229.17380000004778,
-            176.98200000001816,
-            3366.3690999999526,
-            3809.1020000000135,
-            4273.154900000023,
-            281.7270000000135,
-            202.48399999999674,
-            238.78740000003017,
-            3881.2007999999914,
-            3664.61599999998,
-            3439.4511000000057,
-            131.78669999999693,
-            141.55160000000615,
-            4074.121199999994,
-            3525.5049,
-            291.69089999998687,
-            5564.438400000043,
-            4348.3833999999915,
-            5788.454099999974,
-            688.4060999999638,
-            2353.0937999999733,
-            505.7062000000151,
-            182.014899999951,
-            192.1168999999063,
-            122.97660000005271,
-            97.57810000004247,
-            4238.792100000079,
-            4116.62639999995,
-            4159.7496999999275,
-            4219.7360000000335,
-            207.61450000002515,
-            230.33649999997579,
-            176.3513999999268,
-            3361.277699999977,
-            3768.304999999935,
-            4303.454599999939,
-            241.1062999999849,
-            196.9499000000069,
-            274.34170000010636,
-            3904.4856000000145,
-            3626.984300000011,
-            3428.979500000016,
-            128.12019999988843,
-            135.65260000003036,
-            4088.264099999913,
-            3532.937900000019,
-            255.44369999994524,
-            5641.002000000095,
-            4349.181299999938,
-            5764.294400000013,
-            699.2144000000553,
-            2365.4104000000516,
-            502.87959999998566,
-            171.52009999996517,
-            174.05550000001676,
-            148.90030000009574,
-            92.29830000002403,
-            4231.533900000039,
-            4119.209599999944,
-            4122.526699999929,
-            4240.72649999999,
-            231.95890000008512,
-            216.8295999999391,
-            176.97669999999925,
-            3372.903399999952,
-            3772.169899999979,
-            4251.612399999984,
-            237.86249999993015,
-            241.86779999989085,
-            239.65949999995064,
-            3932.2642000000924,
-            3609.5673999999417,
-            3447.096499999985,
-            122.95380000001751,
-            136.60820000001695,
-            4099.169400000013,
-            3479.914300000062,
-            284.9666000000434,
-            5582.54560000007,
-            4353.496700000018,
-            5703.458899999969,
-            701.5338999999221,
-            2368.1657000000123,
-            508.6263999999501
+            177.75410000002012,
+            182.2682999999961,
+            116.54709999996703,
+            139.27579999994487,
+            4457.673699999985,
+            4276.257400000002,
+            4280.364500000025,
+            4375.810999999987,
+            268.54690000001574,
+            242.086900000053,
+            207.71880000003148,
+            3516.534800000023,
+            3901.1382999999914,
+            4447.825700000045,
+            252.28740000003017,
+            243.10759999998845,
+            249.77090000000317,
+            4048.981000000029,
+            3704.0433000000194,
+            3656.0989999999874,
+            150.10579999996116,
+            165.99069999996573,
+            4198.29939999996,
+            3653.9521999999997,
+            302.61550000001444,
+            5659.644899999956,
+            4396.281699999992,
+            5879.477500000037,
+            713.8784000000451,
+            2441.0060999999987,
+            530.7926999999909,
+            183.37679999996908,
+            181.69220000004862,
+            113.60839999991003,
+            98.37390000000596,
+            4516.803100000019,
+            4299.322999999975,
+            4244.802199999918,
+            4319.245600000024,
+            218.24910000001546,
+            260.59700000006706,
+            189.33990000002086,
+            3481.0402999999933,
+            3866.550099999993,
+            4410.0940999999875,
+            253.49719999998342,
+            209.47930000000633,
+            291.0259000000078,
+            3989.739799999981,
+            3767.830200000084,
+            3560.9765999999363,
+            139.71900000004098,
+            147.03410000004806,
+            4240.2658999999985,
+            3585.6156999999657,
+            309.76069999998435,
+            5730.148300000001,
+            4456.794399999897,
+            5912.206600000034,
+            718.608200000017,
+            2421.2084999999497,
+            527.1278999999631,
+            180.1695999999065,
+            180.6642999999458,
+            116.79550000000745,
+            136.79489999997895,
+            4434.851699999999,
+            4211.260799999931,
+            4206.693499999936,
+            4310.518999999971,
+            251.65119999996386,
+            229.42319999996107,
+            186.52230000006966,
+            3527.057599999942,
+            3890.684499999974,
+            4372.689899999998,
+            249.9368999999715,
+            260.97220000007655,
+            263.4915000000037,
+            4085.496199999936,
+            3723.4788999999873,
+            3585.5058000000427,
+            133.61820000002626,
+            144.061699999962,
+            4196.21649999998,
+            3630.719700000016,
+            308.97259999997914,
+            5752.527699999977,
+            4539.674100000062,
+            5865.362500000047,
+            713.0742999999784,
+            2443.2521000000415,
+            523.9455999999773
           ],
-          "p50Ms": 2365.4104000000516,
-          "p95Ms": 5582.54560000007
+          "p50Ms": 2441.0060999999987,
+          "p95Ms": 5730.148300000001
         },
         "control": {
           "samplesMs": [
-            168.86599999997998,
-            181.3012999999919,
-            107.27349999995204,
-            132.2516000000178,
-            4207.871600000013,
-            4079.683500000043,
-            4155.164800000028,
-            4207.79019999993,
-            205.7502000000095,
-            232.2341000000015,
-            173.3641999999527,
-            3375.6807000000263,
-            3774.7804999999935,
-            4280.7331999999005,
-            272.7186999999685,
-            198.62739999999758,
-            242.92199999990407,
-            3955.496700000018,
-            3620.4620000000577,
-            3404.042000000016,
-            124.70519999996759,
-            137.44270000001416,
-            4056.315399999963,
-            3563.0916000000434,
-            253.8066000000108,
-            5577.420199999935,
-            4407.640800000052,
-            5714.4985999999335,
-            693.5921000000089,
-            2352.709099999978,
-            518.2272000000812,
-            175.1732000000775,
-            173.2493999999715,
-            111.73349999997299,
-            123.64279999991413,
-            4294.996199999936,
-            4090.0808000001125,
-            4109.632400000002,
-            4200.51820000005,
-            231.69539999996778,
-            220.2791000000434,
-            174.15700000000652,
-            3381.6929000000237,
-            3773.1331000000937,
-            4296.4375,
-            240.21869999996852,
-            238.74660000007134,
-            239.65730000007898,
-            3941.164299999946,
-            3590.8351999999722,
-            3461.7815999999875,
-            127.68759999994654,
-            134.482699999935,
-            4117.393099999987,
-            3529.8212999999523,
-            286.30609999992885,
-            5571.823500000057,
-            4347.366500000004,
-            5735.828600000008,
-            687.0670999999857,
-            2391.610800000024,
-            515.1963000000687,
-            168.13670000003185,
-            177.421399999992,
-            116.14529999997467,
-            129.49509999994189,
-            4240.4977999998955,
-            4126.931899999967,
-            4125.422599999933,
-            4195.411599999992,
-            207.19980000006035,
-            229.59310000005644,
-            171.18339999997988,
-            3374.3882999999914,
-            3794.2990999999456,
-            4293.574000000022,
-            244.03689999994822,
-            198.34619999991264,
-            274.4332000000868,
-            3920.475000000093,
-            3636.836499999976,
-            3406.8267000000924,
-            128.33679999993183,
-            140.2948000000324,
-            4087.840199999977,
-            3519.5272000000114,
-            289.41929999995045,
-            5580.885200000019,
-            4352.325800000108,
-            5744.182700000005,
-            690.2354999999516,
-            2366.181600000011,
-            511.6611999999732
+            183.89520000002813,
+            190.81830000004265,
+            156.19669999997132,
+            103.86510000005364,
+            4352.234400000074,
+            4226.699400000041,
+            4224.470499999938,
+            4425.479599999962,
+            216.84720000007655,
+            242.15630000003148,
+            191.82500000006985,
+            3528.92359999998,
+            3915.663200000068,
+            4454.8917000000365,
+            250.47649999998976,
+            209.1034000000218,
+            288.4194000000134,
+            4083.0320000000065,
+            3756.4823000000324,
+            3543.3637999999337,
+            132.99080000002868,
+            145.32089999993332,
+            4162.075200000079,
+            3701.707199999946,
+            327.7304999999469,
+            5759.155600000056,
+            4521.198100000038,
+            5866.817399999942,
+            724.2742999999318,
+            2505.650499999989,
+            525.1626999999862,
+            183.24070000008214,
+            179.97019999998156,
+            116.39949999994133,
+            98.4934999999823,
+            4366.721499999985,
+            4261.32500000007,
+            4299.875699999975,
+            4426.0925999999745,
+            232.9075999999186,
+            266.1210999999894,
+            187.51309999998193,
+            3478.0333999999566,
+            3922.8371000000043,
+            4474.7648000000045,
+            252.92819999996573,
+            247.54899999999907,
+            252.33990000002086,
+            4075.2695999999996,
+            3835.3669999999693,
+            3539.006400000071,
+            135.83819999999832,
+            149.6021999999648,
+            4378.398900000029,
+            3678.362599999993,
+            302.8822999999393,
+            5754.244100000011,
+            4486.336399999913,
+            5833.647699999972,
+            714.2533999999287,
+            2457.9769000000088,
+            526.0222999999532,
+            184.95149999996647,
+            182.44130000006407,
+            117.31099999998696,
+            96.97060000000056,
+            4408.971299999976,
+            4244.045200000051,
+            4194.9074000000255,
+            4379.408899999922,
+            254.5622999999905,
+            230.07099999999627,
+            187.7317000000039,
+            3461.1334000000497,
+            3876.7657000001054,
+            4393.8260999999475,
+            271.2341000000015,
+            258.3381999999983,
+            255.85519999999087,
+            4024.0015999999596,
+            3734.078700000071,
+            3666.733600000036,
+            138.9244999999646,
+            151.43030000000726,
+            4290.653799999971,
+            3622.3549999999814,
+            300.92170000006445,
+            5803.826000000001,
+            4419.607100000023,
+            5924.718999999925,
+            713.1027000000468,
+            2450.318399999989,
+            551.6599999999162
           ],
-          "p50Ms": 2366.181600000011,
-          "p95Ms": 5577.420199999935
+          "p50Ms": 2457.9769000000088,
+          "p95Ms": 5759.155600000056
         }
       },
       "requestedVariant": "all",
@@ -279,10 +279,10 @@
             "evidenceTokensPerRequiredHit": 659.6
           },
           "latencyMs": {
-            "p50": 2514.371199999994,
-            "p95": 5026.053400000001,
-            "max": 5320.688399999999,
-            "total": 80294.98240000001
+            "p50": 2576.078099999999,
+            "p95": 5245.5533,
+            "max": 5346.257200000001,
+            "total": 83058.86899999999
           },
           "caseResults": [
             {
@@ -293,7 +293,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 1998.2006000000001,
+              "durationMs": 1975.8365000000001,
               "missingUsefulSymbols": [
                 "truncateIfOverBudget",
                 "ContextEngine",
@@ -309,7 +309,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 1225.2946000000002,
+              "durationMs": 1250.8634000000002,
               "missingUsefulSymbols": []
             },
             {
@@ -320,7 +320,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 1099.3141999999998,
+              "durationMs": 1143.4523000000004,
               "missingUsefulSymbols": [
                 "buildRungPath"
               ]
@@ -333,7 +333,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 5,
-              "durationMs": 563.7980000000007,
+              "durationMs": 582.6639000000005,
               "missingUsefulSymbols": [
                 "FeedbackBoostResult"
               ]
@@ -346,7 +346,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 29,
-              "durationMs": 5320.688399999999,
+              "durationMs": 5346.257200000001,
               "missingUsefulSymbols": [
                 "searchSymbols"
               ]
@@ -359,7 +359,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 29,
-              "durationMs": 4521.885,
+              "durationMs": 4667.2549,
               "missingUsefulSymbols": [
                 "getClustersForSymbols"
               ]
@@ -372,7 +372,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 26,
-              "durationMs": 4951.181199999999,
+              "durationMs": 5091.894899999999,
               "missingUsefulSymbols": [
                 "BROAD_VISIBLE_FIELDS",
                 "handleAgentContext"
@@ -386,7 +386,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 27,
-              "durationMs": 5026.053400000001,
+              "durationMs": 5245.5533,
               "missingUsefulSymbols": [
                 "SkeletonOptions"
               ]
@@ -399,7 +399,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 2132.927200000002,
+              "durationMs": 2251.2481000000007,
               "missingUsefulSymbols": [
                 "buildRungPath",
                 "RungType",
@@ -414,7 +414,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 5,
-              "durationMs": 879.3455999999969,
+              "durationMs": 936.9373999999989,
               "missingUsefulSymbols": [
                 "Evidence",
                 "Executor",
@@ -432,7 +432,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 1183.428200000002,
+              "durationMs": 1181.0409,
               "missingUsefulSymbols": []
             },
             {
@@ -443,7 +443,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 2798.5619000000006,
+              "durationMs": 2910.8004999999976,
               "missingUsefulSymbols": [
                 "hybridSearch",
                 "HybridSearchResult",
@@ -459,7 +459,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3055.6254999999983,
+              "durationMs": 3212.811799999996,
               "missingUsefulSymbols": [
                 "beamSearch",
                 "BeamSearchRequest",
@@ -475,7 +475,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 3561.9329999999973,
+              "durationMs": 3745.1742000000013,
               "missingUsefulSymbols": [
                 "generateAnswer",
                 "generateSummary"
@@ -489,7 +489,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 14,
-              "durationMs": 1670.811099999999,
+              "durationMs": 1781.1455999999962,
               "missingUsefulSymbols": [
                 "executeCardRung",
                 "executeSkeletonRung"
@@ -503,7 +503,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 1227.3591000000015,
+              "durationMs": 1303.5025999999998,
               "missingUsefulSymbols": [
                 "BROAD_VISIBLE_FIELDS"
               ]
@@ -516,7 +516,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 1649.6273999999976,
+              "durationMs": 1700.5260000000053,
               "missingUsefulSymbols": [
                 "MAX_IDENTIFIERS"
               ]
@@ -529,7 +529,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3510.029300000002,
+              "durationMs": 3591.797400000003,
               "missingUsefulSymbols": [
                 "ContextEngine",
                 "entitySearch",
@@ -546,7 +546,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3020.6642999999967,
+              "durationMs": 3132.7718999999997,
               "missingUsefulSymbols": [
                 "truncateIfOverBudget",
                 "estimateTokens",
@@ -562,7 +562,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 2928.172200000001,
+              "durationMs": 3038.535100000001,
               "missingUsefulSymbols": [
                 "calculateHotness",
                 "combineScores"
@@ -576,7 +576,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 1675.9161000000022,
+              "durationMs": 1771.2393999999986,
               "missingUsefulSymbols": [
                 "extractSkeletonFromNode",
                 "trimSkeletonToBounds",
@@ -593,7 +593,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 1727.7791999999972,
+              "durationMs": 1789.9292999999961,
               "missingUsefulSymbols": [
                 "buildRungPath",
                 "adjustForBudget",
@@ -609,7 +609,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3819.2998000000007,
+              "durationMs": 3948.6900000000023,
               "missingUsefulSymbols": [
                 "ContextEngine",
                 "entitySearch",
@@ -624,7 +624,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 2514.371199999994,
+              "durationMs": 2576.078099999999,
               "missingUsefulSymbols": [
                 "Action",
                 "executeCardRung",
@@ -640,7 +640,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 11,
-              "durationMs": 4413.573500000006,
+              "durationMs": 4500.022700000001,
               "missingUsefulSymbols": [
                 "projectToolResultForModelContent",
                 "diffSignature",
@@ -655,7 +655,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4965.1640999999945,
+              "durationMs": 5092.951400000005,
               "missingUsefulSymbols": [
                 "MCPServer",
                 "dispatchAction",
@@ -671,7 +671,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 2585.80260000001,
+              "durationMs": 2740.507700000002,
               "missingUsefulSymbols": [
                 "buildFlatToolDescriptors",
                 "registerTool",
@@ -688,7 +688,7 @@
               "usefulTotal": 2,
               "noiseHits": 1,
               "evidenceCount": 14,
-              "durationMs": 3176.726899999994,
+              "durationMs": 3347.527900000001,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 2600,
@@ -736,7 +736,7 @@
               "usefulTotal": 2,
               "noiseHits": 1,
               "evidenceCount": 6,
-              "durationMs": 703.7014000000054,
+              "durationMs": 729.508600000001,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 2200,
@@ -777,7 +777,7 @@
               "usefulTotal": 2,
               "noiseHits": 1,
               "evidenceCount": 6,
-              "durationMs": 1863.861499999999,
+              "durationMs": 1927.6252999999997,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 1800,
@@ -819,7 +819,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 0,
-              "durationMs": 523.8859000000084,
+              "durationMs": 544.7206999999908,
               "missingUsefulSymbols": [
                 "SDL_MCP_SERVER_INSTRUCTIONS",
                 "MCPServer"
@@ -882,10 +882,10 @@
             "evidenceTokensPerRequiredHit": 654.8
           },
           "latencyMs": {
-            "p50": 3779.3254000000015,
-            "p95": 6285.402100000007,
-            "max": 7597.633900000001,
-            "total": 101044.32449999996
+            "p50": 3843.055999999997,
+            "p95": 6433.167400000006,
+            "max": 8017.422999999995,
+            "total": 104259.56789999995
           },
           "caseResults": [
             {
@@ -896,7 +896,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 1840.0782999999938,
+              "durationMs": 1979.9820000000036,
               "missingUsefulSymbols": [
                 "truncateIfOverBudget",
                 "ContextEngine",
@@ -912,7 +912,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 1197.3815999999933,
+              "durationMs": 1248.3119999999908,
               "missingUsefulSymbols": []
             },
             {
@@ -923,7 +923,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 1036.4653000000108,
+              "durationMs": 1044.133400000006,
               "missingUsefulSymbols": [
                 "buildRungPath"
               ]
@@ -936,7 +936,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 5,
-              "durationMs": 539.8364000000001,
+              "durationMs": 563.2539999999863,
               "missingUsefulSymbols": [
                 "FeedbackBoostResult"
               ]
@@ -949,7 +949,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 30,
-              "durationMs": 7597.633900000001,
+              "durationMs": 8017.422999999995,
               "missingUsefulSymbols": [
                 "searchSymbols"
               ]
@@ -962,7 +962,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 26,
-              "durationMs": 5656.669699999999,
+              "durationMs": 5892.5669999999955,
               "missingUsefulSymbols": [
                 "getClustersForSymbols"
               ]
@@ -975,7 +975,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 26,
-              "durationMs": 5947.98060000001,
+              "durationMs": 6157.219100000002,
               "missingUsefulSymbols": [
                 "BROAD_VISIBLE_FIELDS",
                 "handleAgentContext"
@@ -989,7 +989,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 28,
-              "durationMs": 6285.402100000007,
+              "durationMs": 6433.167400000006,
               "missingUsefulSymbols": [
                 "SkeletonOptions"
               ]
@@ -1002,7 +1002,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 2147.994399999996,
+              "durationMs": 2184.7662999999884,
               "missingUsefulSymbols": [
                 "buildRungPath",
                 "RungType",
@@ -1017,7 +1017,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 5,
-              "durationMs": 946.361699999994,
+              "durationMs": 880.4388000000035,
               "missingUsefulSymbols": [
                 "Evidence",
                 "Executor",
@@ -1035,7 +1035,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 1096.7532999999967,
+              "durationMs": 1147.0209999999934,
               "missingUsefulSymbols": []
             },
             {
@@ -1046,7 +1046,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3779.3254000000015,
+              "durationMs": 3843.055999999997,
               "missingUsefulSymbols": [
                 "hybridSearch",
                 "HybridSearchResult",
@@ -1062,7 +1062,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3956.9717999999993,
+              "durationMs": 4073.218399999998,
               "missingUsefulSymbols": [
                 "beamSearch",
                 "BeamSearchRequest",
@@ -1078,7 +1078,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 4400.493100000007,
+              "durationMs": 4508.387099999993,
               "missingUsefulSymbols": [
                 "generateAnswer",
                 "generateSummary"
@@ -1092,7 +1092,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 14,
-              "durationMs": 1670.232799999998,
+              "durationMs": 1728.7588000000105,
               "missingUsefulSymbols": [
                 "executeCardRung",
                 "executeSkeletonRung"
@@ -1106,7 +1106,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 1303.8337000000029,
+              "durationMs": 1285.4291000000085,
               "missingUsefulSymbols": [
                 "BROAD_VISIBLE_FIELDS"
               ]
@@ -1119,7 +1119,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 1633.6147999999957,
+              "durationMs": 1682.2835999999952,
               "missingUsefulSymbols": [
                 "MAX_IDENTIFIERS"
               ]
@@ -1132,7 +1132,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4459.52469999998,
+              "durationMs": 4555.349199999997,
               "missingUsefulSymbols": [
                 "queryFeedbackBoosts",
                 "expandContextForClusters",
@@ -1147,7 +1147,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 5837.322199999995,
+              "durationMs": 5858.436300000001,
               "missingUsefulSymbols": [
                 "truncateIfOverBudget",
                 "estimateTokens",
@@ -1163,7 +1163,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 3894.439800000022,
+              "durationMs": 4178.774399999995,
               "missingUsefulSymbols": [
                 "calculateHotness",
                 "combineScores"
@@ -1177,7 +1177,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 1687.4489999999932,
+              "durationMs": 1813.2381999999925,
               "missingUsefulSymbols": [
                 "extractSkeletonFromNode",
                 "trimSkeletonToBounds",
@@ -1194,7 +1194,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 1712.5799999999872,
+              "durationMs": 1760.1974000000046,
               "missingUsefulSymbols": [
                 "buildRungPath",
                 "adjustForBudget",
@@ -1210,7 +1210,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4922.128400000016,
+              "durationMs": 5036.99040000001,
               "missingUsefulSymbols": [
                 "ContextEngine",
                 "entitySearch",
@@ -1225,7 +1225,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3893.961899999995,
+              "durationMs": 3996.9228000000003,
               "missingUsefulSymbols": [
                 "Action",
                 "executeCardRung",
@@ -1241,7 +1241,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 11,
-              "durationMs": 4379.474199999997,
+              "durationMs": 4536.346799999999,
               "missingUsefulSymbols": [
                 "projectToolResultForModelContent",
                 "diffSignature",
@@ -1256,7 +1256,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 5550.660399999993,
+              "durationMs": 5733.892300000007,
               "missingUsefulSymbols": [
                 "MCPServer",
                 "dispatchAction",
@@ -1272,7 +1272,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4343.050099999993,
+              "durationMs": 4484.085099999997,
               "missingUsefulSymbols": [
                 "buildToolResponseEnvelope",
                 "asStructuredContent"
@@ -1286,7 +1286,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 13,
-              "durationMs": 5749.906699999992,
+              "durationMs": 5961.278399999981,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 2600,
@@ -1334,7 +1334,7 @@
               "usefulTotal": 2,
               "noiseHits": 1,
               "evidenceCount": 6,
-              "durationMs": 687.799800000008,
+              "durationMs": 721.4447999999975,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 2200,
@@ -1375,7 +1375,7 @@
               "usefulTotal": 2,
               "noiseHits": 1,
               "evidenceCount": 6,
-              "durationMs": 2378.390699999989,
+              "durationMs": 2422.3511,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 1800,
@@ -1417,7 +1417,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 0,
-              "durationMs": 510.6076999999932,
+              "durationMs": 530.8436999999976,
               "missingUsefulSymbols": [
                 "SDL_MCP_SERVER_INSTRUCTIONS",
                 "MCPServer"
@@ -1480,10 +1480,10 @@
             "evidenceTokensPerRequiredHit": 855.6666666666666
           },
           "latencyMs": {
-            "p50": 3984.7682000000495,
-            "p95": 6315.335800000001,
-            "max": 6613.540700000012,
-            "total": 128048.22019999998
+            "p50": 4110.061400000006,
+            "p95": 6521.804800000013,
+            "max": 7060.644800000009,
+            "total": 132593.93279999986
           },
           "caseResults": [
             {
@@ -1494,7 +1494,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 2546.719599999982,
+              "durationMs": 2585.308400000009,
               "missingUsefulSymbols": [
                 "truncateIfOverBudget",
                 "ContextEngine",
@@ -1510,7 +1510,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 8,
-              "durationMs": 3686.38989999998,
+              "durationMs": 3932.5233000000007,
               "missingUsefulSymbols": []
             },
             {
@@ -1521,7 +1521,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 3572.1180000000168,
+              "durationMs": 3675.220099999977,
               "missingUsefulSymbols": []
             },
             {
@@ -1532,7 +1532,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 3358.0854999999865,
+              "durationMs": 3561.501099999994,
               "missingUsefulSymbols": []
             },
             {
@@ -1543,7 +1543,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 30,
-              "durationMs": 6315.335800000001,
+              "durationMs": 6480.141699999978,
               "missingUsefulSymbols": [
                 "searchSymbols"
               ]
@@ -1556,7 +1556,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 26,
-              "durationMs": 5706.034899999999,
+              "durationMs": 5867.526100000017,
               "missingUsefulSymbols": []
             },
             {
@@ -1567,7 +1567,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 26,
-              "durationMs": 5970.259699999995,
+              "durationMs": 6202.581900000019,
               "missingUsefulSymbols": [
                 "BROAD_VISIBLE_FIELDS",
                 "handleAgentContext"
@@ -1581,7 +1581,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 28,
-              "durationMs": 6285.992999999988,
+              "durationMs": 6521.804800000013,
               "missingUsefulSymbols": [
                 "SkeletonOptions"
               ]
@@ -1594,7 +1594,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 3078.2827000000107,
+              "durationMs": 3152.198000000004,
               "missingUsefulSymbols": [
                 "buildRungPath",
                 "RungPath",
@@ -1610,7 +1610,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 3119.2920999999915,
+              "durationMs": 3221.5869999999995,
               "missingUsefulSymbols": []
             },
             {
@@ -1621,7 +1621,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 2852.8096999999834,
+              "durationMs": 2916.3199000000022,
               "missingUsefulSymbols": []
             },
             {
@@ -1632,7 +1632,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3802.9968000000226,
+              "durationMs": 3923.4151999999885,
               "missingUsefulSymbols": [
                 "hybridSearch",
                 "HybridSearchResult",
@@ -1648,7 +1648,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3985.640000000014,
+              "durationMs": 4126.324900000007,
               "missingUsefulSymbols": [
                 "beamSearch",
                 "BeamSearchRequest",
@@ -1664,7 +1664,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 4389.189699999988,
+              "durationMs": 4522.123099999997,
               "missingUsefulSymbols": []
             },
             {
@@ -1675,7 +1675,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 13,
-              "durationMs": 3008.8359000000055,
+              "durationMs": 3096.8327999999747,
               "missingUsefulSymbols": [
                 "ExecutionMetrics"
               ]
@@ -1688,7 +1688,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 12,
-              "durationMs": 4647.406900000002,
+              "durationMs": 4820.588799999998,
               "missingUsefulSymbols": []
             },
             {
@@ -1699,7 +1699,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 14,
-              "durationMs": 5022.6783,
+              "durationMs": 5264.190599999973,
               "missingUsefulSymbols": []
             },
             {
@@ -1710,7 +1710,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4498.083600000013,
+              "durationMs": 4601.884600000019,
               "missingUsefulSymbols": [
                 "queryFeedbackBoosts"
               ]
@@ -1723,7 +1723,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 5891.00999999998,
+              "durationMs": 5992.681999999972,
               "missingUsefulSymbols": [
                 "truncateIfOverBudget"
               ]
@@ -1736,7 +1736,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 6,
-              "durationMs": 3984.7682000000495,
+              "durationMs": 4110.061400000006,
               "missingUsefulSymbols": [
                 "calculateHotness",
                 "combineScores"
@@ -1750,7 +1750,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 2581.078999999969,
+              "durationMs": 2733.228000000003,
               "missingUsefulSymbols": [
                 "extractSkeletonFromNode",
                 "trimSkeletonToBounds",
@@ -1766,7 +1766,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 2612.013800000015,
+              "durationMs": 2679.6169999999693,
               "missingUsefulSymbols": [
                 "buildRungPath",
                 "adjustForBudget"
@@ -1780,7 +1780,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4948.273099999991,
+              "durationMs": 5098.369399999967,
               "missingUsefulSymbols": [
                 "ContextEngine",
                 "entitySearch"
@@ -1794,7 +1794,7 @@
               "usefulTotal": 6,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 3928.3016999999527,
+              "durationMs": 4102.426099999982,
               "missingUsefulSymbols": []
             },
             {
@@ -1805,7 +1805,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 11,
-              "durationMs": 6613.540700000012,
+              "durationMs": 7060.644800000009,
               "missingUsefulSymbols": [
                 "handleSearchEdit",
                 "diffSignature",
@@ -1820,7 +1820,7 @@
               "usefulTotal": 4,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 5599.964099999983,
+              "durationMs": 5781.652700000035,
               "missingUsefulSymbols": [
                 "MCPServer",
                 "dispatchAction",
@@ -1836,7 +1836,7 @@
               "usefulTotal": 5,
               "noiseHits": 0,
               "evidenceCount": 25,
-              "durationMs": 4405.7119999999995,
+              "durationMs": 4522.119499999972,
               "missingUsefulSymbols": [
                 "buildToolResponseEnvelope",
                 "asStructuredContent"
@@ -1850,7 +1850,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 13,
-              "durationMs": 5858.425800000026,
+              "durationMs": 6009.027899999986,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 2600,
@@ -1898,7 +1898,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 0,
-              "durationMs": 2258.270200000028,
+              "durationMs": 2320.8205000000307,
               "missingUsefulSymbols": [
                 "SDL_MCP_SERVER_INSTRUCTIONS",
                 "MCPServer"
@@ -1942,7 +1942,7 @@
               "usefulTotal": 2,
               "noiseHits": 1,
               "evidenceCount": 6,
-              "durationMs": 2424.5899999999674,
+              "durationMs": 2535.475999999966,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 1800,
@@ -1984,7 +1984,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 0,
-              "durationMs": 1096.1195000000298,
+              "durationMs": 1175.7351999999955,
               "missingUsefulSymbols": [
                 "SDL_MCP_SERVER_INSTRUCTIONS",
                 "MCPServer"
@@ -2057,7 +2057,7 @@
         "graphIntegrityState": "verified",
         "graphIntegrityVersionId": "v1785126876597",
         "graphIntegrityDigest": "975a6570e4635eed415ce36f1af61b2ab5cffddad680e8a3b379952ee355f14b",
-        "cacheKey": "win32-x64-schema23-models-4656e5744dd0"
+        "cacheKey": "win32-x64-schema23-models-4656e5744dd0-corpus-bf05fdaefe7d"
       },
       "ladybugClosedBeforeArtifact": true,
       "seedResolutionDiagnostics": {
@@ -2080,27 +2080,27 @@
         },
         "baseline": {
           "samplesMs": [
-            271.27199999999993,
-            58.114100000000235,
-            266.33790000000045,
-            53.652000000000044,
-            283.41659999999956,
-            58.04029999999966
+            268.24310000000014,
+            56.99629999999979,
+            264.17109999999957,
+            54.73039999999946,
+            274.66100000000006,
+            61.36279999999988
           ],
-          "p50Ms": 58.114100000000235,
-          "p95Ms": 283.41659999999956
+          "p50Ms": 61.36279999999988,
+          "p95Ms": 274.66100000000006
         },
         "control": {
           "samplesMs": [
-            273.65490000000045,
-            55.514900000000125,
-            264.9445999999998,
-            54.66939999999977,
-            277.7619000000004,
-            62.673899999999776
+            267.0455999999999,
+            62.296299999999974,
+            271.7970000000005,
+            53.8784999999998,
+            298.34410000000025,
+            57.4384
           ],
-          "p50Ms": 62.673899999999776,
-          "p95Ms": 277.7619000000004
+          "p50Ms": 62.296299999999974,
+          "p95Ms": 298.34410000000025
         }
       },
       "requestedVariant": "all",
@@ -2137,10 +2137,10 @@
             "evidenceTokensPerRequiredHit": 617.5
           },
           "latencyMs": {
-            "p50": 78.71939999999995,
-            "p95": 223.57360000000006,
-            "max": 223.57360000000006,
-            "total": 302.293
+            "p50": 75.02459999999996,
+            "p95": 230.82580000000007,
+            "max": 230.82580000000007,
+            "total": 305.85040000000004
           },
           "caseResults": [
             {
@@ -2151,7 +2151,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 223.57360000000006,
+              "durationMs": 230.82580000000007,
               "missingUsefulSymbols": [
                 "buildCart"
               ],
@@ -2198,7 +2198,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 1,
-              "durationMs": 78.71939999999995,
+              "durationMs": 75.02459999999996,
               "missingUsefulSymbols": [
                 "auditOrder",
                 "placeOrder"
@@ -2260,10 +2260,10 @@
             "evidenceTokensPerRequiredHit": 381.6666666666667
           },
           "latencyMs": {
-            "p50": 63.54290000000037,
-            "p95": 1429.2095000000002,
-            "max": 1429.2095000000002,
-            "total": 1492.7524000000005
+            "p50": 59.74969999999985,
+            "p95": 1437.6983000000002,
+            "max": 1437.6983000000002,
+            "total": 1497.448
           },
           "caseResults": [
             {
@@ -2274,7 +2274,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 10,
-              "durationMs": 1429.2095000000002,
+              "durationMs": 1437.6983000000002,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 1800,
@@ -2319,7 +2319,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 1,
-              "durationMs": 63.54290000000037,
+              "durationMs": 59.74969999999985,
               "missingUsefulSymbols": [
                 "auditOrder",
                 "placeOrder"
@@ -2381,10 +2381,10 @@
             "evidenceTokensPerRequiredHit": 324.3333333333333
           },
           "latencyMs": {
-            "p50": 318.80830000000014,
-            "p95": 333.4227000000001,
-            "max": 333.4227000000001,
-            "total": 652.2310000000002
+            "p50": 308.99040000000014,
+            "p95": 313.4249999999997,
+            "max": 313.4249999999997,
+            "total": 622.4153999999999
           },
           "caseResults": [
             {
@@ -2395,7 +2395,7 @@
               "usefulTotal": 3,
               "noiseHits": 0,
               "evidenceCount": 9,
-              "durationMs": 333.4227000000001,
+              "durationMs": 308.99040000000014,
               "missingUsefulSymbols": [],
               "relevance": {
                 "budgetTokens": 1800,
@@ -2440,7 +2440,7 @@
               "usefulTotal": 2,
               "noiseHits": 0,
               "evidenceCount": 0,
-              "durationMs": 318.80830000000014,
+              "durationMs": 313.4249999999997,
               "missingUsefulSymbols": [
                 "auditOrder",
                 "placeOrder"

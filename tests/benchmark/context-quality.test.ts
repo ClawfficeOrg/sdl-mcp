@@ -83,6 +83,7 @@ interface Evidence {
 
 interface ContextResult {
   finalEvidence?: Evidence[];
+  evidence?: unknown[];
   success: boolean;
   answer?: string;
   actionsTaken?: Array<{
@@ -295,17 +296,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 let estimateBenchmarkTokens = (text: string): number =>
   Math.ceil(text.length / 4);
 
+function benchmarkEvidenceItems(input: unknown): Record<string, unknown>[] {
+  const result = isRecord(input) ? input : {};
+  const evidence = Array.isArray(result.finalEvidence)
+    ? result.finalEvidence
+    : Array.isArray(result.evidence)
+      ? result.evidence
+      : [];
+  return evidence.map((item) => (isRecord(item) ? item : {}));
+}
+
+function benchmarkEvidenceSymbolIds(input: unknown): string[] {
+  return [
+    ...new Set(
+      benchmarkEvidenceItems(input).flatMap((item) => {
+        if (typeof item.symbolId === "string") return [item.symbolId];
+        const reference =
+          typeof item.reference === "string" ? item.reference : "";
+        const id = /^(?:symbol|hotpath):(.+)$/.exec(reference)?.[1];
+        return id ? [id] : [];
+      }),
+    ),
+  ];
+}
+
 function normalizeBenchmarkResult(
   input: unknown,
   symbolNames: ReadonlyMap<string, string>,
   resolvedPaths: readonly (string | undefined)[],
 ) {
-  const result = isRecord(input) ? input : {};
-  const rawEvidence = Array.isArray(result.finalEvidence)
-    ? result.finalEvidence
-    : Array.isArray(result.evidence)
-      ? result.evidence
-      : [];
+  const rawEvidence = benchmarkEvidenceItems(input);
   const evidence = rawEvidence.map((raw, index) => {
     const item = isRecord(raw) ? raw : {};
     const reference = typeof item.reference === "string" ? item.reference : "";
@@ -333,6 +353,27 @@ function normalizeBenchmarkResult(
       ),
     ],
   };
+}
+
+async function resolveNormalizedBenchmarkResult(
+  input: unknown,
+  resolveSymbolNames: (
+    symbolIds: string[],
+  ) => Promise<ReadonlyMap<string, string>>,
+  resolvePaths: (
+    evidence: Array<Pick<Evidence, "reference">>,
+  ) => Promise<Array<string | undefined>>,
+) {
+  const evidence = benchmarkEvidenceItems(input);
+  return normalizeBenchmarkResult(
+    input,
+    await resolveSymbolNames(benchmarkEvidenceSymbolIds(input)),
+    await resolvePaths(
+      evidence.map((item) => ({
+        reference: typeof item.reference === "string" ? item.reference : "",
+      })),
+    ),
+  );
 }
 
 function measureNormalizedCase(
@@ -377,6 +418,7 @@ function measureNormalizedCase(
 }
 
 function buildBenchmarkManifest(input: {
+  corpus: BenchmarkCorpus;
   repoSha: string;
   configText: string;
   schemaVersion: number;
@@ -410,17 +452,31 @@ function buildBenchmarkManifest(input: {
     .update(JSON.stringify(activeEmbeddingModels))
     .digest("hex")
     .slice(0, 12);
+  const configDigest = createHash("sha256")
+    .update(input.configText)
+    .digest("hex");
+  const corpusDigest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        corpus: input.corpus,
+        repoSha: input.repoSha,
+        configDigest,
+        graphIntegrityDigest: input.graphIntegrityDigest,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 12);
   return {
-    corpus: CORPUS,
+    corpus: input.corpus,
     repoSha: input.repoSha,
-    configDigest: createHash("sha256").update(input.configText).digest("hex"),
+    configDigest,
     schemaVersion: input.schemaVersion,
     activeEmbeddingModels,
     graphVersionId: input.graphVersionId,
     graphIntegrityState: "verified" as const,
     graphIntegrityVersionId: input.graphIntegrityVersionId,
     graphIntegrityDigest: input.graphIntegrityDigest,
-    cacheKey: `${process.platform}-${process.arch}-schema${input.schemaVersion}-models-${modelDigest}`,
+    cacheKey: `${process.platform}-${process.arch}-schema${input.schemaVersion}-models-${modelDigest}-corpus-${corpusDigest}`,
   };
 }
 
@@ -509,7 +565,7 @@ function shouldScopeCase(c: BenchmarkCase, selectedCase: boolean): boolean {
 }
 
 async function resolveEvidencePaths(
-  evidence: Evidence[],
+  evidence: Array<Pick<Evidence, "reference">>,
 ): Promise<Array<string | undefined>> {
   assert.ok(ladybugConn, "LadybugDB connection must be initialized");
   assert.ok(ladybugQueries, "LadybugDB queries must be initialized");
@@ -602,15 +658,16 @@ async function measureCaseRelevance(
   };
   if (result) {
     assert.ok(ladybugConn && ladybugQueries);
-    const evidence = result.finalEvidence ?? [];
-    const symbols = await ladybugQueries.getSymbolsByIds(
-      ladybugConn,
-      selectedSymbolIds(evidence),
-    );
-    normalized = normalizeBenchmarkResult(
+    normalized = await resolveNormalizedBenchmarkResult(
       result,
-      new Map([...symbols].map(([id, symbol]) => [id, symbol.name])),
-      await resolveEvidencePaths(evidence),
+      async (symbolIds) => {
+        const symbols = await ladybugQueries.getSymbolsByIds(
+          ladybugConn,
+          symbolIds,
+        );
+        return new Map([...symbols].map(([id, symbol]) => [id, symbol.name]));
+      },
+      resolveEvidencePaths,
     );
   }
   return {
@@ -885,8 +942,12 @@ function assertSelectedReportCase(result: CaseMetrics): void {
   }
 }
 
-function skipOrFail(reason: string): boolean {
-  if (REQUIRE_LIVE_INDEX) {
+function skipOrFail(
+  reason: string,
+  requireLiveIndex = REQUIRE_LIVE_INDEX,
+  recordBaseline = RECORD_BASELINE,
+): boolean {
+  if (requireLiveIndex || recordBaseline) {
     assert.fail(reason);
   }
   console.warn(`[context-quality] skipped live gate: ${reason}`);
@@ -1156,6 +1217,7 @@ describe("context quality benchmarks", () => {
         config.semantic,
       );
       metrics.manifest = buildBenchmarkManifest({
+        corpus: CORPUS,
         repoSha: PINNED_REPO_SHA,
         configText: readFileSync(
           process.env.SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH ?? configPath,
@@ -1322,8 +1384,31 @@ describe("context quality benchmarks", () => {
       );
     });
 
+    it("resolves V2 evidence IDs through the normalized relevance view", async () => {
+      const requestedIds: string[] = [];
+      const normalized = await resolveNormalizedBenchmarkResult(
+        {
+          evidence: [
+            { symbolId: "noise-id", path: paths[0] },
+            { symbolId: "primary-id", path: paths[2] },
+          ],
+        },
+        async (ids) => {
+          requestedIds.push(...ids);
+          return names;
+        },
+        async () => [],
+      );
+      assert.deepEqual(requestedIds, ["noise-id", "primary-id"]);
+      assert.equal(
+        measureNormalizedCase(labels, normalized).primarySymbolReciprocalRank,
+        0.5,
+      );
+    });
+
     it("rejects unverified manifests and builds the cache key", () => {
       const input = {
+        corpus: "sdl-mcp" as const,
         repoSha: "a".repeat(40),
         configText: "{}",
         schemaVersion: 3,
@@ -1336,7 +1421,12 @@ describe("context quality benchmarks", () => {
       };
       const manifest = buildBenchmarkManifest(input);
       assert.match(manifest.configDigest, /^[a-f0-9]{64}$/);
-      assert.match(manifest.cacheKey, /schema3-models-[a-f0-9]{12}$/);
+      assert.equal(buildBenchmarkManifest(input).cacheKey, manifest.cacheKey);
+      assert.notEqual(
+        buildBenchmarkManifest({ ...input, corpus: "neutral" }).cacheKey,
+        manifest.cacheKey,
+      );
+      assert.match(manifest.cacheKey, /corpus-[a-f0-9]{12}$/);
       assert.throws(
         () =>
           buildBenchmarkManifest({ ...input, graphIntegrityState: "failed" }),
@@ -1395,6 +1485,20 @@ describe("context quality benchmarks", () => {
   });
 
   describe("semantic gate selection", () => {
+    it("hard-fails baseline infrastructure while preserving ordinary local skips", () => {
+      assert.throws(
+        () => skipOrFail("baseline graph unavailable", false, true),
+        /baseline graph unavailable/,
+      );
+      const originalWarn = console.warn;
+      console.warn = () => {};
+      try {
+        assert.equal(skipOrFail("local graph unavailable", false, false), true);
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
     it("uses one selected case's own expectations instead of aggregate recall", () => {
       const semantic = createMetrics("semantic");
       semantic.cases = 1;
