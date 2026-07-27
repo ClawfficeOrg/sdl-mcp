@@ -571,5 +571,165 @@
       "evaluateSeedResolution",
       "evaluateCase"
     ]
+  },
+  {
+    "id": "qa-2026-07-25-runtime-query-broad",
+    "corpus": "sdl-mcp",
+    "taskType": "debug",
+    "contextMode": "broad",
+    "taskText": "Debug runtime query output and identify the execute/query handlers",
+    "budgetTokens": 2600,
+    "focusPaths": [],
+    "chatMentions": [
+      "runtime.queryOutput",
+      "runtime.execute",
+      "handleRuntimeQueryOutput",
+      "handleRuntimeExecute"
+    ],
+    "includeTests": false,
+    "requireAnswer": false,
+    "sourcePlanCitations": [
+      "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L358-L368",
+      "devdocs/qaplans/2026-07-25-sdl-tool-qa-retest-v0-12-4.md#L50-L66"
+    ],
+    "primarySymbol": "handleRuntimeQueryOutput",
+    "requiredSymbols": ["handleRuntimeQueryOutput", "handleRuntimeExecute"],
+    "usefulSymbols": [
+      "runtimeQueryOutput",
+      "runtimeExecute",
+      "queryRuntimeOutput"
+    ],
+    "negativeSymbols": [
+      "ProcessHandlerShutdown",
+      "SourceLinesByPath",
+      "identifyArchitecturalLayers",
+      "confidenceForBoth",
+      "surfaceRelevantMemories"
+    ],
+    "negativePaths": [
+      "scripts/benchmark.ts",
+      "tests/stress/",
+      "src/indexer/providers/scip/",
+      "src/graph/overview.ts"
+    ]
+  },
+  {
+    "id": "qa-2026-07-25-server-instructions-precise",
+    "corpus": "sdl-mcp",
+    "taskType": "explain",
+    "contextMode": "precise",
+    "taskText": "Explain how SDL_MCP_SERVER_INSTRUCTIONS is consumed by MCPServer.",
+    "budgetTokens": 2200,
+    "focusPaths": [],
+    "chatMentions": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+    "includeTests": false,
+    "requireAnswer": false,
+    "sourcePlanCitations": [
+      "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L370-L378"
+    ],
+    "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+    "requiredSymbols": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+    "usefulSymbols": [
+      "buildCodeModeToolDescriptors",
+      "buildFlatToolDescriptors"
+    ],
+    "negativeSymbols": ["sdlMcp", "Mode"],
+    "negativePaths": [
+      "scripts/benchmark.ts",
+      "tests/integration/live-index-symbol-fts-crash.test.ts"
+    ]
+  },
+  {
+    "id": "qa-2026-07-26-server-instructions-broad",
+    "corpus": "sdl-mcp",
+    "taskType": "explain",
+    "contextMode": "broad",
+    "taskText": "Explain how SDL_MCP_SERVER_INSTRUCTIONS reaches the Code Mode tool surface.",
+    "budgetTokens": 1800,
+    "focusPaths": [],
+    "chatMentions": ["SDL_MCP_SERVER_INSTRUCTIONS"],
+    "includeTests": true,
+    "requireAnswer": false,
+    "sourcePlanCitations": [
+      "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+      "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L201-L214"
+    ],
+    "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+    "requiredSymbols": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+    "usefulSymbols": [
+      "buildCodeModeToolDescriptors",
+      "registerActionSearchTool"
+    ],
+    "negativeSymbols": ["Mode", "sdlMcp"],
+    "negativePaths": [
+      "tests/integration/live-index-symbol-fts-crash.test.ts",
+      "scripts/benchmark.ts"
+    ]
+  },
+  {
+    "id": "qa-2026-07-26-server-instructions-focused",
+    "corpus": "sdl-mcp",
+    "taskType": "explain",
+    "contextMode": "precise",
+    "taskText": "Explain how SDL_MCP_SERVER_INSTRUCTIONS reaches the Code Mode tool surface.",
+    "budgetTokens": 1800,
+    "focusPaths": ["src/mcp/server-instructions.ts", "src/code-mode/index.ts"],
+    "chatMentions": ["SDL_MCP_SERVER_INSTRUCTIONS"],
+    "includeTests": true,
+    "requireAnswer": false,
+    "sourcePlanCitations": [
+      "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+      "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L216-L230"
+    ],
+    "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+    "requiredSymbols": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+    "usefulSymbols": ["buildCodeModeToolDescriptors", "createMCPServer"],
+    "negativeSymbols": ["Mode", "sdlMcp"],
+    "negativePaths": [
+      "tests/integration/live-index-symbol-fts-crash.test.ts",
+      "scripts/benchmark.ts"
+    ]
+  },
+  {
+    "id": "neutral-explain-cart-totals",
+    "corpus": "neutral",
+    "taskType": "explain",
+    "contextMode": "broad",
+    "taskText": "Explain how a cart total is calculated from catalog prices, promotions, customer adjustments, tax, and money formatting.",
+    "budgetTokens": 1800,
+    "focusPaths": [],
+    "chatMentions": ["buildCart", "resolvePromo", "customerAdjustment"],
+    "includeTests": false,
+    "requireAnswer": false,
+    "sourcePlanCitations": [
+      "devdocs/plans/002-sdl-context-rebuild.md#L125",
+      "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+    ],
+    "primarySymbol": "buildCart",
+    "requiredSymbols": ["buildCart", "resolvePromo", "customerAdjustment"],
+    "usefulSymbols": ["getProduct", "formatMoney", "summarizeCart", "TAX_RATE"],
+    "negativeSymbols": ["auditOrder", "placeOrder"],
+    "negativePaths": ["src/audit.js", "src/orders.js"]
+  },
+  {
+    "id": "neutral-debug-order-audit",
+    "corpus": "neutral",
+    "taskType": "debug",
+    "contextMode": "precise",
+    "taskText": "Debug why the order audit string exposes the payment token after placeOrder succeeds.",
+    "budgetTokens": 1200,
+    "focusPaths": ["src/audit.js", "src/orders.js"],
+    "chatMentions": ["auditOrder", "placeOrder", "paymentToken"],
+    "includeTests": false,
+    "requireAnswer": false,
+    "sourcePlanCitations": [
+      "devdocs/plans/002-sdl-context-rebuild.md#L125",
+      "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+    ],
+    "primarySymbol": "auditOrder",
+    "requiredSymbols": ["auditOrder", "placeOrder"],
+    "usefulSymbols": ["listOrders"],
+    "negativeSymbols": ["buildCart", "resolvePromo"],
+    "negativePaths": ["src/cart.js", "src/discounts.js"]
   }
 ]

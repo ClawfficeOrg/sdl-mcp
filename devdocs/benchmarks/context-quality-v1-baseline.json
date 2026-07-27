@@ -1,0 +1,2494 @@
+{
+  "schemaVersion": 1,
+  "benchmark": "context-quality-v1-baseline",
+  "engine": "v1",
+  "corpora": {
+    "sdl-mcp": {
+      "schemaVersion": 2,
+      "benchmark": "context-quality",
+      "corpus": "sdl-mcp",
+      "repoId": "sdl-mcp",
+      "manifest": {
+        "corpus": "sdl-mcp",
+        "repoSha": "fcf4f2e11c5a1bb9b301a245af42b28556414b8e",
+        "configDigest": "81056985681bc48fd8e55e871e3e7092d68ab88ec422776ac5b38bcf9933a141",
+        "schemaVersion": 23,
+        "activeEmbeddingModels": {
+          "symbol": [
+            "jina-embeddings-v2-base-code"
+          ],
+          "fileSummary": [
+            "nomic-embed-text-v1.5"
+          ]
+        },
+        "graphVersionId": "v1785128124401",
+        "graphIntegrityState": "verified",
+        "graphIntegrityVersionId": "v1785128124401",
+        "graphIntegrityDigest": "869d921f4da6d50c6572b4af09cf6c68cf05a4079b6fe638a0d4441a9ad75e88",
+        "cacheKey": "win32-x64-schema23-models-4656e5744dd0"
+      },
+      "ladybugClosedBeforeArtifact": true,
+      "seedResolutionDiagnostics": {
+        "command": "npm run benchmark:seed-resolution",
+        "artifact": "devdocs/benchmarks/seed-resolution-evaluation-v1.json"
+      },
+      "corpusCaseCount": 31,
+      "selectedCaseId": null,
+      "baselineRecording": true,
+      "pairedLatency": {
+        "protocol": {
+          "warmupRuns": 1,
+          "sampleRuns": 3,
+          "interleave": "alternating-lane-first",
+          "laneLabels": [
+            "baseline",
+            "control"
+          ],
+          "casesPerLanePerSample": 31
+        },
+        "baseline": {
+          "samplesMs": [
+            168.82259999995586,
+            175.56670000002487,
+            106.74520000000484,
+            123.51779999997234,
+            4241.412300000025,
+            4134.002999999968,
+            4148.219800000021,
+            4206.751199999999,
+            210.49760000000242,
+            229.17380000004778,
+            176.98200000001816,
+            3366.3690999999526,
+            3809.1020000000135,
+            4273.154900000023,
+            281.7270000000135,
+            202.48399999999674,
+            238.78740000003017,
+            3881.2007999999914,
+            3664.61599999998,
+            3439.4511000000057,
+            131.78669999999693,
+            141.55160000000615,
+            4074.121199999994,
+            3525.5049,
+            291.69089999998687,
+            5564.438400000043,
+            4348.3833999999915,
+            5788.454099999974,
+            688.4060999999638,
+            2353.0937999999733,
+            505.7062000000151,
+            182.014899999951,
+            192.1168999999063,
+            122.97660000005271,
+            97.57810000004247,
+            4238.792100000079,
+            4116.62639999995,
+            4159.7496999999275,
+            4219.7360000000335,
+            207.61450000002515,
+            230.33649999997579,
+            176.3513999999268,
+            3361.277699999977,
+            3768.304999999935,
+            4303.454599999939,
+            241.1062999999849,
+            196.9499000000069,
+            274.34170000010636,
+            3904.4856000000145,
+            3626.984300000011,
+            3428.979500000016,
+            128.12019999988843,
+            135.65260000003036,
+            4088.264099999913,
+            3532.937900000019,
+            255.44369999994524,
+            5641.002000000095,
+            4349.181299999938,
+            5764.294400000013,
+            699.2144000000553,
+            2365.4104000000516,
+            502.87959999998566,
+            171.52009999996517,
+            174.05550000001676,
+            148.90030000009574,
+            92.29830000002403,
+            4231.533900000039,
+            4119.209599999944,
+            4122.526699999929,
+            4240.72649999999,
+            231.95890000008512,
+            216.8295999999391,
+            176.97669999999925,
+            3372.903399999952,
+            3772.169899999979,
+            4251.612399999984,
+            237.86249999993015,
+            241.86779999989085,
+            239.65949999995064,
+            3932.2642000000924,
+            3609.5673999999417,
+            3447.096499999985,
+            122.95380000001751,
+            136.60820000001695,
+            4099.169400000013,
+            3479.914300000062,
+            284.9666000000434,
+            5582.54560000007,
+            4353.496700000018,
+            5703.458899999969,
+            701.5338999999221,
+            2368.1657000000123,
+            508.6263999999501
+          ],
+          "p50Ms": 2365.4104000000516,
+          "p95Ms": 5582.54560000007
+        },
+        "control": {
+          "samplesMs": [
+            168.86599999997998,
+            181.3012999999919,
+            107.27349999995204,
+            132.2516000000178,
+            4207.871600000013,
+            4079.683500000043,
+            4155.164800000028,
+            4207.79019999993,
+            205.7502000000095,
+            232.2341000000015,
+            173.3641999999527,
+            3375.6807000000263,
+            3774.7804999999935,
+            4280.7331999999005,
+            272.7186999999685,
+            198.62739999999758,
+            242.92199999990407,
+            3955.496700000018,
+            3620.4620000000577,
+            3404.042000000016,
+            124.70519999996759,
+            137.44270000001416,
+            4056.315399999963,
+            3563.0916000000434,
+            253.8066000000108,
+            5577.420199999935,
+            4407.640800000052,
+            5714.4985999999335,
+            693.5921000000089,
+            2352.709099999978,
+            518.2272000000812,
+            175.1732000000775,
+            173.2493999999715,
+            111.73349999997299,
+            123.64279999991413,
+            4294.996199999936,
+            4090.0808000001125,
+            4109.632400000002,
+            4200.51820000005,
+            231.69539999996778,
+            220.2791000000434,
+            174.15700000000652,
+            3381.6929000000237,
+            3773.1331000000937,
+            4296.4375,
+            240.21869999996852,
+            238.74660000007134,
+            239.65730000007898,
+            3941.164299999946,
+            3590.8351999999722,
+            3461.7815999999875,
+            127.68759999994654,
+            134.482699999935,
+            4117.393099999987,
+            3529.8212999999523,
+            286.30609999992885,
+            5571.823500000057,
+            4347.366500000004,
+            5735.828600000008,
+            687.0670999999857,
+            2391.610800000024,
+            515.1963000000687,
+            168.13670000003185,
+            177.421399999992,
+            116.14529999997467,
+            129.49509999994189,
+            4240.4977999998955,
+            4126.931899999967,
+            4125.422599999933,
+            4195.411599999992,
+            207.19980000006035,
+            229.59310000005644,
+            171.18339999997988,
+            3374.3882999999914,
+            3794.2990999999456,
+            4293.574000000022,
+            244.03689999994822,
+            198.34619999991264,
+            274.4332000000868,
+            3920.475000000093,
+            3636.836499999976,
+            3406.8267000000924,
+            128.33679999993183,
+            140.2948000000324,
+            4087.840199999977,
+            3519.5272000000114,
+            289.41929999995045,
+            5580.885200000019,
+            4352.325800000108,
+            5744.182700000005,
+            690.2354999999516,
+            2366.181600000011,
+            511.6611999999732
+          ],
+          "p50Ms": 2366.181600000011,
+          "p95Ms": 5577.420199999935
+        }
+      },
+      "requestedVariant": "all",
+      "detailMode": "none",
+      "repoAvailable": true,
+      "availabilityReason": "using verified graph for repo sdl-mcp",
+      "thresholds": {
+        "semanticAggregateRecallMinPercent": 85,
+        "semanticNoiseRateMaxPercent": 10,
+        "scopedPreciseP95MaxMs": 250
+      },
+      "variants": [
+        {
+          "name": "lexical",
+          "cases": 31,
+          "failures": 0,
+          "expectedTotal": 137,
+          "usefulHits": 62,
+          "recallPercent": 45.25547445255474,
+          "preciseRecallPercent": 47.61904761904761,
+          "broadRecallPercent": 43.24324324324324,
+          "totalEvidenceItems": 458,
+          "noiseHits": 3,
+          "noiseRatePercent": 0.6550218340611353,
+          "relevance": {
+            "labeledCases": 4,
+            "requiredSymbols": 8,
+            "requiredHits": 5,
+            "requiredSymbolRecallPercent": 62.5,
+            "primarySymbolMrr": 0.625,
+            "evidenceTokens": 3298,
+            "explicitNoiseTokens": 226,
+            "explicitNoiseTokenRatio": 0.06852637962401456,
+            "evidenceTokensPerRequiredHit": 659.6
+          },
+          "latencyMs": {
+            "p50": 2514.371199999994,
+            "p95": 5026.053400000001,
+            "max": 5320.688399999999,
+            "total": 80294.98240000001
+          },
+          "caseResults": [
+            {
+              "id": "debug-precise-truncation-logic",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 1998.2006000000001,
+              "missingUsefulSymbols": [
+                "truncateIfOverBudget",
+                "ContextEngine",
+                "estimateTokens",
+                "MAX_CONTEXT_RESPONSE_TOKENS"
+              ]
+            },
+            {
+              "id": "debug-precise-executor-card-rung",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 1225.2946000000002,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "debug-precise-planner-budget",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 1099.3141999999998,
+              "missingUsefulSymbols": [
+                "buildRungPath"
+              ]
+            },
+            {
+              "id": "debug-precise-feedback-boost",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 5,
+              "durationMs": 563.7980000000007,
+              "missingUsefulSymbols": [
+                "FeedbackBoostResult"
+              ]
+            },
+            {
+              "id": "debug-broad-entity-search-fallback",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 29,
+              "durationMs": 5320.688399999999,
+              "missingUsefulSymbols": [
+                "searchSymbols"
+              ]
+            },
+            {
+              "id": "debug-broad-cluster-expansion",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 29,
+              "durationMs": 4521.885,
+              "missingUsefulSymbols": [
+                "getClustersForSymbols"
+              ]
+            },
+            {
+              "id": "debug-broad-broad-projection",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 26,
+              "durationMs": 4951.181199999999,
+              "missingUsefulSymbols": [
+                "BROAD_VISIBLE_FIELDS",
+                "handleAgentContext"
+              ]
+            },
+            {
+              "id": "debug-broad-skeleton-rung-timeout",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 27,
+              "durationMs": 5026.053400000001,
+              "missingUsefulSymbols": [
+                "SkeletonOptions"
+              ]
+            },
+            {
+              "id": "explain-precise-context-ladder",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 2132.927200000002,
+              "missingUsefulSymbols": [
+                "buildRungPath",
+                "RungType",
+                "TaskType"
+              ]
+            },
+            {
+              "id": "explain-precise-evidence-types",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 5,
+              "durationMs": 879.3455999999969,
+              "missingUsefulSymbols": [
+                "Evidence",
+                "Executor",
+                "executeCardRung",
+                "executeSkeletonRung",
+                "executeHotPathRung",
+                "Action"
+              ]
+            },
+            {
+              "id": "explain-precise-gate-policy",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 5,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 1183.428200000002,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "explain-broad-retrieval-pipeline",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 2798.5619000000006,
+              "missingUsefulSymbols": [
+                "hybridSearch",
+                "HybridSearchResult",
+                "RetrievalEvidence",
+                "HybridSearchOptions"
+              ]
+            },
+            {
+              "id": "explain-broad-beam-search",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3055.6254999999983,
+              "missingUsefulSymbols": [
+                "beamSearch",
+                "BeamSearchRequest",
+                "shouldTightenDynamicCap",
+                "normalizeEdgeConfidence"
+              ]
+            },
+            {
+              "id": "explain-broad-answer-generation",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 3561.9329999999973,
+              "missingUsefulSymbols": [
+                "generateAnswer",
+                "generateSummary"
+              ]
+            },
+            {
+              "id": "review-precise-executor-error-handling",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 14,
+              "durationMs": 1670.811099999999,
+              "missingUsefulSymbols": [
+                "executeCardRung",
+                "executeSkeletonRung"
+              ]
+            },
+            {
+              "id": "review-precise-projection-completeness",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 1227.3591000000015,
+              "missingUsefulSymbols": [
+                "BROAD_VISIBLE_FIELDS"
+              ]
+            },
+            {
+              "id": "review-precise-identifier-extraction",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 1649.6273999999976,
+              "missingUsefulSymbols": [
+                "MAX_IDENTIFIERS"
+              ]
+            },
+            {
+              "id": "review-broad-context-seeding",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3510.029300000002,
+              "missingUsefulSymbols": [
+                "ContextEngine",
+                "entitySearch",
+                "queryFeedbackBoosts",
+                "expandContextForClusters",
+                "extractIdentifiersFromText"
+              ]
+            },
+            {
+              "id": "review-broad-truncation-strategy",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3020.6642999999967,
+              "missingUsefulSymbols": [
+                "truncateIfOverBudget",
+                "estimateTokens",
+                "ContextResult",
+                "MAX_CONTEXT_RESPONSE_TOKENS"
+              ]
+            },
+            {
+              "id": "review-broad-score-ranking",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 2928.172200000001,
+              "missingUsefulSymbols": [
+                "calculateHotness",
+                "combineScores"
+              ]
+            },
+            {
+              "id": "implement-precise-skeleton-budget",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 1675.9161000000022,
+              "missingUsefulSymbols": [
+                "extractSkeletonFromNode",
+                "trimSkeletonToBounds",
+                "SkeletonOptions",
+                "SkeletonResult",
+                "executeSkeletonRung"
+              ]
+            },
+            {
+              "id": "implement-precise-confidence-planning",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 1727.7791999999972,
+              "missingUsefulSymbols": [
+                "buildRungPath",
+                "adjustForBudget",
+                "normalizeEdgeConfidence",
+                "getAdaptiveMinConfidence"
+              ]
+            },
+            {
+              "id": "implement-broad-semantic-seeding",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3819.2998000000007,
+              "missingUsefulSymbols": [
+                "ContextEngine",
+                "entitySearch",
+                "extractIdentifiersFromText"
+              ]
+            },
+            {
+              "id": "implement-broad-evidence-dedup",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 2514.371199999994,
+              "missingUsefulSymbols": [
+                "Action",
+                "executeCardRung",
+                "selectTopSymbols",
+                "ExecutionMetrics"
+              ]
+            },
+            {
+              "id": "review-precise-tool-qa-tests",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 11,
+              "durationMs": 4413.573500000006,
+              "missingUsefulSymbols": [
+                "projectToolResultForModelContent",
+                "diffSignature",
+                "runLeg"
+              ]
+            },
+            {
+              "id": "review-broad-sdl-tool-functionality",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4965.1640999999945,
+              "missingUsefulSymbols": [
+                "MCPServer",
+                "dispatchAction",
+                "routeGatewayCall",
+                "formatToolCallForUser"
+              ]
+            },
+            {
+              "id": "review-broad-tool-contract-relevance",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 2585.80260000001,
+              "missingUsefulSymbols": [
+                "buildFlatToolDescriptors",
+                "registerTool",
+                "buildToolResponseEnvelope",
+                "asStructuredContent",
+                "handleRuntimeQueryOutput"
+              ]
+            },
+            {
+              "id": "qa-2026-07-25-runtime-query-broad",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 1,
+              "evidenceCount": 14,
+              "durationMs": 3176.726899999994,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 2600,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L358-L368",
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-retest-v0-12-4.md#L50-L66"
+                ],
+                "primarySymbol": "handleRuntimeQueryOutput",
+                "requiredSymbols": [
+                  "handleRuntimeQueryOutput",
+                  "handleRuntimeExecute"
+                ],
+                "usefulSymbols": [
+                  "runtimeQueryOutput",
+                  "runtimeExecute",
+                  "queryRuntimeOutput"
+                ],
+                "negativeSymbols": [
+                  "ProcessHandlerShutdown",
+                  "SourceLinesByPath",
+                  "identifyArchitecturalLayers",
+                  "confidenceForBoth",
+                  "surfaceRelevantMemories"
+                ],
+                "negativePaths": [
+                  "scripts/benchmark.ts",
+                  "tests/stress/",
+                  "src/indexer/providers/scip/",
+                  "src/graph/overview.ts"
+                ],
+                "requiredHits": 2,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 1,
+                "evidenceTokens": 1750,
+                "explicitNoiseTokens": 226,
+                "explicitNoiseTokenRatio": 0.12914285714285714,
+                "evidenceTokensPerRequiredHit": 875
+              }
+            },
+            {
+              "id": "qa-2026-07-25-server-instructions-precise",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 1,
+              "evidenceCount": 6,
+              "durationMs": 703.7014000000054,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 2200,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L370-L378"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "buildFlatToolDescriptors"
+                ],
+                "negativeSymbols": [
+                  "sdlMcp",
+                  "Mode"
+                ],
+                "negativePaths": [
+                  "scripts/benchmark.ts",
+                  "tests/integration/live-index-symbol-fts-crash.test.ts"
+                ],
+                "requiredHits": 2,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 0.5,
+                "evidenceTokens": 823,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 411.5
+              }
+            },
+            {
+              "id": "qa-2026-07-26-server-instructions-broad",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 1,
+              "evidenceCount": 6,
+              "durationMs": 1863.861499999999,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L201-L214"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "registerActionSearchTool"
+                ],
+                "negativeSymbols": [
+                  "Mode",
+                  "sdlMcp"
+                ],
+                "negativePaths": [
+                  "tests/integration/live-index-symbol-fts-crash.test.ts",
+                  "scripts/benchmark.ts"
+                ],
+                "requiredHits": 1,
+                "requiredSymbolRecallPercent": 50,
+                "primarySymbolReciprocalRank": 1,
+                "evidenceTokens": 725,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 725
+              }
+            },
+            {
+              "id": "qa-2026-07-26-server-instructions-focused",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 0,
+              "durationMs": 523.8859000000084,
+              "missingUsefulSymbols": [
+                "SDL_MCP_SERVER_INSTRUCTIONS",
+                "MCPServer"
+              ],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L216-L230"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "createMCPServer"
+                ],
+                "negativeSymbols": [
+                  "Mode",
+                  "sdlMcp"
+                ],
+                "negativePaths": [
+                  "tests/integration/live-index-symbol-fts-crash.test.ts",
+                  "scripts/benchmark.ts"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 0,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "default",
+          "cases": 31,
+          "failures": 0,
+          "expectedTotal": 137,
+          "usefulHits": 67,
+          "recallPercent": 48.9051094890511,
+          "preciseRecallPercent": 47.61904761904761,
+          "broadRecallPercent": 50,
+          "totalEvidenceItems": 456,
+          "noiseHits": 2,
+          "noiseRatePercent": 0.43859649122807015,
+          "relevance": {
+            "labeledCases": 4,
+            "requiredSymbols": 8,
+            "requiredHits": 5,
+            "requiredSymbolRecallPercent": 62.5,
+            "primarySymbolMrr": 0.625,
+            "evidenceTokens": 3274,
+            "explicitNoiseTokens": 215,
+            "explicitNoiseTokenRatio": 0.06566890653634698,
+            "evidenceTokensPerRequiredHit": 654.8
+          },
+          "latencyMs": {
+            "p50": 3779.3254000000015,
+            "p95": 6285.402100000007,
+            "max": 7597.633900000001,
+            "total": 101044.32449999996
+          },
+          "caseResults": [
+            {
+              "id": "debug-precise-truncation-logic",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 1840.0782999999938,
+              "missingUsefulSymbols": [
+                "truncateIfOverBudget",
+                "ContextEngine",
+                "estimateTokens",
+                "MAX_CONTEXT_RESPONSE_TOKENS"
+              ]
+            },
+            {
+              "id": "debug-precise-executor-card-rung",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 1197.3815999999933,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "debug-precise-planner-budget",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 1036.4653000000108,
+              "missingUsefulSymbols": [
+                "buildRungPath"
+              ]
+            },
+            {
+              "id": "debug-precise-feedback-boost",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 5,
+              "durationMs": 539.8364000000001,
+              "missingUsefulSymbols": [
+                "FeedbackBoostResult"
+              ]
+            },
+            {
+              "id": "debug-broad-entity-search-fallback",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 30,
+              "durationMs": 7597.633900000001,
+              "missingUsefulSymbols": [
+                "searchSymbols"
+              ]
+            },
+            {
+              "id": "debug-broad-cluster-expansion",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 26,
+              "durationMs": 5656.669699999999,
+              "missingUsefulSymbols": [
+                "getClustersForSymbols"
+              ]
+            },
+            {
+              "id": "debug-broad-broad-projection",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 26,
+              "durationMs": 5947.98060000001,
+              "missingUsefulSymbols": [
+                "BROAD_VISIBLE_FIELDS",
+                "handleAgentContext"
+              ]
+            },
+            {
+              "id": "debug-broad-skeleton-rung-timeout",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 28,
+              "durationMs": 6285.402100000007,
+              "missingUsefulSymbols": [
+                "SkeletonOptions"
+              ]
+            },
+            {
+              "id": "explain-precise-context-ladder",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 2147.994399999996,
+              "missingUsefulSymbols": [
+                "buildRungPath",
+                "RungType",
+                "TaskType"
+              ]
+            },
+            {
+              "id": "explain-precise-evidence-types",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 5,
+              "durationMs": 946.361699999994,
+              "missingUsefulSymbols": [
+                "Evidence",
+                "Executor",
+                "executeCardRung",
+                "executeSkeletonRung",
+                "executeHotPathRung",
+                "Action"
+              ]
+            },
+            {
+              "id": "explain-precise-gate-policy",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 5,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 1096.7532999999967,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "explain-broad-retrieval-pipeline",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3779.3254000000015,
+              "missingUsefulSymbols": [
+                "hybridSearch",
+                "HybridSearchResult",
+                "RetrievalEvidence",
+                "HybridSearchOptions"
+              ]
+            },
+            {
+              "id": "explain-broad-beam-search",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3956.9717999999993,
+              "missingUsefulSymbols": [
+                "beamSearch",
+                "BeamSearchRequest",
+                "shouldTightenDynamicCap",
+                "normalizeEdgeConfidence"
+              ]
+            },
+            {
+              "id": "explain-broad-answer-generation",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 4400.493100000007,
+              "missingUsefulSymbols": [
+                "generateAnswer",
+                "generateSummary"
+              ]
+            },
+            {
+              "id": "review-precise-executor-error-handling",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 14,
+              "durationMs": 1670.232799999998,
+              "missingUsefulSymbols": [
+                "executeCardRung",
+                "executeSkeletonRung"
+              ]
+            },
+            {
+              "id": "review-precise-projection-completeness",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 1303.8337000000029,
+              "missingUsefulSymbols": [
+                "BROAD_VISIBLE_FIELDS"
+              ]
+            },
+            {
+              "id": "review-precise-identifier-extraction",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 1633.6147999999957,
+              "missingUsefulSymbols": [
+                "MAX_IDENTIFIERS"
+              ]
+            },
+            {
+              "id": "review-broad-context-seeding",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4459.52469999998,
+              "missingUsefulSymbols": [
+                "queryFeedbackBoosts",
+                "expandContextForClusters",
+                "extractIdentifiersFromText"
+              ]
+            },
+            {
+              "id": "review-broad-truncation-strategy",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 5837.322199999995,
+              "missingUsefulSymbols": [
+                "truncateIfOverBudget",
+                "estimateTokens",
+                "ContextResult",
+                "MAX_CONTEXT_RESPONSE_TOKENS"
+              ]
+            },
+            {
+              "id": "review-broad-score-ranking",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 3894.439800000022,
+              "missingUsefulSymbols": [
+                "calculateHotness",
+                "combineScores"
+              ]
+            },
+            {
+              "id": "implement-precise-skeleton-budget",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 1687.4489999999932,
+              "missingUsefulSymbols": [
+                "extractSkeletonFromNode",
+                "trimSkeletonToBounds",
+                "SkeletonOptions",
+                "SkeletonResult",
+                "executeSkeletonRung"
+              ]
+            },
+            {
+              "id": "implement-precise-confidence-planning",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 1712.5799999999872,
+              "missingUsefulSymbols": [
+                "buildRungPath",
+                "adjustForBudget",
+                "normalizeEdgeConfidence",
+                "getAdaptiveMinConfidence"
+              ]
+            },
+            {
+              "id": "implement-broad-semantic-seeding",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4922.128400000016,
+              "missingUsefulSymbols": [
+                "ContextEngine",
+                "entitySearch",
+                "extractIdentifiersFromText"
+              ]
+            },
+            {
+              "id": "implement-broad-evidence-dedup",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3893.961899999995,
+              "missingUsefulSymbols": [
+                "Action",
+                "executeCardRung",
+                "selectTopSymbols",
+                "ExecutionMetrics"
+              ]
+            },
+            {
+              "id": "review-precise-tool-qa-tests",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 11,
+              "durationMs": 4379.474199999997,
+              "missingUsefulSymbols": [
+                "projectToolResultForModelContent",
+                "diffSignature",
+                "runLeg"
+              ]
+            },
+            {
+              "id": "review-broad-sdl-tool-functionality",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 5550.660399999993,
+              "missingUsefulSymbols": [
+                "MCPServer",
+                "dispatchAction",
+                "routeGatewayCall",
+                "formatToolCallForUser"
+              ]
+            },
+            {
+              "id": "review-broad-tool-contract-relevance",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4343.050099999993,
+              "missingUsefulSymbols": [
+                "buildToolResponseEnvelope",
+                "asStructuredContent"
+              ]
+            },
+            {
+              "id": "qa-2026-07-25-runtime-query-broad",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 13,
+              "durationMs": 5749.906699999992,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 2600,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L358-L368",
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-retest-v0-12-4.md#L50-L66"
+                ],
+                "primarySymbol": "handleRuntimeQueryOutput",
+                "requiredSymbols": [
+                  "handleRuntimeQueryOutput",
+                  "handleRuntimeExecute"
+                ],
+                "usefulSymbols": [
+                  "runtimeQueryOutput",
+                  "runtimeExecute",
+                  "queryRuntimeOutput"
+                ],
+                "negativeSymbols": [
+                  "ProcessHandlerShutdown",
+                  "SourceLinesByPath",
+                  "identifyArchitecturalLayers",
+                  "confidenceForBoth",
+                  "surfaceRelevantMemories"
+                ],
+                "negativePaths": [
+                  "scripts/benchmark.ts",
+                  "tests/stress/",
+                  "src/indexer/providers/scip/",
+                  "src/graph/overview.ts"
+                ],
+                "requiredHits": 2,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 1,
+                "evidenceTokens": 1708,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 854
+              }
+            },
+            {
+              "id": "qa-2026-07-25-server-instructions-precise",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 1,
+              "evidenceCount": 6,
+              "durationMs": 687.799800000008,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 2200,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L370-L378"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "buildFlatToolDescriptors"
+                ],
+                "negativeSymbols": [
+                  "sdlMcp",
+                  "Mode"
+                ],
+                "negativePaths": [
+                  "scripts/benchmark.ts",
+                  "tests/integration/live-index-symbol-fts-crash.test.ts"
+                ],
+                "requiredHits": 2,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 0.5,
+                "evidenceTokens": 823,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 411.5
+              }
+            },
+            {
+              "id": "qa-2026-07-26-server-instructions-broad",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 1,
+              "evidenceCount": 6,
+              "durationMs": 2378.390699999989,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L201-L214"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "registerActionSearchTool"
+                ],
+                "negativeSymbols": [
+                  "Mode",
+                  "sdlMcp"
+                ],
+                "negativePaths": [
+                  "tests/integration/live-index-symbol-fts-crash.test.ts",
+                  "scripts/benchmark.ts"
+                ],
+                "requiredHits": 1,
+                "requiredSymbolRecallPercent": 50,
+                "primarySymbolReciprocalRank": 1,
+                "evidenceTokens": 743,
+                "explicitNoiseTokens": 215,
+                "explicitNoiseTokenRatio": 0.28936742934051146,
+                "evidenceTokensPerRequiredHit": 743
+              }
+            },
+            {
+              "id": "qa-2026-07-26-server-instructions-focused",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 0,
+              "durationMs": 510.6076999999932,
+              "missingUsefulSymbols": [
+                "SDL_MCP_SERVER_INSTRUCTIONS",
+                "MCPServer"
+              ],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L216-L230"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "createMCPServer"
+                ],
+                "negativeSymbols": [
+                  "Mode",
+                  "sdlMcp"
+                ],
+                "negativePaths": [
+                  "tests/integration/live-index-symbol-fts-crash.test.ts",
+                  "scripts/benchmark.ts"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 0,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "semantic",
+          "cases": 31,
+          "failures": 0,
+          "expectedTotal": 137,
+          "usefulHits": 91,
+          "recallPercent": 66.42335766423358,
+          "preciseRecallPercent": 65.07936507936508,
+          "broadRecallPercent": 67.56756756756756,
+          "totalEvidenceItems": 469,
+          "noiseHits": 1,
+          "noiseRatePercent": 0.21321961620469082,
+          "relevance": {
+            "labeledCases": 4,
+            "requiredSymbols": 8,
+            "requiredHits": 3,
+            "requiredSymbolRecallPercent": 37.5,
+            "primarySymbolMrr": 0.5,
+            "evidenceTokens": 2567,
+            "explicitNoiseTokens": 215,
+            "explicitNoiseTokenRatio": 0.08375535644721464,
+            "evidenceTokensPerRequiredHit": 855.6666666666666
+          },
+          "latencyMs": {
+            "p50": 3984.7682000000495,
+            "p95": 6315.335800000001,
+            "max": 6613.540700000012,
+            "total": 128048.22019999998
+          },
+          "caseResults": [
+            {
+              "id": "debug-precise-truncation-logic",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 2546.719599999982,
+              "missingUsefulSymbols": [
+                "truncateIfOverBudget",
+                "ContextEngine",
+                "estimateTokens",
+                "MAX_CONTEXT_RESPONSE_TOKENS"
+              ]
+            },
+            {
+              "id": "debug-precise-executor-card-rung",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 8,
+              "durationMs": 3686.38989999998,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "debug-precise-planner-budget",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 3572.1180000000168,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "debug-precise-feedback-boost",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 3358.0854999999865,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "debug-broad-entity-search-fallback",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 30,
+              "durationMs": 6315.335800000001,
+              "missingUsefulSymbols": [
+                "searchSymbols"
+              ]
+            },
+            {
+              "id": "debug-broad-cluster-expansion",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 26,
+              "durationMs": 5706.034899999999,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "debug-broad-broad-projection",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 26,
+              "durationMs": 5970.259699999995,
+              "missingUsefulSymbols": [
+                "BROAD_VISIBLE_FIELDS",
+                "handleAgentContext"
+              ]
+            },
+            {
+              "id": "debug-broad-skeleton-rung-timeout",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 28,
+              "durationMs": 6285.992999999988,
+              "missingUsefulSymbols": [
+                "SkeletonOptions"
+              ]
+            },
+            {
+              "id": "explain-precise-context-ladder",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 3078.2827000000107,
+              "missingUsefulSymbols": [
+                "buildRungPath",
+                "RungPath",
+                "RungType",
+                "TaskType"
+              ]
+            },
+            {
+              "id": "explain-precise-evidence-types",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 6,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 3119.2920999999915,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "explain-precise-gate-policy",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 5,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 2852.8096999999834,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "explain-broad-retrieval-pipeline",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3802.9968000000226,
+              "missingUsefulSymbols": [
+                "hybridSearch",
+                "HybridSearchResult",
+                "RetrievalEvidence",
+                "HybridSearchOptions"
+              ]
+            },
+            {
+              "id": "explain-broad-beam-search",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3985.640000000014,
+              "missingUsefulSymbols": [
+                "beamSearch",
+                "BeamSearchRequest",
+                "shouldTightenDynamicCap",
+                "normalizeEdgeConfidence"
+              ]
+            },
+            {
+              "id": "explain-broad-answer-generation",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 5,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 4389.189699999988,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "review-precise-executor-error-handling",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 13,
+              "durationMs": 3008.8359000000055,
+              "missingUsefulSymbols": [
+                "ExecutionMetrics"
+              ]
+            },
+            {
+              "id": "review-precise-projection-completeness",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 12,
+              "durationMs": 4647.406900000002,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "review-precise-identifier-extraction",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 14,
+              "durationMs": 5022.6783,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "review-broad-context-seeding",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 5,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4498.083600000013,
+              "missingUsefulSymbols": [
+                "queryFeedbackBoosts"
+              ]
+            },
+            {
+              "id": "review-broad-truncation-strategy",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 5891.00999999998,
+              "missingUsefulSymbols": [
+                "truncateIfOverBudget"
+              ]
+            },
+            {
+              "id": "review-broad-score-ranking",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 6,
+              "durationMs": 3984.7682000000495,
+              "missingUsefulSymbols": [
+                "calculateHotness",
+                "combineScores"
+              ]
+            },
+            {
+              "id": "implement-precise-skeleton-budget",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 2581.078999999969,
+              "missingUsefulSymbols": [
+                "extractSkeletonFromNode",
+                "trimSkeletonToBounds",
+                "SkeletonOptions",
+                "SkeletonResult"
+              ]
+            },
+            {
+              "id": "implement-precise-confidence-planning",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 2612.013800000015,
+              "missingUsefulSymbols": [
+                "buildRungPath",
+                "adjustForBudget"
+              ]
+            },
+            {
+              "id": "implement-broad-semantic-seeding",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 4,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4948.273099999991,
+              "missingUsefulSymbols": [
+                "ContextEngine",
+                "entitySearch"
+              ]
+            },
+            {
+              "id": "implement-broad-evidence-dedup",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 6,
+              "usefulTotal": 6,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 3928.3016999999527,
+              "missingUsefulSymbols": []
+            },
+            {
+              "id": "review-precise-tool-qa-tests",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 1,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 11,
+              "durationMs": 6613.540700000012,
+              "missingUsefulSymbols": [
+                "handleSearchEdit",
+                "diffSignature",
+                "runLeg"
+              ]
+            },
+            {
+              "id": "review-broad-sdl-tool-functionality",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 4,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 5599.964099999983,
+              "missingUsefulSymbols": [
+                "MCPServer",
+                "dispatchAction",
+                "routeGatewayCall",
+                "formatToolCallForUser"
+              ]
+            },
+            {
+              "id": "review-broad-tool-contract-relevance",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 5,
+              "noiseHits": 0,
+              "evidenceCount": 25,
+              "durationMs": 4405.7119999999995,
+              "missingUsefulSymbols": [
+                "buildToolResponseEnvelope",
+                "asStructuredContent"
+              ]
+            },
+            {
+              "id": "qa-2026-07-25-runtime-query-broad",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 13,
+              "durationMs": 5858.425800000026,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 2600,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L358-L368",
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-retest-v0-12-4.md#L50-L66"
+                ],
+                "primarySymbol": "handleRuntimeQueryOutput",
+                "requiredSymbols": [
+                  "handleRuntimeQueryOutput",
+                  "handleRuntimeExecute"
+                ],
+                "usefulSymbols": [
+                  "runtimeQueryOutput",
+                  "runtimeExecute",
+                  "queryRuntimeOutput"
+                ],
+                "negativeSymbols": [
+                  "ProcessHandlerShutdown",
+                  "SourceLinesByPath",
+                  "identifyArchitecturalLayers",
+                  "confidenceForBoth",
+                  "surfaceRelevantMemories"
+                ],
+                "negativePaths": [
+                  "scripts/benchmark.ts",
+                  "tests/stress/",
+                  "src/indexer/providers/scip/",
+                  "src/graph/overview.ts"
+                ],
+                "requiredHits": 2,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 1,
+                "evidenceTokens": 1708,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 854
+              }
+            },
+            {
+              "id": "qa-2026-07-25-server-instructions-precise",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 0,
+              "durationMs": 2258.270200000028,
+              "missingUsefulSymbols": [
+                "SDL_MCP_SERVER_INSTRUCTIONS",
+                "MCPServer"
+              ],
+              "relevance": {
+                "budgetTokens": 2200,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-25-sdl-tool-qa-evaluation.md#L370-L378"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "buildFlatToolDescriptors"
+                ],
+                "negativeSymbols": [
+                  "sdlMcp",
+                  "Mode"
+                ],
+                "negativePaths": [
+                  "scripts/benchmark.ts",
+                  "tests/integration/live-index-symbol-fts-crash.test.ts"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 0,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            },
+            {
+              "id": "qa-2026-07-26-server-instructions-broad",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 2,
+              "noiseHits": 1,
+              "evidenceCount": 6,
+              "durationMs": 2424.5899999999674,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L201-L214"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "registerActionSearchTool"
+                ],
+                "negativeSymbols": [
+                  "Mode",
+                  "sdlMcp"
+                ],
+                "negativePaths": [
+                  "tests/integration/live-index-symbol-fts-crash.test.ts",
+                  "scripts/benchmark.ts"
+                ],
+                "requiredHits": 1,
+                "requiredSymbolRecallPercent": 50,
+                "primarySymbolReciprocalRank": 1,
+                "evidenceTokens": 859,
+                "explicitNoiseTokens": 215,
+                "explicitNoiseTokenRatio": 0.25029103608847497,
+                "evidenceTokensPerRequiredHit": 859
+              }
+            },
+            {
+              "id": "qa-2026-07-26-server-instructions-focused",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 0,
+              "durationMs": 1096.1195000000298,
+              "missingUsefulSymbols": [
+                "SDL_MCP_SERVER_INSTRUCTIONS",
+                "MCPServer"
+              ],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L79-L89",
+                  "devdocs/qaplans/2026-07-26-sdl-tool-qa-live-v0-12-4.md#L216-L230"
+                ],
+                "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
+                "requiredSymbols": [
+                  "SDL_MCP_SERVER_INSTRUCTIONS",
+                  "MCPServer"
+                ],
+                "usefulSymbols": [
+                  "buildCodeModeToolDescriptors",
+                  "createMCPServer"
+                ],
+                "negativeSymbols": [
+                  "Mode",
+                  "sdlMcp"
+                ],
+                "negativePaths": [
+                  "tests/integration/live-index-symbol-fts-crash.test.ts",
+                  "scripts/benchmark.ts"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 0,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            }
+          ]
+        }
+      ],
+      "scopedPrecise": null,
+      "providerContextCardInvariant": {
+        "requested": false,
+        "status": "not_requested",
+        "graphIntegrityState": null,
+        "graphIntegrityVersionId": null,
+        "graphIntegrityDigest": null,
+        "checkedSymbolIds": [],
+        "providerBackedSymbolIds": []
+      }
+    },
+    "neutral": {
+      "schemaVersion": 2,
+      "benchmark": "context-quality",
+      "corpus": "neutral",
+      "repoId": "sdl-neutral-fixture",
+      "manifest": {
+        "corpus": "neutral",
+        "repoSha": "fcf4f2e11c5a1bb9b301a245af42b28556414b8e",
+        "configDigest": "5b5dba13574f98808f11548e91413ed407823e527b678f69d254a0e6a7eb2850",
+        "schemaVersion": 23,
+        "activeEmbeddingModels": {
+          "symbol": [
+            "jina-embeddings-v2-base-code"
+          ],
+          "fileSummary": [
+            "nomic-embed-text-v1.5"
+          ]
+        },
+        "graphVersionId": "v1785126876597",
+        "graphIntegrityState": "verified",
+        "graphIntegrityVersionId": "v1785126876597",
+        "graphIntegrityDigest": "975a6570e4635eed415ce36f1af61b2ab5cffddad680e8a3b379952ee355f14b",
+        "cacheKey": "win32-x64-schema23-models-4656e5744dd0"
+      },
+      "ladybugClosedBeforeArtifact": true,
+      "seedResolutionDiagnostics": {
+        "command": "npm run benchmark:seed-resolution",
+        "artifact": "devdocs/benchmarks/seed-resolution-evaluation-v1.json"
+      },
+      "corpusCaseCount": 2,
+      "selectedCaseId": null,
+      "baselineRecording": true,
+      "pairedLatency": {
+        "protocol": {
+          "warmupRuns": 1,
+          "sampleRuns": 3,
+          "interleave": "alternating-lane-first",
+          "laneLabels": [
+            "baseline",
+            "control"
+          ],
+          "casesPerLanePerSample": 2
+        },
+        "baseline": {
+          "samplesMs": [
+            271.27199999999993,
+            58.114100000000235,
+            266.33790000000045,
+            53.652000000000044,
+            283.41659999999956,
+            58.04029999999966
+          ],
+          "p50Ms": 58.114100000000235,
+          "p95Ms": 283.41659999999956
+        },
+        "control": {
+          "samplesMs": [
+            273.65490000000045,
+            55.514900000000125,
+            264.9445999999998,
+            54.66939999999977,
+            277.7619000000004,
+            62.673899999999776
+          ],
+          "p50Ms": 62.673899999999776,
+          "p95Ms": 277.7619000000004
+        }
+      },
+      "requestedVariant": "all",
+      "detailMode": "none",
+      "repoAvailable": true,
+      "availabilityReason": "using verified graph for repo sdl-neutral-fixture",
+      "thresholds": {
+        "semanticAggregateRecallMinPercent": 85,
+        "semanticNoiseRateMaxPercent": 10,
+        "scopedPreciseP95MaxMs": 250
+      },
+      "variants": [
+        {
+          "name": "lexical",
+          "cases": 2,
+          "failures": 0,
+          "expectedTotal": 5,
+          "usefulHits": 2,
+          "recallPercent": 40,
+          "preciseRecallPercent": 0,
+          "broadRecallPercent": 66.66666666666666,
+          "totalEvidenceItems": 11,
+          "noiseHits": 0,
+          "noiseRatePercent": 0,
+          "relevance": {
+            "labeledCases": 2,
+            "requiredSymbols": 5,
+            "requiredHits": 2,
+            "requiredSymbolRecallPercent": 40,
+            "primarySymbolMrr": 0,
+            "evidenceTokens": 1235,
+            "explicitNoiseTokens": 0,
+            "explicitNoiseTokenRatio": 0,
+            "evidenceTokensPerRequiredHit": 617.5
+          },
+          "latencyMs": {
+            "p50": 78.71939999999995,
+            "p95": 223.57360000000006,
+            "max": 223.57360000000006,
+            "total": 302.293
+          },
+          "caseResults": [
+            {
+              "id": "neutral-explain-cart-totals",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 2,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 223.57360000000006,
+              "missingUsefulSymbols": [
+                "buildCart"
+              ],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/plans/002-sdl-context-rebuild.md#L125",
+                  "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+                ],
+                "primarySymbol": "buildCart",
+                "requiredSymbols": [
+                  "buildCart",
+                  "resolvePromo",
+                  "customerAdjustment"
+                ],
+                "usefulSymbols": [
+                  "getProduct",
+                  "formatMoney",
+                  "summarizeCart",
+                  "TAX_RATE"
+                ],
+                "negativeSymbols": [
+                  "auditOrder",
+                  "placeOrder"
+                ],
+                "negativePaths": [
+                  "src/audit.js",
+                  "src/orders.js"
+                ],
+                "requiredHits": 2,
+                "requiredSymbolRecallPercent": 66.66666666666666,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 1153,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 576.5
+              }
+            },
+            {
+              "id": "neutral-debug-order-audit",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 1,
+              "durationMs": 78.71939999999995,
+              "missingUsefulSymbols": [
+                "auditOrder",
+                "placeOrder"
+              ],
+              "relevance": {
+                "budgetTokens": 1200,
+                "sourcePlanCitations": [
+                  "devdocs/plans/002-sdl-context-rebuild.md#L125",
+                  "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+                ],
+                "primarySymbol": "auditOrder",
+                "requiredSymbols": [
+                  "auditOrder",
+                  "placeOrder"
+                ],
+                "usefulSymbols": [
+                  "listOrders"
+                ],
+                "negativeSymbols": [
+                  "buildCart",
+                  "resolvePromo"
+                ],
+                "negativePaths": [
+                  "src/cart.js",
+                  "src/discounts.js"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 82,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "default",
+          "cases": 2,
+          "failures": 0,
+          "expectedTotal": 5,
+          "usefulHits": 3,
+          "recallPercent": 60,
+          "preciseRecallPercent": 0,
+          "broadRecallPercent": 100,
+          "totalEvidenceItems": 11,
+          "noiseHits": 0,
+          "noiseRatePercent": 0,
+          "relevance": {
+            "labeledCases": 2,
+            "requiredSymbols": 5,
+            "requiredHits": 3,
+            "requiredSymbolRecallPercent": 60,
+            "primarySymbolMrr": 0.25,
+            "evidenceTokens": 1145,
+            "explicitNoiseTokens": 0,
+            "explicitNoiseTokenRatio": 0,
+            "evidenceTokensPerRequiredHit": 381.6666666666667
+          },
+          "latencyMs": {
+            "p50": 63.54290000000037,
+            "p95": 1429.2095000000002,
+            "max": 1429.2095000000002,
+            "total": 1492.7524000000005
+          },
+          "caseResults": [
+            {
+              "id": "neutral-explain-cart-totals",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 10,
+              "durationMs": 1429.2095000000002,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/plans/002-sdl-context-rebuild.md#L125",
+                  "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+                ],
+                "primarySymbol": "buildCart",
+                "requiredSymbols": [
+                  "buildCart",
+                  "resolvePromo",
+                  "customerAdjustment"
+                ],
+                "usefulSymbols": [
+                  "getProduct",
+                  "formatMoney",
+                  "summarizeCart",
+                  "TAX_RATE"
+                ],
+                "negativeSymbols": [
+                  "auditOrder",
+                  "placeOrder"
+                ],
+                "negativePaths": [
+                  "src/audit.js",
+                  "src/orders.js"
+                ],
+                "requiredHits": 3,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 0.5,
+                "evidenceTokens": 1063,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 354.3333333333333
+              }
+            },
+            {
+              "id": "neutral-debug-order-audit",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 1,
+              "durationMs": 63.54290000000037,
+              "missingUsefulSymbols": [
+                "auditOrder",
+                "placeOrder"
+              ],
+              "relevance": {
+                "budgetTokens": 1200,
+                "sourcePlanCitations": [
+                  "devdocs/plans/002-sdl-context-rebuild.md#L125",
+                  "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+                ],
+                "primarySymbol": "auditOrder",
+                "requiredSymbols": [
+                  "auditOrder",
+                  "placeOrder"
+                ],
+                "usefulSymbols": [
+                  "listOrders"
+                ],
+                "negativeSymbols": [
+                  "buildCart",
+                  "resolvePromo"
+                ],
+                "negativePaths": [
+                  "src/cart.js",
+                  "src/discounts.js"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 82,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            }
+          ]
+        },
+        {
+          "name": "semantic",
+          "cases": 2,
+          "failures": 0,
+          "expectedTotal": 5,
+          "usefulHits": 3,
+          "recallPercent": 60,
+          "preciseRecallPercent": 0,
+          "broadRecallPercent": 100,
+          "totalEvidenceItems": 9,
+          "noiseHits": 0,
+          "noiseRatePercent": 0,
+          "relevance": {
+            "labeledCases": 2,
+            "requiredSymbols": 5,
+            "requiredHits": 3,
+            "requiredSymbolRecallPercent": 60,
+            "primarySymbolMrr": 0.25,
+            "evidenceTokens": 973,
+            "explicitNoiseTokens": 0,
+            "explicitNoiseTokenRatio": 0,
+            "evidenceTokensPerRequiredHit": 324.3333333333333
+          },
+          "latencyMs": {
+            "p50": 318.80830000000014,
+            "p95": 333.4227000000001,
+            "max": 333.4227000000001,
+            "total": 652.2310000000002
+          },
+          "caseResults": [
+            {
+              "id": "neutral-explain-cart-totals",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 3,
+              "usefulTotal": 3,
+              "noiseHits": 0,
+              "evidenceCount": 9,
+              "durationMs": 333.4227000000001,
+              "missingUsefulSymbols": [],
+              "relevance": {
+                "budgetTokens": 1800,
+                "sourcePlanCitations": [
+                  "devdocs/plans/002-sdl-context-rebuild.md#L125",
+                  "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+                ],
+                "primarySymbol": "buildCart",
+                "requiredSymbols": [
+                  "buildCart",
+                  "resolvePromo",
+                  "customerAdjustment"
+                ],
+                "usefulSymbols": [
+                  "getProduct",
+                  "formatMoney",
+                  "summarizeCart",
+                  "TAX_RATE"
+                ],
+                "negativeSymbols": [
+                  "auditOrder",
+                  "placeOrder"
+                ],
+                "negativePaths": [
+                  "src/audit.js",
+                  "src/orders.js"
+                ],
+                "requiredHits": 3,
+                "requiredSymbolRecallPercent": 100,
+                "primarySymbolReciprocalRank": 0.5,
+                "evidenceTokens": 973,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": 324.3333333333333
+              }
+            },
+            {
+              "id": "neutral-debug-order-audit",
+              "success": true,
+              "answerPresent": true,
+              "usefulHits": 0,
+              "usefulTotal": 2,
+              "noiseHits": 0,
+              "evidenceCount": 0,
+              "durationMs": 318.80830000000014,
+              "missingUsefulSymbols": [
+                "auditOrder",
+                "placeOrder"
+              ],
+              "relevance": {
+                "budgetTokens": 1200,
+                "sourcePlanCitations": [
+                  "devdocs/plans/002-sdl-context-rebuild.md#L125",
+                  "devdocs/plans/002-sdl-context-rebuild.md#L278-L285"
+                ],
+                "primarySymbol": "auditOrder",
+                "requiredSymbols": [
+                  "auditOrder",
+                  "placeOrder"
+                ],
+                "usefulSymbols": [
+                  "listOrders"
+                ],
+                "negativeSymbols": [
+                  "buildCart",
+                  "resolvePromo"
+                ],
+                "negativePaths": [
+                  "src/cart.js",
+                  "src/discounts.js"
+                ],
+                "requiredHits": 0,
+                "requiredSymbolRecallPercent": 0,
+                "primarySymbolReciprocalRank": 0,
+                "evidenceTokens": 0,
+                "explicitNoiseTokens": 0,
+                "explicitNoiseTokenRatio": 0,
+                "evidenceTokensPerRequiredHit": null
+              }
+            }
+          ]
+        }
+      ],
+      "scopedPrecise": null,
+      "providerContextCardInvariant": {
+        "requested": false,
+        "status": "not_requested",
+        "graphIntegrityState": null,
+        "graphIntegrityVersionId": null,
+        "graphIntegrityDigest": null,
+        "checkedSymbolIds": [],
+        "providerBackedSymbolIds": []
+      }
+    }
+  }
+}

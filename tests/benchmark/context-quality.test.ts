@@ -1,5 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -15,8 +16,11 @@ import { performance } from "node:perf_hooks";
  * live benchmark index is unavailable.
  */
 
-const REPO_ID = "sdl-mcp";
-const REQUIRE_LIVE_INDEX = process.env.SDL_CONTEXT_QUALITY_REQUIRE_INDEX === "1";
+const CORPUS = (process.env.SDL_CONTEXT_QUALITY_CORPUS ??
+  "sdl-mcp") as BenchmarkCorpus;
+const REPO_ID = process.env.SDL_CONTEXT_QUALITY_REPO_ID ?? "sdl-mcp";
+const REQUIRE_LIVE_INDEX =
+  process.env.SDL_CONTEXT_QUALITY_REQUIRE_INDEX === "1";
 const REQUIRE_PROVIDER_CONTEXT_CARD_INVARIANT =
   process.env.SDL_CONTEXT_QUALITY_REQUIRE_PROVIDER_INVARIANT === "1";
 const RUN_SEMANTIC_ONLY =
@@ -26,30 +30,48 @@ const INCLUDE_CASE_DETAILS =
   CASE_DETAIL_MODE === "1" || CASE_DETAIL_MODE === "missing";
 const INCLUDE_EVIDENCE_DETAILS = CASE_DETAIL_MODE === "1";
 const SELECTED_CASE_ID = process.env.SDL_CONTEXT_QUALITY_CASE_ID;
+const RECORD_BASELINE = process.env.SDL_CONTEXT_QUALITY_RECORD_BASELINE === "1";
 const ARTIFACT_PATH = resolve(
   process.env.SDL_CONTEXT_QUALITY_OUTPUT_PATH ??
     ".benchmark/context-quality-results.json",
 );
 
+const PINNED_REPO_SHA =
+  process.env.SDL_CONTEXT_QUALITY_REPO_SHA ??
+  "fcf4f2e11c5a1bb9b301a245af42b28556414b8e";
+
 const SEMANTIC_AGGREGATE_RECALL_MIN = 85;
 const NOISE_RATE_MAX = 10;
 const SCOPED_PRECISE_P95_MAX_MS = 250;
+const PAIRED_LATENCY_WARMUP_RUNS = 1;
+const PAIRED_LATENCY_SAMPLE_RUNS = 3;
 const REPORT_CASE_IDS = new Set([
   "review-precise-tool-qa-tests",
   "review-broad-sdl-tool-functionality",
   "review-broad-tool-contract-relevance",
 ]);
 
+type BenchmarkCorpus = "sdl-mcp" | "neutral";
+
 interface BenchmarkCase {
   id: string;
+  corpus?: BenchmarkCorpus;
+  budgetTokens?: number;
+  chatMentions?: string[];
+  sourcePlanCitations?: string[];
+  primarySymbol?: string;
+  requiredSymbols?: string[];
+  usefulSymbols?: string[];
+  negativeSymbols?: string[];
+  negativePaths?: string[];
   taskType: "debug" | "explain" | "review" | "implement";
   contextMode: "precise" | "broad";
   taskText: string;
   focusPaths: string[];
   includeTests: boolean;
   requireAnswer: boolean;
-  expectedUsefulSymbols: string[];
-  unexpectedSymbols: string[];
+  expectedUsefulSymbols?: string[];
+  unexpectedSymbols?: string[];
 }
 
 interface Evidence {
@@ -66,6 +88,26 @@ interface ContextResult {
   actionsTaken?: Array<{
     type: string;
   }>;
+}
+
+interface NormalizedCaseMetrics {
+  requiredHits: number;
+  requiredSymbolRecallPercent: number;
+  primarySymbolReciprocalRank: number;
+  evidenceTokens: number;
+  explicitNoiseTokens: number;
+  explicitNoiseTokenRatio: number;
+  evidenceTokensPerRequiredHit: number | null;
+}
+
+interface RelevanceCaseMetrics extends NormalizedCaseMetrics {
+  budgetTokens: number;
+  sourcePlanCitations: string[];
+  primarySymbol: string;
+  requiredSymbols: string[];
+  usefulSymbols: string[];
+  negativeSymbols: string[];
+  negativePaths: string[];
 }
 
 interface ContextEngineLike {
@@ -110,6 +152,7 @@ interface CaseMetrics {
   selectedReferences: string[];
   unresolvedPathReferences: string[];
   evidenceSummaries: string[];
+  relevance?: RelevanceCaseMetrics;
 }
 
 interface ProviderContextCardInvariantMetrics {
@@ -123,9 +166,7 @@ interface ProviderContextCardInvariantMetrics {
 }
 
 type LadybugModule = typeof import("../../dist/db/ladybug.js");
-type LadybugConnection = Awaited<
-  ReturnType<LadybugModule["getLadybugConn"]>
->;
+type LadybugConnection = Awaited<ReturnType<LadybugModule["getLadybugConn"]>>;
 type LadybugQueries = typeof import("../../dist/db/ladybug-queries.js");
 type PathsModule = typeof import("../../dist/util/paths.js");
 type BenchmarkOutputModule =
@@ -142,10 +183,14 @@ const variants: Variant[] = [
 ];
 
 const metrics = {
+  manifest: undefined as ReturnType<typeof buildBenchmarkManifest> | undefined,
   totalCases: 0,
   repoAvailable: false,
   availabilityReason: "not checked",
   variants: new Map<string, VariantMetrics>(),
+  pairedLatency: undefined as
+    | Awaited<ReturnType<typeof measurePairedLatency>>
+    | undefined,
   scopedPrecise: createMetrics("scoped-precise"),
   providerContextCardInvariant: {
     requested: REQUIRE_PROVIDER_CONTEXT_CARD_INVARIANT,
@@ -160,9 +205,11 @@ const metrics = {
   } satisfies ProviderContextCardInvariantMetrics,
 };
 
+let allCases: BenchmarkCase[] = [];
 let cases: BenchmarkCase[] = [];
 let contextEngine: ContextEngineLike | undefined;
 let closeLadybugDb: (() => Promise<void>) | undefined;
+let ladybugClosedBeforeArtifact = false;
 let ladybugConn: LadybugConnection | undefined;
 let ladybugQueries:
   | Pick<
@@ -219,6 +266,14 @@ function createCaseMetrics(overrides: Partial<CaseMetrics> = {}): CaseMetrics {
   };
 }
 
+function expectedSymbols(c: BenchmarkCase): string[] {
+  return c.expectedUsefulSymbols ?? c.requiredSymbols ?? c.usefulSymbols ?? [];
+}
+
+function noiseSymbols(c: BenchmarkCase): string[] {
+  return c.unexpectedSymbols ?? c.negativeSymbols ?? [];
+}
+
 function percentage(numerator: number, denominator: number): number {
   return denominator > 0 ? (numerator / denominator) * 100 : 0;
 }
@@ -233,6 +288,189 @@ function percentile(values: number[], percentileValue: number): number {
   return sorted[index] ?? 0;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+let estimateBenchmarkTokens = (text: string): number =>
+  Math.ceil(text.length / 4);
+
+function normalizeBenchmarkResult(
+  input: unknown,
+  symbolNames: ReadonlyMap<string, string>,
+  resolvedPaths: readonly (string | undefined)[],
+) {
+  const result = isRecord(input) ? input : {};
+  const rawEvidence = Array.isArray(result.finalEvidence)
+    ? result.finalEvidence
+    : Array.isArray(result.evidence)
+      ? result.evidence
+      : [];
+  const evidence = rawEvidence.map((raw, index) => {
+    const item = isRecord(raw) ? raw : {};
+    const reference = typeof item.reference === "string" ? item.reference : "";
+    const referenceId = /^(?:symbol|hotpath|file):(.+)$/.exec(reference)?.[1];
+    const candidateId =
+      typeof item.symbolId === "string" ? item.symbolId : referenceId;
+    const symbolId =
+      candidateId && symbolNames.has(candidateId) ? candidateId : null;
+    return {
+      symbolName: symbolId ? (symbolNames.get(symbolId) ?? null) : null,
+      path:
+        typeof item.path === "string"
+          ? item.path
+          : (resolvedPaths[index] ??
+            (reference.startsWith("file:") ? referenceId : null) ??
+            null),
+      tokens: estimateBenchmarkTokens(JSON.stringify(item)),
+    };
+  });
+  return {
+    evidence,
+    distinctSymbols: [
+      ...new Set(
+        evidence.flatMap(({ symbolName }) => (symbolName ? [symbolName] : [])),
+      ),
+    ],
+  };
+}
+
+function measureNormalizedCase(
+  labels: Pick<
+    BenchmarkCase,
+    "primarySymbol" | "requiredSymbols" | "negativeSymbols" | "negativePaths"
+  >,
+  result: ReturnType<typeof normalizeBenchmarkResult>,
+): NormalizedCaseMetrics {
+  const required = labels.requiredSymbols ?? [];
+  const requiredHits = required.filter((name) =>
+    result.distinctSymbols.includes(name),
+  ).length;
+  const primaryRank = labels.primarySymbol
+    ? result.distinctSymbols.indexOf(labels.primarySymbol) + 1
+    : 0;
+  const negativeNames = new Set(labels.negativeSymbols ?? []);
+  const negativePaths = labels.negativePaths ?? [];
+  let evidenceTokens = 0;
+  let explicitNoiseTokens = 0;
+  for (const item of result.evidence) {
+    evidenceTokens += item.tokens;
+    if (
+      negativeNames.has(item.symbolName ?? "") ||
+      negativePaths.some(
+        (path) => item.path === path || item.path?.startsWith(path),
+      )
+    ) {
+      explicitNoiseTokens += item.tokens;
+    }
+  }
+  return {
+    requiredHits,
+    requiredSymbolRecallPercent: percentage(requiredHits, required.length),
+    primarySymbolReciprocalRank: primaryRank > 0 ? 1 / primaryRank : 0,
+    evidenceTokens,
+    explicitNoiseTokens,
+    explicitNoiseTokenRatio: explicitNoiseTokens / Math.max(1, evidenceTokens),
+    evidenceTokensPerRequiredHit:
+      requiredHits > 0 ? evidenceTokens / requiredHits : null,
+  };
+}
+
+function buildBenchmarkManifest(input: {
+  repoSha: string;
+  configText: string;
+  schemaVersion: number;
+  symbolEmbeddingModels: string[];
+  fileSummaryEmbeddingModels: string[];
+  graphVersionId: string;
+  graphIntegrityState: string;
+  graphIntegrityVersionId: string | null;
+  graphIntegrityDigest: string | null;
+}) {
+  assert.equal(
+    input.graphIntegrityState,
+    "verified",
+    "Context benchmark requires verified graph integrity",
+  );
+  assert.equal(
+    input.graphIntegrityVersionId,
+    input.graphVersionId,
+    "Context benchmark manifest must match the indexed graph version",
+  );
+  assert.match(
+    input.graphIntegrityDigest ?? "",
+    /^[a-f0-9]{64}$/,
+    "Context benchmark requires a graph integrity digest",
+  );
+  const activeEmbeddingModels = {
+    symbol: input.symbolEmbeddingModels,
+    fileSummary: input.fileSummaryEmbeddingModels,
+  };
+  const modelDigest = createHash("sha256")
+    .update(JSON.stringify(activeEmbeddingModels))
+    .digest("hex")
+    .slice(0, 12);
+  return {
+    corpus: CORPUS,
+    repoSha: input.repoSha,
+    configDigest: createHash("sha256").update(input.configText).digest("hex"),
+    schemaVersion: input.schemaVersion,
+    activeEmbeddingModels,
+    graphVersionId: input.graphVersionId,
+    graphIntegrityState: "verified" as const,
+    graphIntegrityVersionId: input.graphIntegrityVersionId,
+    graphIntegrityDigest: input.graphIntegrityDigest,
+    cacheKey: `${process.platform}-${process.arch}-schema${input.schemaVersion}-models-${modelDigest}`,
+  };
+}
+
+async function measurePairedLatency(
+  benchmarkCases: readonly BenchmarkCase[],
+  baseline: ContextEngineLike,
+  control: ContextEngineLike,
+  options: { warmupRuns: number; sampleRuns: number; now?: () => number },
+) {
+  const now = options.now ?? performance.now.bind(performance);
+  const samples = { baseline: [] as number[], control: [] as number[] };
+  const forward = [
+    ["baseline", baseline],
+    ["control", control],
+  ] as const;
+  for (
+    let iteration = -options.warmupRuns;
+    iteration < options.sampleRuns;
+    iteration++
+  ) {
+    const order =
+      iteration < 0 || iteration % 2 === 0 ? forward : [...forward].reverse();
+    for (const [name, engine] of order) {
+      for (const c of benchmarkCases) {
+        const startedAt = now();
+        await engine.buildContext(
+          buildTask(c, { name: "default" }, c.focusPaths.length > 0),
+        );
+        if (iteration >= 0) samples[name].push(now() - startedAt);
+      }
+    }
+  }
+  const summarize = (values: number[]) => ({
+    samplesMs: values,
+    p50Ms: percentile(values, 50),
+    p95Ms: percentile(values, 95),
+  });
+  return {
+    protocol: {
+      warmupRuns: options.warmupRuns,
+      sampleRuns: options.sampleRuns,
+      interleave: "alternating-lane-first" as const,
+      laneLabels: ["baseline", "control"] as const,
+      casesPerLanePerSample: benchmarkCases.length,
+    },
+    baseline: summarize(samples.baseline),
+    control: summarize(samples.control),
+  };
+}
+
 function evidenceText(result: ContextResult, limit?: number): string {
   return (result.finalEvidence ?? [])
     .slice(0, limit)
@@ -240,7 +478,11 @@ function evidenceText(result: ContextResult, limit?: number): string {
     .join(" ");
 }
 
-function buildTask(c: BenchmarkCase, variant: Variant, scoped: boolean): unknown {
+function buildTask(
+  c: BenchmarkCase,
+  variant: Variant,
+  scoped: boolean,
+): unknown {
   const options: Record<string, unknown> = {
     contextMode: c.contextMode,
     includeTests: c.includeTests,
@@ -249,21 +491,21 @@ function buildTask(c: BenchmarkCase, variant: Variant, scoped: boolean): unknown
   if (variant.semantic !== undefined) {
     options.semantic = variant.semantic;
   }
-  if (scoped) {
+  if (c.chatMentions?.length) options.chatMentions = c.chatMentions;
+  if ((scoped || c.sourcePlanCitations) && c.focusPaths.length > 0) {
     options.focusPaths = c.focusPaths;
   }
   return {
     taskType: c.taskType,
     taskText: c.taskText,
     repoId: REPO_ID,
+    ...(c.budgetTokens ? { budget: { maxTokens: c.budgetTokens } } : {}),
     options,
   };
 }
 
 function shouldScopeCase(c: BenchmarkCase, selectedCase: boolean): boolean {
-  return (
-    selectedCase && c.contextMode === "precise" && c.focusPaths.length > 0
-  );
+  return selectedCase && c.contextMode === "precise" && c.focusPaths.length > 0;
 }
 
 async function resolveEvidencePaths(
@@ -349,14 +591,46 @@ function selectedSymbolIds(evidence: Evidence[]): string[] {
   return [...new Set(selected)];
 }
 
-function recordCaseTotals(target: VariantMetrics, c: BenchmarkCase): void {
-  target.cases++;
-  target.expectedTotal += c.expectedUsefulSymbols.length;
-  if (c.contextMode === "precise") {
-    target.preciseExpectedTotal += c.expectedUsefulSymbols.length;
-  } else {
-    target.broadExpectedTotal += c.expectedUsefulSymbols.length;
+async function measureCaseRelevance(
+  c: BenchmarkCase,
+  result?: ContextResult,
+): Promise<RelevanceCaseMetrics | undefined> {
+  if (!c.primarySymbol) return undefined;
+  let normalized: ReturnType<typeof normalizeBenchmarkResult> = {
+    evidence: [],
+    distinctSymbols: [],
+  };
+  if (result) {
+    assert.ok(ladybugConn && ladybugQueries);
+    const evidence = result.finalEvidence ?? [];
+    const symbols = await ladybugQueries.getSymbolsByIds(
+      ladybugConn,
+      selectedSymbolIds(evidence),
+    );
+    normalized = normalizeBenchmarkResult(
+      result,
+      new Map([...symbols].map(([id, symbol]) => [id, symbol.name])),
+      await resolveEvidencePaths(evidence),
+    );
   }
+  return {
+    budgetTokens: c.budgetTokens ?? 0,
+    sourcePlanCitations: c.sourcePlanCitations ?? [],
+    primarySymbol: c.primarySymbol,
+    requiredSymbols: c.requiredSymbols ?? [],
+    usefulSymbols: c.usefulSymbols ?? [],
+    negativeSymbols: c.negativeSymbols ?? [],
+    negativePaths: c.negativePaths ?? [],
+    ...measureNormalizedCase(c, normalized),
+  };
+}
+
+function recordCaseTotals(target: VariantMetrics, c: BenchmarkCase): void {
+  const total = expectedSymbols(c).length;
+  target.cases++;
+  target.expectedTotal += total;
+  if (c.contextMode === "precise") target.preciseExpectedTotal += total;
+  else target.broadExpectedTotal += total;
 }
 
 async function runCase(
@@ -365,7 +639,10 @@ async function runCase(
   scoped: boolean,
   target: VariantMetrics,
 ): Promise<void> {
-  assert.ok(contextEngine, "ContextEngine must be initialized before benchmarking");
+  assert.ok(
+    contextEngine,
+    "ContextEngine must be initialized before benchmarking",
+  );
   const startedAt = performance.now();
   recordCaseTotals(target, c);
   let result: ContextResult;
@@ -375,39 +652,38 @@ async function runCase(
     const durationMs = performance.now() - startedAt;
     target.failures++;
     target.durationsMs.push(durationMs);
-    target.caseResults.push({
-      id: c.id,
-      success: false,
-      answerPresent: !c.requireAnswer,
-      usefulHits: 0,
-      usefulTotal: c.expectedUsefulSymbols.length,
-      noiseHits: 0,
-      evidenceCount: 0,
-      durationMs,
-      missingUsefulSymbols: [...c.expectedUsefulSymbols],
-      selectedPaths: [],
-      selectedPathsByPosition: [],
-      selectedSymbols: [],
-      selectedActions: [],
-      selectedReferences: [],
-      unresolvedPathReferences: [],
-      evidenceSummaries: [
-        `error | ${error instanceof Error ? error.message : String(error)}`,
-      ],
-    });
+    const relevance = await measureCaseRelevance(c);
+    target.caseResults.push(
+      createCaseMetrics({
+        id: c.id,
+        success: false,
+        answerPresent: !c.requireAnswer,
+        usefulTotal: expectedSymbols(c).length,
+        durationMs,
+        missingUsefulSymbols: [...expectedSymbols(c)],
+
+        evidenceSummaries: [
+          `error | ${error instanceof Error ? error.message : String(error)}`,
+        ],
+        relevance,
+      }),
+    );
     return;
   }
 
   const durationMs = performance.now() - startedAt;
   const evidence = result.finalEvidence ?? [];
-  const text = evidenceText(result, c.id === "review-broad-tool-contract-relevance" ? 10 : undefined);
+  const text = evidenceText(
+    result,
+    c.id === "review-broad-tool-contract-relevance" ? 10 : undefined,
+  );
   let usefulHits = 0;
   let noiseHits = 0;
 
-  for (const sym of c.expectedUsefulSymbols) {
+  for (const sym of expectedSymbols(c)) {
     if (text.includes(sym)) usefulHits++;
   }
-  for (const sym of c.unexpectedSymbols) {
+  for (const sym of noiseSymbols(c)) {
     if (text.includes(sym)) noiseHits++;
   }
 
@@ -423,6 +699,7 @@ async function runCase(
   target.totalEvidenceItems += evidenceCount;
   target.noiseHits += noiseHits;
   target.durationsMs.push(durationMs);
+  const relevance = await measureCaseRelevance(c, result);
   const resolvedByPosition =
     INCLUDE_EVIDENCE_DETAILS && REPORT_CASE_IDS.has(c.id)
       ? await resolveEvidencePaths(evidence)
@@ -430,35 +707,38 @@ async function runCase(
   const selectedPaths = resolvedByPosition.filter(
     (path): path is string => path !== undefined,
   );
-  target.caseResults.push({
-    id: c.id,
-    success: result.success,
-    answerPresent,
-    usefulHits,
-    usefulTotal: c.expectedUsefulSymbols.length,
-    noiseHits,
-    evidenceCount,
-    durationMs,
-    missingUsefulSymbols: c.expectedUsefulSymbols.filter(
-      (symbol) => !text.includes(symbol),
-    ),
-    selectedPaths,
-    selectedPathsByPosition: resolvedByPosition.map((path) => path ?? null),
-    selectedSymbols: selectedSymbolIds(evidence),
-    selectedActions: (result.actionsTaken ?? []).map(({ type }) => type),
-    selectedReferences: evidence.map(({ reference }) => reference),
-    unresolvedPathReferences: INCLUDE_EVIDENCE_DETAILS
-      ? evidence.flatMap((item, index) =>
-          hasResolvablePathReference(item) &&
-          resolvedByPosition[index] === undefined
-            ? [item.reference]
-            : [],
-        )
-      : [],
-    evidenceSummaries: evidence.map(
-      ({ reference, summary }) => `${reference} | ${summary}`,
-    ),
-  });
+  target.caseResults.push(
+    createCaseMetrics({
+      id: c.id,
+      success: result.success,
+      answerPresent,
+      usefulHits,
+      usefulTotal: expectedSymbols(c).length,
+      noiseHits,
+      evidenceCount,
+      durationMs,
+      missingUsefulSymbols: expectedSymbols(c).filter(
+        (symbol) => !text.includes(symbol),
+      ),
+      selectedPaths,
+      selectedPathsByPosition: resolvedByPosition.map((path) => path ?? null),
+      selectedSymbols: selectedSymbolIds(evidence),
+      selectedActions: (result.actionsTaken ?? []).map(({ type }) => type),
+      selectedReferences: evidence.map(({ reference }) => reference),
+      unresolvedPathReferences: INCLUDE_EVIDENCE_DETAILS
+        ? evidence.flatMap((item, index) =>
+            hasResolvablePathReference(item) &&
+            resolvedByPosition[index] === undefined
+              ? [item.reference]
+              : [],
+          )
+        : [],
+      evidenceSummaries: evidence.map(
+        ({ reference, summary }) => `${reference} | ${summary}`,
+      ),
+      relevance,
+    }),
+  );
 }
 
 function recall(m: VariantMetrics): number {
@@ -477,11 +757,23 @@ function noiseRate(m: VariantMetrics): number {
   return percentage(m.noiseHits, m.totalEvidenceItems);
 }
 
+function shouldRunOrdinaryQualityGates(
+  recordBaseline = RECORD_BASELINE,
+  runSemanticOnly = RUN_SEMANTIC_ONLY,
+  selectedCaseId = SELECTED_CASE_ID,
+): boolean {
+  return !recordBaseline && !runSemanticOnly && selectedCaseId === undefined;
+}
+
 function assertSemanticQuality(
   semantic: VariantMetrics,
   selectedCase: boolean,
+  recordBaseline: boolean = false,
 ): void {
   assert.equal(semantic.failures, 0, "semantic variant should not fail cases");
+
+  // A v1 baseline records relevance misses for later paired comparison.
+  if (recordBaseline) return;
 
   if (selectedCase) {
     assert.equal(
@@ -527,7 +819,11 @@ function assertSelectedReportCase(result: CaseMetrics): void {
       result.usefulHits >= 4,
       `selected case ${result.id} returned ${result.usefulHits}/${result.usefulTotal} expected symbols in the top ten`,
     );
-    assert.equal(result.noiseHits, 0, "selected case returned unexpected top-ten symbols");
+    assert.equal(
+      result.noiseHits,
+      0,
+      "selected case returned unexpected top-ten symbols",
+    );
     return;
   }
 
@@ -559,7 +855,8 @@ function assertSelectedReportCase(result: CaseMetrics): void {
     }
     assert.ok(
       result.selectedPaths.filter((path) => path.startsWith("tests/benchmark/"))
-        .length <= result.selectedPaths.length / 2,
+        .length <=
+        result.selectedPaths.length / 2,
       `Benchmark tests dominate scoped tool-QA evidence: ${result.selectedPaths.join(", ")}`,
     );
     return;
@@ -661,6 +958,7 @@ function caseMetricsForArtifact(result: CaseMetrics): Record<string, unknown> {
     durationMs: result.durationMs,
     missingUsefulSymbols: result.missingUsefulSymbols,
   };
+  if (result.relevance) base.relevance = result.relevance;
   if (INCLUDE_EVIDENCE_DETAILS) {
     base.selectedPaths = result.selectedPaths;
     base.selectedPathsByPosition = result.selectedPathsByPosition;
@@ -674,6 +972,21 @@ function caseMetricsForArtifact(result: CaseMetrics): Record<string, unknown> {
 }
 
 function variantMetricsForArtifact(m: VariantMetrics): Record<string, unknown> {
+  const labeled = m.caseResults.flatMap(({ relevance }) =>
+    relevance ? [relevance] : [],
+  );
+  let requiredSymbols = 0;
+  let requiredHits = 0;
+  let evidenceTokens = 0;
+  let noiseTokens = 0;
+  let primaryRankTotal = 0;
+  for (const result of labeled) {
+    requiredSymbols += result.requiredSymbols.length;
+    requiredHits += result.requiredHits;
+    evidenceTokens += result.evidenceTokens;
+    noiseTokens += result.explicitNoiseTokens;
+    primaryRankTotal += result.primarySymbolReciprocalRank;
+  }
   return {
     name: m.name,
     cases: m.cases,
@@ -686,6 +999,18 @@ function variantMetricsForArtifact(m: VariantMetrics): Record<string, unknown> {
     totalEvidenceItems: m.totalEvidenceItems,
     noiseHits: m.noiseHits,
     noiseRatePercent: noiseRate(m),
+    relevance: {
+      labeledCases: labeled.length,
+      requiredSymbols,
+      requiredHits,
+      requiredSymbolRecallPercent: percentage(requiredHits, requiredSymbols),
+      primarySymbolMrr: primaryRankTotal / Math.max(1, labeled.length),
+      evidenceTokens,
+      explicitNoiseTokens: noiseTokens,
+      explicitNoiseTokenRatio: noiseTokens / Math.max(1, evidenceTokens),
+      evidenceTokensPerRequiredHit:
+        requiredHits > 0 ? evidenceTokens / requiredHits : null,
+    },
     latencyMs: {
       p50: percentile(m.durationsMs, 50),
       p95: percentile(m.durationsMs, 95),
@@ -700,11 +1025,20 @@ function persistBenchmarkArtifact(): void {
   if (!writeBenchmarkOutput || !shouldPersistBenchmarkArtifact()) return;
   mkdirSync(dirname(ARTIFACT_PATH), { recursive: true });
   const artifact = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     benchmark: "context-quality",
+    corpus: CORPUS,
     repoId: REPO_ID,
+    manifest: metrics.manifest,
+    ladybugClosedBeforeArtifact,
+    seedResolutionDiagnostics: {
+      command: "npm run benchmark:seed-resolution",
+      artifact: "devdocs/benchmarks/seed-resolution-evaluation-v1.json",
+    },
     corpusCaseCount: metrics.totalCases,
     selectedCaseId: SELECTED_CASE_ID ?? null,
+    baselineRecording: RECORD_BASELINE,
+    pairedLatency: metrics.pairedLatency ?? null,
     requestedVariant: RUN_SEMANTIC_ONLY ? "semantic" : "all",
     detailMode: INCLUDE_EVIDENCE_DETAILS
       ? "evidence"
@@ -735,14 +1069,17 @@ function persistBenchmarkArtifact(): void {
 
 function shouldPersistBenchmarkArtifact(
   repoAvailable = metrics.repoAvailable,
+  manifest = metrics.manifest,
+  closed = ladybugClosedBeforeArtifact,
 ): boolean {
-  return repoAvailable;
+  return repoAvailable && Boolean(manifest) && closed;
 }
 
 describe("context quality benchmarks", () => {
   before(async () => {
     const casesPath = join(import.meta.dirname, "context-quality-cases.json");
-    cases = JSON.parse(readFileSync(casesPath, "utf-8")) as BenchmarkCase[];
+    allCases = JSON.parse(readFileSync(casesPath, "utf-8")) as BenchmarkCase[];
+    cases = allCases.filter((c) => (c.corpus ?? "sdl-mcp") === CORPUS);
     metrics.totalCases = cases.length;
 
     try {
@@ -759,25 +1096,31 @@ describe("context quality benchmarks", () => {
         contextTools,
         symbolTools,
         derivedState,
-      ] =
-        await Promise.all([
-          import("../../dist/config/configPath.js"),
-          import("../../dist/config/loadConfig.js"),
-          import("../../dist/db/initGraphDb.js"),
-          import("../../dist/db/ladybug.js"),
-          import("../../dist/db/ladybug-core.js"),
-          import("../../dist/db/ladybug-queries.js"),
-          import("../../dist/util/paths.js"),
-          import("../../dist/agent/context-engine.js"),
-          import("../../dist/benchmark/output-file.js"),
-          import("../../dist/mcp/tools/context.js"),
-          import("../../dist/mcp/tools/symbol.js"),
-          import("../../dist/db/ladybug-derived-state.js"),
-        ]);
+        semanticModelPlan,
+        schema,
+        tokenize,
+      ] = await Promise.all([
+        import("../../dist/config/configPath.js"),
+        import("../../dist/config/loadConfig.js"),
+        import("../../dist/db/initGraphDb.js"),
+        import("../../dist/db/ladybug.js"),
+        import("../../dist/db/ladybug-core.js"),
+        import("../../dist/db/ladybug-queries.js"),
+        import("../../dist/util/paths.js"),
+        import("../../dist/agent/context-engine.js"),
+        import("../../dist/benchmark/output-file.js"),
+        import("../../dist/mcp/tools/context.js"),
+        import("../../dist/mcp/tools/symbol.js"),
+        import("../../dist/db/ladybug-derived-state.js"),
+        import("../../dist/config/semantic-embedding-model-plan.js"),
+        import("../../dist/db/ladybug-schema.js"),
+        import("../../dist/util/tokenize.js"),
+      ]);
       writeBenchmarkOutput = benchmarkOutput.writeUtf8Output;
+      estimateBenchmarkTokens = tokenize.estimateTokens;
       const configPath = activateCliConfigPath(process.env.SDL_CONFIG);
       const config = loadConfig(configPath);
-      const graphDbPath = await initGraphDb(config, configPath);
+      await initGraphDb(config, configPath);
       closeLadybugDb = ladybug.closeLadybugDb;
       contextEngine = engine.contextEngine;
       ladybugQueries = queries;
@@ -788,38 +1131,79 @@ describe("context quality benchmarks", () => {
 
       const conn = await ladybug.getLadybugConn();
       ladybugConn = conn;
-      const rows = await core.queryAll(
-        conn,
-        "MATCH (r:Repo {repoId: $repoId}) RETURN count(r) AS n",
-        { repoId: REPO_ID },
+      const [rows, latestVersion, currentDerivedState, schemaVersion] =
+        await Promise.all([
+          core.queryAll(
+            conn,
+            "MATCH (r:Repo {repoId: $repoId}) RETURN count(r) AS n",
+            { repoId: REPO_ID },
+          ),
+          queries.getLatestVersion(conn, REPO_ID),
+          derivedState.getDerivedState(REPO_ID),
+          schema.getSchemaVersion(conn),
+        ]);
+      if (Number((rows[0] as { n?: unknown } | undefined)?.n ?? 0) === 0) {
+        throw new Error(`repo ${REPO_ID} is not indexed in the selected graph`);
+      }
+      assert.ok(latestVersion, "benchmark graph must have a current version");
+      assert.ok(currentDerivedState, "benchmark graph must have derived state");
+      assert.notEqual(
+        schemaVersion,
+        null,
+        "benchmark graph must have a schema version",
       );
-      const repoCount = Number(rows[0]?.n ?? 0);
-      metrics.repoAvailable = repoCount > 0;
-      metrics.availabilityReason = metrics.repoAvailable
-        ? `using ${graphDbPath}`
-        : `repo ${REPO_ID} is not indexed in ${graphDbPath}`;
+      const embeddingPlan = semanticModelPlan.resolveSemanticEmbeddingModelPlan(
+        config.semantic,
+      );
+      metrics.manifest = buildBenchmarkManifest({
+        repoSha: PINNED_REPO_SHA,
+        configText: readFileSync(
+          process.env.SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH ?? configPath,
+          "utf8",
+        ),
+        schemaVersion,
+        symbolEmbeddingModels: embeddingPlan.symbolEmbeddingModels,
+        fileSummaryEmbeddingModels: embeddingPlan.fileSummaryEmbeddingModels,
+        graphVersionId: latestVersion.versionId,
+        graphIntegrityState: currentDerivedState.graphIntegrityState,
+        graphIntegrityVersionId: currentDerivedState.graphIntegrityVersionId,
+        graphIntegrityDigest: currentDerivedState.graphIntegrityDigest,
+      });
+      metrics.repoAvailable = true;
+      metrics.availabilityReason = `using verified graph for repo ${REPO_ID}`;
     } catch (err) {
       metrics.repoAvailable = false;
-      metrics.availabilityReason = err instanceof Error ? err.message : String(err);
+      metrics.availabilityReason =
+        err instanceof Error ? err.message : String(err);
     }
   });
 
   after(async () => {
-    try {
-      persistBenchmarkArtifact();
-    } finally {
-      await closeLadybugDb?.();
-    }
+    await closeLadybugDb?.();
+    ladybugClosedBeforeArtifact = true;
+    persistBenchmarkArtifact();
   });
 
   describe("case structure validation", () => {
-    it("loads the expected number of cases", () => {
-      assert.equal(cases.length, 27, "Expected 27 benchmark cases");
+    it("preserves 27 legacy cases and adds the QA and neutral corpora", () => {
+      assert.equal(
+        allCases.filter(({ id }) => !/^(?:qa|neutral)-/.test(id)).length,
+        27,
+        "Expected all 27 legacy benchmark cases",
+      );
+      assert.equal(allCases.filter(({ id }) => id.startsWith("qa-")).length, 4);
+      assert.equal(
+        allCases.filter(({ id }) => id.startsWith("neutral-")).length,
+        2,
+      );
     });
 
     it("has correct task type distribution", () => {
       const byType = new Map<string, number>();
-      for (const c of cases) {
+      const legacyCases = allCases.filter(
+        ({ id }) => !/^(?:qa|neutral)-/.test(id),
+      );
+      for (const c of legacyCases) {
         byType.set(c.taskType, (byType.get(c.taskType) ?? 0) + 1);
       }
       assert.equal(byType.get("debug"), 8, "Expected 8 debug cases");
@@ -830,41 +1214,47 @@ describe("context quality benchmarks", () => {
 
     it("has correct context mode distribution", () => {
       assert.equal(
-        cases.filter((c) => c.contextMode === "precise").length,
+        allCases.filter(
+          (c) => !/^(?:qa|neutral)-/.test(c.id) && c.contextMode === "precise",
+        ).length,
         13,
         "Expected 13 precise cases",
       );
       assert.equal(
-        cases.filter((c) => c.contextMode === "broad").length,
+        allCases.filter(
+          (c) => !/^(?:qa|neutral)-/.test(c.id) && c.contextMode === "broad",
+        ).length,
         14,
         "Expected 14 broad cases",
       );
     });
 
     it("all cases have valid structure", () => {
-      for (const c of cases) {
+      for (const c of allCases) {
         assert.ok(c.id, "Case missing id");
         assert.ok(c.taskText, `Case ${c.id} missing taskText`);
         assert.ok(
-          REPORT_CASE_IDS.has(c.id) || c.focusPaths.length > 0,
+          REPORT_CASE_IDS.has(c.id) ||
+            /^(?:qa|neutral)-/.test(c.id) ||
+            c.focusPaths.length > 0,
           `Case ${c.id} needs focusPaths`,
         );
         assert.ok(
-          c.expectedUsefulSymbols.length > 0,
+          expectedSymbols(c).length > 0,
           `Case ${c.id} needs expectedUsefulSymbols`,
         );
         assert.ok(
-          c.unexpectedSymbols.length > 0,
+          noiseSymbols(c).length > 0,
           `Case ${c.id} needs unexpectedSymbols`,
         );
       }
     });
 
     it("keeps the broad and precise tool-QA report cases stable", () => {
-      const precise = cases.find(
+      const precise = allCases.find(
         ({ id }) => id === "review-precise-tool-qa-tests",
       );
-      const broad = cases.find(
+      const broad = allCases.find(
         ({ id }) => id === "review-broad-sdl-tool-functionality",
       );
 
@@ -877,27 +1267,173 @@ describe("context quality benchmarks", () => {
     });
   });
 
+  describe("engine-neutral relevance metrics", () => {
+    const names = new Map([
+      ["noise-id", "NoiseSymbol"],
+      ["primary-id", "PrimarySymbol"],
+    ]);
+    const paths = ["src/noise.ts", "src/noise.ts", "src/primary.ts"];
+    const labels = {
+      primarySymbol: "PrimarySymbol",
+      requiredSymbols: ["PrimarySymbol", "RequiredHelper"],
+      negativeSymbols: ["NoiseSymbol"],
+      negativePaths: ["src/noise.ts"],
+    };
+
+    it("normalizes both engine shapes and measures labeled relevance", () => {
+      const v1 = normalizeBenchmarkResult(
+        {
+          finalEvidence: [
+            { reference: "symbol:noise-id" },
+            { reference: "hotpath:noise-id" },
+            { reference: "symbol:primary-id" },
+          ],
+        },
+        names,
+        paths,
+      );
+      const v2 = normalizeBenchmarkResult(
+        {
+          evidence: [
+            { symbolId: "noise-id", path: paths[0] },
+            { symbolId: "noise-id", path: paths[1] },
+            { symbolId: "primary-id", path: paths[2] },
+          ],
+        },
+        names,
+        paths,
+      );
+      assert.deepEqual(v2.distinctSymbols, v1.distinctSymbols);
+      const measured = measureNormalizedCase(labels, v2);
+      assert.deepEqual(
+        [
+          measured.requiredSymbolRecallPercent,
+          measured.primarySymbolReciprocalRank,
+        ],
+        [50, 0.5],
+      );
+      assert.equal(
+        measured.explicitNoiseTokenRatio,
+        measured.explicitNoiseTokens / measured.evidenceTokens,
+      );
+      assert.equal(
+        measured.evidenceTokensPerRequiredHit,
+        measured.evidenceTokens,
+      );
+    });
+
+    it("rejects unverified manifests and builds the cache key", () => {
+      const input = {
+        repoSha: "a".repeat(40),
+        configText: "{}",
+        schemaVersion: 3,
+        symbolEmbeddingModels: ["symbol-model"],
+        fileSummaryEmbeddingModels: ["file-model"],
+        graphVersionId: "v1",
+        graphIntegrityState: "verified",
+        graphIntegrityVersionId: "v1",
+        graphIntegrityDigest: "b".repeat(64),
+      };
+      const manifest = buildBenchmarkManifest(input);
+      assert.match(manifest.configDigest, /^[a-f0-9]{64}$/);
+      assert.match(manifest.cacheKey, /schema3-models-[a-f0-9]{12}$/);
+      assert.throws(
+        () =>
+          buildBenchmarkManifest({ ...input, graphIntegrityState: "failed" }),
+        /verified graph integrity/i,
+      );
+    });
+
+    it("warms and interleaves baseline/control latency samples", async () => {
+      const calls: string[] = [];
+      let now = 0;
+      const engine = (name: string, durationMs: number): ContextEngineLike => ({
+        buildContext: async () => {
+          calls.push(name);
+          now += durationMs;
+          return { success: true, finalEvidence: [] };
+        },
+      });
+      const c = allCases.find(
+        ({ id }) => id === "qa-2026-07-25-runtime-query-broad",
+      );
+      assert.ok(c);
+      const result = await measurePairedLatency(
+        [c],
+        engine("baseline", 10),
+        engine("control", 20),
+        { warmupRuns: 1, sampleRuns: 3, now: () => now },
+      );
+      assert.deepEqual(calls, [
+        "baseline",
+        "control",
+        "baseline",
+        "control",
+        "control",
+        "baseline",
+        "baseline",
+        "control",
+      ]);
+      assert.deepEqual(result.protocol, {
+        warmupRuns: 1,
+        sampleRuns: 3,
+        interleave: "alternating-lane-first",
+        laneLabels: ["baseline", "control"],
+        casesPerLanePerSample: 1,
+      });
+      assert.deepEqual(result.baseline, {
+        samplesMs: [10, 10, 10],
+        p50Ms: 10,
+        p95Ms: 10,
+      });
+      assert.deepEqual(result.control, {
+        samplesMs: [20, 20, 20],
+        p50Ms: 20,
+        p95Ms: 20,
+      });
+    });
+  });
+
   describe("semantic gate selection", () => {
     it("uses one selected case's own expectations instead of aggregate recall", () => {
       const semantic = createMetrics("semantic");
       semantic.cases = 1;
       semantic.expectedTotal = 10;
       semantic.usefulHits = 0;
-      semantic.caseResults.push(createCaseMetrics({
-        usefulTotal: 10,
-        evidenceCount: 1,
-      }));
+      semantic.caseResults.push(
+        createCaseMetrics({
+          usefulTotal: 10,
+          evidenceCount: 1,
+        }),
+      );
 
       assert.doesNotThrow(() => assertSemanticQuality(semantic, true));
+    });
+
+    it("records baseline relevance without applying v1 quality floors", () => {
+      const semantic = createMetrics("semantic");
+      semantic.cases = 1;
+      semantic.caseResults.push(
+        createCaseMetrics({
+          usefulTotal: 2,
+          missingUsefulSymbols: ["requiredSymbol"],
+          noiseHits: 1,
+          evidenceCount: 2,
+        }),
+      );
+
+      assert.doesNotThrow(() => assertSemanticQuality(semantic, true, true));
     });
 
     it("rejects a selected case that misses its own expected evidence", () => {
       const semantic = createMetrics("semantic");
       semantic.cases = 1;
-      semantic.caseResults.push(createCaseMetrics({
-        usefulTotal: 1,
-        missingUsefulSymbols: ["requiredSymbol"],
-      }));
+      semantic.caseResults.push(
+        createCaseMetrics({
+          usefulTotal: 1,
+          missingUsefulSymbols: ["requiredSymbol"],
+        }),
+      );
 
       assert.throws(
         () => assertSemanticQuality(semantic, true),
@@ -908,12 +1444,14 @@ describe("context quality benchmarks", () => {
     it("rejects a selected case that loses a required answer", () => {
       const semantic = createMetrics("semantic");
       semantic.cases = 1;
-      semantic.caseResults.push(createCaseMetrics({
-        answerPresent: false,
-        usefulHits: 1,
-        usefulTotal: 1,
-        evidenceCount: 1,
-      }));
+      semantic.caseResults.push(
+        createCaseMetrics({
+          answerPresent: false,
+          usefulHits: 1,
+          usefulTotal: 1,
+          evidenceCount: 1,
+        }),
+      );
 
       assert.throws(
         () => assertSemanticQuality(semantic, true),
@@ -933,11 +1471,30 @@ describe("context quality benchmarks", () => {
       );
     });
 
+    it("keeps ordinary latency and relevance gates active outside baseline recording", () => {
+      assert.equal(
+        shouldRunOrdinaryQualityGates(false, false, undefined),
+        true,
+      );
+      assert.equal(
+        shouldRunOrdinaryQualityGates(true, false, undefined),
+        false,
+      );
+      assert.equal(
+        shouldRunOrdinaryQualityGates(false, true, undefined),
+        false,
+      );
+      assert.equal(
+        shouldRunOrdinaryQualityGates(false, false, "selected"),
+        false,
+      );
+    });
+
     it("scopes only selected precise cases with explicit focus paths", () => {
-      const precise = cases.find(
+      const precise = allCases.find(
         ({ id }) => id === "review-precise-tool-qa-tests",
       );
-      const broad = cases.find(
+      const broad = allCases.find(
         ({ id }) => id === "review-broad-sdl-tool-functionality",
       );
       assert.ok(precise);
@@ -967,7 +1524,14 @@ describe("context quality benchmarks", () => {
 
     it("does not persist skip-only benchmark results", () => {
       assert.equal(shouldPersistBenchmarkArtifact(false), false);
-      assert.equal(shouldPersistBenchmarkArtifact(true), true);
+      assert.equal(
+        shouldPersistBenchmarkArtifact(
+          true,
+          {} as ReturnType<typeof buildBenchmarkManifest>,
+          true,
+        ),
+        true,
+      );
     });
   });
 
@@ -999,9 +1563,29 @@ describe("context quality benchmarks", () => {
       }
     }
 
+    if (RECORD_BASELINE && !SELECTED_CASE_ID) {
+      assert.ok(
+        contextEngine,
+        "ContextEngine must be initialized for paired latency",
+      );
+      metrics.pairedLatency = await measurePairedLatency(
+        selectedCases,
+        contextEngine,
+        contextEngine,
+        {
+          warmupRuns: PAIRED_LATENCY_WARMUP_RUNS,
+          sampleRuns: PAIRED_LATENCY_SAMPLE_RUNS,
+        },
+      );
+    }
+
     const semantic = metrics.variants.get("semantic");
     assert.ok(semantic, "semantic variant should have metrics");
-    assertSemanticQuality(semantic, SELECTED_CASE_ID !== undefined);
+    assertSemanticQuality(
+      semantic,
+      SELECTED_CASE_ID !== undefined,
+      RECORD_BASELINE,
+    );
     if (
       SELECTED_CASE_ID &&
       INCLUDE_EVIDENCE_DETAILS &&
@@ -1015,7 +1599,9 @@ describe("context quality benchmarks", () => {
 
   it("dereferences clean provider-first context evidence through card lookup", async (t) => {
     if (!REQUIRE_PROVIDER_CONTEXT_CARD_INVARIANT) {
-      t.skip("set SDL_CONTEXT_QUALITY_REQUIRE_PROVIDER_INVARIANT=1 for the clean provider proof");
+      t.skip(
+        "set SDL_CONTEXT_QUALITY_REQUIRE_PROVIDER_INVARIANT=1 for the clean provider proof",
+      );
       return;
     }
     if (!metrics.repoAvailable) {
@@ -1026,7 +1612,10 @@ describe("context quality benchmarks", () => {
     assert.ok(ladybugQueries, "LadybugDB queries must be initialized");
     assert.ok(normalizeEvidencePath, "Path normalizer must be initialized");
     assert.ok(handleAgentContext, "sdl.context handler must be initialized");
-    assert.ok(handleSymbolGetCard, "symbol.getCard handler must be initialized");
+    assert.ok(
+      handleSymbolGetCard,
+      "symbol.getCard handler must be initialized",
+    );
     assert.ok(getDerivedState, "derived-state reader must be initialized");
 
     const [derivedState, latestVersion] = await Promise.all([
@@ -1034,7 +1623,10 @@ describe("context quality benchmarks", () => {
       ladybugQueries.getLatestVersion(ladybugConn, REPO_ID),
     ]);
     assert.ok(derivedState, "Clean provider graph must have derived state");
-    assert.ok(latestVersion, "Clean provider graph must have a current version");
+    assert.ok(
+      latestVersion,
+      "Clean provider graph must have a current version",
+    );
     assert.equal(derivedState.graphIntegrityState, "verified");
     assert.equal(
       derivedState.graphIntegrityVersionId,
@@ -1083,10 +1675,9 @@ describe("context quality benchmarks", () => {
       ladybugConn,
       symbolIds,
     );
-    const files = await ladybugQueries.getFilesByIds(
-      ladybugConn,
-      [...new Set([...symbols.values()].map(({ fileId }) => fileId))],
-    );
+    const files = await ladybugQueries.getFilesByIds(ladybugConn, [
+      ...new Set([...symbols.values()].map(({ fileId }) => fileId)),
+    ]);
     const providerBackedSymbolIds = symbolIds.filter((symbolId) => {
       const symbol = symbols.get(symbolId);
       return (
@@ -1145,9 +1736,9 @@ describe("context quality benchmarks", () => {
   });
 
   it("keeps scoped precise lookups below the latency target", async (t) => {
-    if (RUN_SEMANTIC_ONLY || SELECTED_CASE_ID) {
+    if (!shouldRunOrdinaryQualityGates()) {
       t.skip(
-        "semantic-only and selected-case measurements exclude the default scoped gate",
+        "baseline-recording, semantic-only, and selected-case runs exclude ordinary quality gates",
       );
       return;
     }
@@ -1167,15 +1758,20 @@ describe("context quality benchmarks", () => {
       "scoped precise lookups should not fail cases",
     );
     assert.ok(
-      percentile(metrics.scopedPrecise.durationsMs, 95) <= SCOPED_PRECISE_P95_MAX_MS,
+      percentile(metrics.scopedPrecise.durationsMs, 95) <=
+        SCOPED_PRECISE_P95_MAX_MS,
       `scoped precise p95 ${percentile(metrics.scopedPrecise.durationsMs, 95).toFixed(0)}ms above ${SCOPED_PRECISE_P95_MAX_MS}ms`,
     );
   });
 
   it("keeps scoped tool-QA evidence inside tests", async (t) => {
-    if (RUN_SEMANTIC_ONLY || SELECTED_CASE_ID) {
+    if (CORPUS !== "sdl-mcp") {
+      t.skip("SDL-specific regression is outside the neutral corpus");
+      return;
+    }
+    if (!shouldRunOrdinaryQualityGates()) {
       t.skip(
-        "semantic-only and selected-case runs validate the primary invocation",
+        "baseline-recording, semantic-only, and selected-case runs exclude ordinary quality gates",
       );
       return;
     }
@@ -1183,7 +1779,10 @@ describe("context quality benchmarks", () => {
       skipOrFail(metrics.availabilityReason);
       return;
     }
-    assert.ok(contextEngine, "ContextEngine must be initialized before benchmarking");
+    assert.ok(
+      contextEngine,
+      "ContextEngine must be initialized before benchmarking",
+    );
     const c = cases.find(({ id }) => id === "review-precise-tool-qa-tests");
     assert.ok(c, "Scoped tool-QA benchmark case must exist");
 
@@ -1194,7 +1793,8 @@ describe("context quality benchmarks", () => {
     const resolvedByPosition = await resolveEvidencePaths(evidence);
     const unresolvedPathReferences = evidence.filter(
       (item, index) =>
-        hasResolvablePathReference(item) && resolvedByPosition[index] === undefined,
+        hasResolvablePathReference(item) &&
+        resolvedByPosition[index] === undefined,
     );
     const resolvedPaths = resolvedByPosition.filter(
       (path): path is string => path !== undefined,
@@ -1211,7 +1811,10 @@ describe("context quality benchmarks", () => {
       [],
       "Scoped tool-QA path references should all resolve",
     );
-    assert.ok(resolvedPaths.length > 0, "Scoped tool-QA evidence should resolve paths");
+    assert.ok(
+      resolvedPaths.length > 0,
+      "Scoped tool-QA evidence should resolve paths",
+    );
     assert.ok(
       resolvedPaths.every((path) => path.startsWith("tests/")),
       `Scoped tool-QA evidence escaped tests/: ${resolvedPaths.join(", ")}`,
@@ -1229,16 +1832,21 @@ describe("context quality benchmarks", () => {
       );
     }
     assert.ok(
-      resolvedPaths.filter((path) => path.startsWith("tests/benchmark/")).length <=
+      resolvedPaths.filter((path) => path.startsWith("tests/benchmark/"))
+        .length <=
         resolvedPaths.length / 2,
       `Benchmark tests dominate scoped tool-QA evidence: ${resolvedPaths.join(", ")}`,
     );
   });
 
   it("ranks SDL tool implementation ahead of seed evaluation scripts", async (t) => {
-    if (RUN_SEMANTIC_ONLY || SELECTED_CASE_ID) {
+    if (CORPUS !== "sdl-mcp") {
+      t.skip("SDL-specific regression is outside the neutral corpus");
+      return;
+    }
+    if (!shouldRunOrdinaryQualityGates()) {
       t.skip(
-        "semantic-only and selected-case runs validate the primary invocation",
+        "baseline-recording, semantic-only, and selected-case runs exclude ordinary quality gates",
       );
       return;
     }
@@ -1246,8 +1854,13 @@ describe("context quality benchmarks", () => {
       skipOrFail(metrics.availabilityReason);
       return;
     }
-    assert.ok(contextEngine, "ContextEngine must be initialized before benchmarking");
-    const c = cases.find(({ id }) => id === "review-broad-sdl-tool-functionality");
+    assert.ok(
+      contextEngine,
+      "ContextEngine must be initialized before benchmarking",
+    );
+    const c = cases.find(
+      ({ id }) => id === "review-broad-sdl-tool-functionality",
+    );
     assert.ok(c, "Broad tool-QA benchmark case must exist");
 
     const result = await contextEngine.buildContext(
@@ -1290,6 +1903,10 @@ describe("context quality benchmarks", () => {
 
   it("summary report", () => {
     console.log(buildReport());
-    assert.equal(metrics.totalCases, 27, "Report should cover all 27 cases");
+    assert.equal(
+      metrics.totalCases,
+      cases.length,
+      "Report should cover the selected corpus",
+    );
   });
 });
