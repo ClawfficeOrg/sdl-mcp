@@ -22,7 +22,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RetrievalCapabilities } from "../../dist/retrieval/types.js";
@@ -143,11 +144,46 @@ describe("shouldFallbackToLegacy — source verification", () => {
     );
   });
 
-  it("checkRetrievalHealth calls getExtensionCapabilities", () => {
-    assert.ok(
-      src.includes("getExtensionCapabilities()"),
-      "checkRetrievalHealth should call getExtensionCapabilities()",
+  it("propagates admission failure before retrieval health can degrade", async () => {
+    const testDir = mkdtempSync(join(tmpdir(), "sdl-retrieval-fallback-"));
+    const configPath = join(testDir, "sdlmcp.config.json");
+    const previousConfig = process.env.SDL_CONFIG;
+    const previousConfigPath = process.env.SDL_CONFIG_PATH;
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        repos: [],
+        policy: {},
+        semantic: { enabled: true, retrieval: { mode: "hybrid" } },
+      }),
+      "utf8",
     );
+    process.env.SDL_CONFIG = configPath;
+    delete process.env.SDL_CONFIG_PATH;
+    const { invalidateConfigCache } = await import(
+      "../../dist/config/loadConfig.js"
+    );
+    const { isHybridRetrievalAvailable } = await import(
+      "../../dist/retrieval/fallback.js"
+    );
+    invalidateConfigCache();
+
+    try {
+      await assert.rejects(
+        () =>
+          isHybridRetrievalAvailable("repo", async () => {
+            throw new Error("graph-admission-denied");
+          }),
+        /graph-admission-denied/,
+      );
+    } finally {
+      if (previousConfig === undefined) delete process.env.SDL_CONFIG;
+      else process.env.SDL_CONFIG = previousConfig;
+      if (previousConfigPath === undefined) delete process.env.SDL_CONFIG_PATH;
+      else process.env.SDL_CONFIG_PATH = previousConfigPath;
+      invalidateConfigCache();
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 
   it("checkRetrievalHealth returns fts, vectorJinaCode, vectorNomic fields", () => {

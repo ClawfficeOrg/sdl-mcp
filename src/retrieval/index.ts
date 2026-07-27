@@ -9,6 +9,7 @@ export type {
   RetrievalSource,
   RetrievalEvidence,
   RetrievalCapabilities,
+  RetrievalQueryContext,
   HybridSearchOptions,
   HybridSearchResultItem,
   HybridSearchResult,
@@ -29,7 +30,13 @@ export {
 export type { EmbeddingModelInfo } from "./model-mapping.js";
 
 // Orchestrator (stub in Stage 0)
-export { hybridSearch, entitySearch } from "./orchestrator.js";
+export {
+  createRetrievalQueryContext,
+  getOrCreateHealthPromise,
+  runAfterGraphRetrievalAdmission,
+  hybridSearch,
+  entitySearch,
+} from "./orchestrator.js";
 // Feedback boosting
 export {
   mergeFeedbackBoosts,

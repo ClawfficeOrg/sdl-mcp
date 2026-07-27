@@ -503,10 +503,32 @@ export const SemanticRetrievalVectorConfigSchema = z.object({
   }),
 });
 
-export const SemanticRetrievalFusionConfigSchema = z.object({
-  strategy: z.enum(["rrf"]).default("rrf"),
-  rrfK: z.number().int().min(1).default(60),
-});
+export const SemanticRetrievalFusionConfigSchema = z
+  .object({
+    strategy: z.enum(["rrf"]).default("rrf"),
+    rrfK: z.number().int().min(1).default(60),
+    weights: z
+      .object({
+        fts: z.number().finite().nonnegative(),
+        vector: z.number().finite().nonnegative(),
+        legacyFallback: z.number().finite().nonnegative(),
+        overlay: z.number().finite().nonnegative(),
+      })
+      .strict()
+      .default({
+        fts: 1,
+        vector: 1,
+        legacyFallback: 1,
+        overlay: 1,
+      }),
+    partialCoverageThresholdPermille: z
+      .number()
+      .int()
+      .min(0)
+      .max(1000)
+      .default(1000),
+  })
+  .strict();
 
 export const SemanticRetrievalConfigSchema = z.object({
   /** "legacy" = original semantic-only re-rank path; "hybrid" = FTS + vector fusion. */

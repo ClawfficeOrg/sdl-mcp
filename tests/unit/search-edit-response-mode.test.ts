@@ -8,8 +8,15 @@ import {
   closeLadybugDb,
   getLadybugConn,
   initLadybugDb,
+  withWriteConn,
 } from "../../dist/db/ladybug.js";
+import { withTransaction } from "../../dist/db/ladybug-core.js";
+import {
+  beginGraphIntegrityVersion,
+  markGraphIntegrityVerified,
+} from "../../dist/db/ladybug-derived-state.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
+import { createGraphIntegrityExpectationFromManifest } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
 import { handleFileGateway } from "../../dist/mcp/tools/file-gateway.js";
 import { handleSearchEdit } from "../../dist/mcp/tools/search-edit/index.js";
 import {
@@ -51,6 +58,36 @@ async function ensureRepoRegistered(root: string): Promise<void> {
   });
 }
 
+async function establishVerifiedEmptyManifest(): Promise<void> {
+  const versionId = `${REPO_ID}:v1`;
+  const now = new Date().toISOString();
+  const expectation = createGraphIntegrityExpectationFromManifest([], []);
+  await withWriteConn((conn) =>
+    withTransaction(conn, async () => {
+      await ladybugDb.createVersion(conn, {
+        versionId,
+        repoId: REPO_ID,
+        createdAt: now,
+        reason: "search.edit response mode fixture",
+        prevVersionHash: null,
+        versionHash: null,
+      });
+      await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, REPO_ID, {
+        files: [],
+        fileless: [],
+      });
+      await beginGraphIntegrityVersion(
+        conn,
+        REPO_ID,
+        versionId,
+        expectation.digest,
+        true,
+      );
+    }),
+  );
+  await markGraphIntegrityVerified(REPO_ID, versionId, expectation.digest);
+}
+
 async function writeLargeMatchSet(): Promise<void> {
   const dir = join(repoRoot, "large");
   await mkdir(dir, { recursive: true });
@@ -73,6 +110,7 @@ describe("search.edit responseMode defaults", { concurrency: false }, () => {
     repoRoot = join(testRoot, "repo");
     await mkdir(repoRoot, { recursive: true });
     await ensureRepoRegistered(repoRoot);
+    await establishVerifiedEmptyManifest();
     await writeFile(join(repoRoot, "small.txt"), "hello oldName\n", "utf-8");
     await writeLargeMatchSet();
   });

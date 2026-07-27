@@ -5,9 +5,22 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { closeLadybugDb, getLadybugConn, initLadybugDb } from "../../dist/db/ladybug.js";
+import {
+  closeLadybugDb,
+  getLadybugConn,
+  initLadybugDb,
+  withWriteConn,
+} from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
-import { beginGraphIntegrityVersion } from "../../dist/db/ladybug-derived-state.js";
+import { withTransaction } from "../../dist/db/ladybug-core.js";
+import {
+  beginGraphIntegrityVersion,
+  markGraphIntegrityVerified,
+} from "../../dist/db/ladybug-derived-state.js";
+import {
+  createGraphIntegrityExpectationFromManifest,
+  createGraphIntegrityFileState,
+} from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
 import { handleSymbolGetCard } from "../../dist/mcp/tools/symbol.js";
 import { handleSliceBuild } from "../../dist/mcp/tools/slice.js";
 
@@ -44,8 +57,6 @@ describe("MCP confidence-aware filtering", () => {
       prevVersionHash: null,
       versionHash: "v1-hash",
     });
-    await beginGraphIntegrityVersion(conn, repoId, "v1", "0".repeat(64), true);
-
     await ladybugDb.upsertFile(conn, {
       fileId: "file-1",
       repoId,
@@ -129,6 +140,46 @@ describe("MCP confidence-aware filtering", () => {
         createdAt: now,
       },
     ]);
+
+    // Persist the exact fixture manifest before exercising admitted graph reads.
+    const files = await ladybugDb.getFilesByRepo(conn, repoId);
+    const persistedSymbols = await ladybugDb.getSymbolsByRepo(conn, repoId);
+    const symbolsByFile = new Map<string, typeof persistedSymbols>();
+    for (const symbol of persistedSymbols) {
+      const fileSymbols = symbolsByFile.get(symbol.fileId) ?? [];
+      fileSymbols.push(symbol);
+      symbolsByFile.set(symbol.fileId, fileSymbols);
+    }
+    const manifestFiles = files.map((file) =>
+      createGraphIntegrityFileState(
+        repoId,
+        file.fileId,
+        file.relPath,
+        symbolsByFile.get(file.fileId) ?? [],
+        [],
+      ),
+    );
+    const expectation = createGraphIntegrityExpectationFromManifest(
+      manifestFiles,
+      [],
+    );
+    await withWriteConn((writeConn) =>
+      withTransaction(writeConn, async () => {
+        await ladybugDb.replaceGraphIntegrityManifestInTransaction(
+          writeConn,
+          repoId,
+          { files: manifestFiles, fileless: [] },
+        );
+        await beginGraphIntegrityVersion(
+          writeConn,
+          repoId,
+          "v1",
+          expectation.digest,
+          true,
+        );
+      }),
+    );
+    await markGraphIntegrityVerified(repoId, "v1", expectation.digest);
   });
 
   after(async () => {

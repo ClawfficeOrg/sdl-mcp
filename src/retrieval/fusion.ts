@@ -35,42 +35,213 @@ export interface SourceRanking {
 
 export const DEFAULT_RRF_K = 60;
 
-export function rrfFuse(
-  rankings: SourceRanking[],
+
+export type FusionSourceKind = "fts" | "vector" | "legacyFallback" | "overlay";
+
+export interface FusionWeights {
+  fts: number;
+  vector: number;
+  legacyFallback: number;
+  overlay: number;
+}
+
+
+/** Scale only the logical vector lane; fusion renormalizes lanes that are present. */
+export function coverageAdjustedFusionWeights(
+  weights: Readonly<FusionWeights>,
+  coveragePermille: number,
+): FusionWeights {
+  const boundedCoverage = Number.isFinite(coveragePermille)
+    ? Math.max(0, Math.min(1000, coveragePermille))
+    : 0;
+  return {
+    ...weights,
+    vector: (weights.vector * boundedCoverage) / 1000,
+  };
+}
+export interface FusionOptions {
+  weights?: Readonly<FusionWeights>;
+  pinnedIds?: readonly string[];
+}
+
+export interface EntityFusionOptions {
+  weights?: Readonly<FusionWeights>;
+  pinnedItems?: ReadonlyArray<{
+    entityType: EntityType;
+    entityId: string;
+  }>;
+}
+
+export type SourceRanks = Partial<Record<RetrievalSource, number>>;
+interface FusibleRanking {
+  source: RetrievalSource;
+  ranks: Map<string, number>;
+}
+interface Candidate {
+  score: number;
+  bestContribution: number;
+  bestSource?: RetrievalSource;
+  sourceRanks: Map<RetrievalSource, number>;
+  pinned: boolean;
+}
+
+const SOURCE_KIND_ORDER: readonly FusionSourceKind[] = [
+  "fts",
+  "vector",
+  "overlay",
+  "legacyFallback",
+];
+const SCORE_QUANTIZATION = 1_000_000_000_000;
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function sourceKind(source: RetrievalSource): FusionSourceKind {
+  if (
+    source === "fts" ||
+    source === "legacyFallback" ||
+    source === "overlay"
+  ) {
+    return source;
+  }
+  return "vector";
+}
+
+function quantizeScore(score: number): number {
+  return Math.round(score * SCORE_QUANTIZATION);
+}
+
+function fuseRankings(
+  rankings: FusibleRanking[],
   k: number,
   limit: number,
-): HybridSearchResultItem[] {
-  /** symbolId -> accumulated RRF score */
-  const scores = new Map<string, number>();
-  /** symbolId -> best (highest individual contribution) source */
-  const bestSource = new Map<string, RetrievalSource>();
-  /** symbolId -> highest single-source RRF contribution */
-  const bestContribution = new Map<string, number>();
+  weights: Readonly<FusionWeights> | undefined,
+  pinnedKeys: readonly string[],
+): Array<{
+  key: string;
+  score: number;
+  source: RetrievalSource;
+  sourceRanks: SourceRanks;
+}> {
+  const candidates = new Map<string, Candidate>();
+  const getCandidate = (key: string): Candidate => {
+    let candidate = candidates.get(key);
+    if (!candidate) {
+      candidate = {
+        score: 0,
+        bestContribution: 0,
+        sourceRanks: new Map(),
+        pinned: false,
+      };
+      candidates.set(key, candidate);
+    }
+    return candidate;
+  };
 
+  for (const key of new Set(pinnedKeys)) getCandidate(key).pinned = true;
+
+  const lanes = new Map<FusionSourceKind, FusibleRanking[]>();
   for (const ranking of rankings) {
-    for (const [symbolId, rank] of ranking.ranks) {
-      const contribution = 1 / (k + rank);
-      const prev = scores.get(symbolId) ?? 0;
-      scores.set(symbolId, prev + contribution);
+    if (ranking.ranks.size === 0) continue;
+    const kind = sourceKind(ranking.source);
+    const lane = lanes.get(kind) ?? [];
+    lane.push(ranking);
+    lanes.set(kind, lane);
+  }
+  const presentKinds = SOURCE_KIND_ORDER.filter((kind) => lanes.has(kind));
+  const laneWeights = new Map(
+    presentKinds.map((kind) => [kind, weights?.[kind] ?? 1] as const),
+  );
+  const totalWeight = Array.from(laneWeights.values()).reduce(
+    (sum, weight) => sum + weight,
+    0,
+  );
 
-      // Track which source contributed most for the source field.
-      const prevBestContrib = bestContribution.get(symbolId) ?? 0;
-      if (contribution > prevBestContrib) {
-        bestContribution.set(symbolId, contribution);
-        bestSource.set(symbolId, ranking.source);
+  for (const kind of presentKinds) {
+    const bestRanks = new Map<
+      string,
+      { rank: number; source: RetrievalSource }
+    >();
+    const laneRankings = [...(lanes.get(kind) ?? [])].sort((a, b) =>
+      compareText(a.source, b.source),
+    );
+    for (const ranking of laneRankings) {
+      for (const [key, rank] of ranking.ranks) {
+        const candidate = getCandidate(key);
+        const sourceRank = candidate.sourceRanks.get(ranking.source);
+        if (sourceRank === undefined || rank < sourceRank) {
+          candidate.sourceRanks.set(ranking.source, rank);
+        }
+        const previous = bestRanks.get(key);
+        if (
+          !previous ||
+          rank < previous.rank ||
+          (rank === previous.rank &&
+            compareText(ranking.source, previous.source) < 0)
+        ) {
+          bestRanks.set(key, { rank, source: ranking.source });
+        }
+      }
+    }
+
+    const laneWeight =
+      totalWeight > 0
+        ? (laneWeights.get(kind) ?? 0) / totalWeight
+        : 1 / presentKinds.length;
+    for (const [key, best] of bestRanks) {
+      const candidate = getCandidate(key);
+      const contribution = laneWeight / (k + best.rank);
+      candidate.score += contribution;
+      const contributionOrder =
+        quantizeScore(contribution) - quantizeScore(candidate.bestContribution);
+      if (
+        contributionOrder > 0 ||
+        (contributionOrder === 0 &&
+          (candidate.bestSource === undefined ||
+            compareText(best.source, candidate.bestSource) < 0))
+      ) {
+        candidate.bestContribution = contribution;
+        candidate.bestSource = best.source;
       }
     }
   }
 
-  // Sort descending by fused score, take top limit.
-  return Array.from(scores.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([symbolId, score]) => ({
-      symbolId,
-      score,
-      source: bestSource.get(symbolId) ?? "fts",
-    }));
+  return Array.from(candidates, ([key, candidate]) => ({
+    key,
+    score: candidate.score,
+    source: candidate.bestSource ?? "fts",
+    sourceRanks: Object.fromEntries(
+      [...candidate.sourceRanks].sort(([a], [b]) => compareText(a, b)),
+    ) as SourceRanks,
+    pinned: candidate.pinned,
+  }))
+    .sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        quantizeScore(b.score) - quantizeScore(a.score) ||
+        compareText(a.key, b.key),
+    )
+    .slice(0, limit);
+}
+export function rrfFuse(
+  rankings: SourceRanking[],
+  k: number,
+  limit: number,
+  options: FusionOptions = {},
+): HybridSearchResultItem[] {
+  return fuseRankings(
+    rankings,
+    k,
+    limit,
+    options.weights,
+    options.pinnedIds ?? [],
+  ).map(({ key, score, source, sourceRanks }) => ({
+    symbolId: key,
+    score,
+    source,
+    sourceRanks,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -135,36 +306,45 @@ export function rrfFuseEntities(
   rankings: EntitySourceRanking[],
   k: number,
   limit: number,
+  options: EntityFusionOptions = {},
 ): EntitySearchResultItem[] {
-  const scores = new Map<string, number>();
-  const bestSource = new Map<string, RetrievalSource>();
-  const bestEntityType = new Map<string, EntityType>();
-  const bestContrib = new Map<string, number>();
-
-  for (const ranking of rankings) {
+  const entities = new Map<
+    string,
+    { entityType: EntityType; entityId: string }
+  >();
+  const keyedRankings = rankings.map((ranking) => {
+    const ranks = new Map<string, number>();
     for (const [entityId, rank] of ranking.ranks) {
-      const contribution = 1 / (k + rank);
-      const prev = scores.get(entityId) ?? 0;
-      scores.set(entityId, prev + contribution);
-
-      const prevBest = bestContrib.get(entityId) ?? 0;
-      if (contribution > prevBest) {
-        bestContrib.set(entityId, contribution);
-        bestSource.set(entityId, ranking.source);
-        bestEntityType.set(entityId, ranking.entityType);
-      }
+      const key = JSON.stringify([entityId, ranking.entityType]);
+      entities.set(key, { entityType: ranking.entityType, entityId });
+      ranks.set(key, rank);
     }
-  }
+    return { source: ranking.source, ranks };
+  });
+  const pinnedKeys = (options.pinnedItems ?? []).map((item) => {
+    const key = JSON.stringify([item.entityId, item.entityType]);
+    entities.set(key, item);
+    return key;
+  });
 
-  return Array.from(scores.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit)
-    .map(([entityId, score]) => ({
-      entityType: bestEntityType.get(entityId) ?? "symbol",
-      entityId,
+  return fuseRankings(
+    keyedRankings,
+    k,
+    limit,
+    options.weights,
+    pinnedKeys,
+  ).map(({ key, score, source, sourceRanks }) => {
+    const entity = entities.get(key) ?? {
+      entityType: "symbol" as const,
+      entityId: key,
+    };
+    return {
+      ...entity,
       score,
-      source: bestSource.get(entityId) ?? "fts",
-    }));
+      source,
+      sourceRanks,
+    };
+  });
 }
 
 /**

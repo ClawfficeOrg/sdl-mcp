@@ -1139,7 +1139,8 @@
             },
             "fusion": {
               "type": "object",
-              "description": "Score fusion configuration for combining FTS and vector results.",
+              "description": "Score fusion configuration for combining retrieval lanes.",
+              "additionalProperties": false,
               "properties": {
                 "strategy": {
                   "type": "string",
@@ -1154,11 +1155,60 @@
                   "minimum": 1,
                   "default": 60,
                   "description": "RRF k parameter — controls the influence of rank position. Higher values reduce the impact of top ranks."
+                },
+                "weights": {
+                  "type": "object",
+                  "description": "Configured weights for the fixed logical retrieval source kinds.",
+                  "additionalProperties": false,
+                  "properties": {
+                    "fts": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "vector": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "legacyFallback": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "overlay": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "fts",
+                    "vector",
+                    "legacyFallback",
+                    "overlay"
+                  ],
+                  "default": {
+                    "fts": 1,
+                    "vector": 1,
+                    "legacyFallback": 1,
+                    "overlay": 1
+                  }
+                },
+                "partialCoverageThresholdPermille": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000,
+                  "default": 1000,
+                  "description": "Coverage below this integer permille threshold is classified as partial."
                 }
               },
               "default": {
                 "strategy": "rrf",
-                "rrfK": 60
+                "rrfK": 60,
+                "weights": {
+                  "fts": 1,
+                  "vector": 1,
+                  "legacyFallback": 1,
+                  "overlay": 1
+                },
+                "partialCoverageThresholdPermille": 1000
               }
             },
             "candidateLimit": {
@@ -1192,7 +1242,14 @@
             },
             "fusion": {
               "strategy": "rrf",
-              "rrfK": 60
+              "rrfK": 60,
+              "weights": {
+                "fts": 1,
+                "vector": 1,
+                "legacyFallback": 1,
+                "overlay": 1
+              },
+              "partialCoverageThresholdPermille": 1000
             },
             "candidateLimit": 100
           }

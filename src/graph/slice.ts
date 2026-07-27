@@ -35,6 +35,7 @@ import { buildPayloadCardsAndRefs, toSliceSymbolCard, filterDepsBySliceSymbolSet
 import { type SliceResult, type SliceError, sliceOk, sliceErr } from "./slice/result.js";
 import { getOverlaySnapshot } from "../live-index/overlay-reader.js";
 import { logger } from "../util/logger.js";
+import { createRetrievalQueryContext } from "../retrieval/orchestrator.js";
 import { captureActiveRepoEpoch } from "../services/repo-lifecycle.js";
 import {
   type SliceBuildInternalResult,
@@ -129,10 +130,12 @@ export async function buildSlice(
   // -----------------------------------------------------------------------
   const cachedGraph = getGraphSnapshot(request.repoId);
 
+  const queryContext = createRetrievalQueryContext();
   const startNodeResult = await resolveStartNodesLadybug(
     conn,
     request.repoId,
     request,
+    queryContext,
   );
   const startNodes = startNodeResult.startNodes;
   const { retrievalEvidence, hybridSearchItems } = startNodeResult;

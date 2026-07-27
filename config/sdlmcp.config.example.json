@@ -206,7 +206,14 @@
       },
       "fusion": {
         "strategy": "rrf",
-        "rrfK": 60
+        "rrfK": 60,
+        "weights": {
+          "fts": 1,
+          "vector": 1,
+          "legacyFallback": 1,
+          "overlay": 1
+        },
+        "partialCoverageThresholdPermille": 1000
       },
       "candidateLimit": 100
     }

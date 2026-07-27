@@ -17,8 +17,12 @@ import type {
   ContextSeedCandidate,
   ContextSeedResult,
 } from "./types.js";
+import { IndexError } from "../domain/errors.js";
 import { mergeContextSeedCandidates } from "./context-ranking.js";
-import { entitySearch } from "../retrieval/index.js";
+import {
+  createRetrievalQueryContext,
+  entitySearch,
+} from "../retrieval/index.js";
 import {
   generateCompoundIdentifiers,
   IDENTIFIER_STOP_WORDS,
@@ -610,6 +614,7 @@ export async function useScopedResultsOrFallback<T>(
 export async function buildSeedContext(
   task: AgentTask,
 ): Promise<ContextSeedResult> {
+  const queryContext = createRetrievalQueryContext();
   const timings = new Map<string, number>();
   const forceSemanticEntitySearch = task.options?.semantic === true;
   const semanticDisabled = task.options?.semantic === false;
@@ -668,7 +673,7 @@ export async function buildSeedContext(
         chatMentionWeights: task.options?.chatMentionWeights,
         pprDirection: task.options?.pprDirection,
         pprWeight: task.options?.pprWeight,
-      });
+      }, queryContext);
       recordTiming(timings, "seed.semanticEntitySearch", semanticStartedAt);
 
       if (entityResult.evidence) {
@@ -704,6 +709,7 @@ export async function buildSeedContext(
       }
     } catch (err) {
       recordTiming(timings, "seed.semanticEntitySearch", semanticStartedAt);
+      if (err instanceof IndexError) throw err;
       logger.debug("Semantic retrieval for context seeding failed (non-fatal)", {
         repoId: task.repoId,
         error: err instanceof Error ? err.message : String(err),
@@ -880,6 +886,7 @@ export async function buildSeedContext(
                       chatMentionWeights: task.options?.chatMentionWeights,
                       pprDirection: task.options?.pprDirection,
                       pprWeight: task.options?.pprWeight,
+                      queryContext,
                     },
                   )
                 ).rows
@@ -929,6 +936,7 @@ export async function buildSeedContext(
                       chatMentionWeights: task.options?.chatMentionWeights,
                       pprDirection: task.options?.pprDirection,
                       pprWeight: task.options?.pprWeight,
+                      queryContext,
                     },
                   )
                 ).rows

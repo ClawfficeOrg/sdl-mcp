@@ -33,8 +33,15 @@ import {
   getLadybugConn,
   initLadybugDb,
   closeLadybugDb,
+  withWriteConn,
 } from "../../dist/db/ladybug.js";
+import { withTransaction } from "../../dist/db/ladybug-core.js";
+import {
+  beginGraphIntegrityVersion,
+  markGraphIntegrityVerified,
+} from "../../dist/db/ladybug-derived-state.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
+import { createGraphIntegrityExpectationFromManifest } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
 import { normalizePath } from "../../dist/util/paths.js";
 import { ValidationError } from "../../dist/domain/errors.js";
 import { loadConfiguredAdapterPlugins } from "../../dist/startup/plugins.js";
@@ -70,6 +77,36 @@ async function ensureRepoRegistered(root: string): Promise<void> {
   });
 }
 
+async function establishVerifiedEmptyManifest(): Promise<void> {
+  const versionId = `${REPO_ID}:v1`;
+  const now = new Date().toISOString();
+  const expectation = createGraphIntegrityExpectationFromManifest([], []);
+  await withWriteConn((conn) =>
+    withTransaction(conn, async () => {
+      await ladybugDb.createVersion(conn, {
+        versionId,
+        repoId: REPO_ID,
+        createdAt: now,
+        reason: "search.edit integration fixture",
+        prevVersionHash: null,
+        versionHash: null,
+      });
+      await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, REPO_ID, {
+        files: [],
+        fileless: [],
+      });
+      await beginGraphIntegrityVersion(
+        conn,
+        REPO_ID,
+        versionId,
+        expectation.digest,
+        true,
+      );
+    }),
+  );
+  await markGraphIntegrityVerified(REPO_ID, versionId, expectation.digest);
+}
+
 describe("sdl.search.edit", { concurrency: false }, () => {
   before(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), "sdl-search-edit-"));
@@ -82,6 +119,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
     await writeFile(join(repoRoot, "unrelated.txt"), "nothing here\n", "utf-8");
     await initLadybugDb(join(repoRoot, "test.lbug"));
     await ensureRepoRegistered(repoRoot);
+    await establishVerifiedEmptyManifest();
     resetSearchEditPlanStore();
   });
 

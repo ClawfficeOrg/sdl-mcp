@@ -6,12 +6,12 @@
  * or the system should fall back to the legacy search path.
  */
 
-import { getExtensionCapabilities, getLadybugConn } from "../db/ladybug.js";
+import { getLadybugConn } from "../db/ladybug.js";
 import { logger } from "../util/logger.js";
 import { loadConfig } from "../config/loadConfig.js";
 import type { SemanticRetrievalConfig } from "../config/types.js";
 import type { RetrievalCapabilities, DegradationReason } from "./types.js";
-import { checkIndexHealth } from "./index-lifecycle.js";
+import { checkRetrievalHealth as checkStrictRetrievalHealth } from "./health.js";
 /** Build structured degradation reasons from index health data. */
 function buildDegradationReasons(
   health: {
@@ -52,18 +52,23 @@ export function buildRetrievalCapabilitiesFromIndexHealth(
   let vectorNomic = false;
   let vectorJinaCode = false;
 
-  for (const v of health.vectors) {
-    if (v.model === "nomic-embed-text-v1.5") {
-      vectorNomic = caps.vector && v.healthy;
-    } else if (v.model === "jina-embeddings-v2-base-code") {
-      vectorJinaCode = caps.vector && v.healthy;
+  for (const vector of health.vectors) {
+    if (vector.model === "nomic-embed-text-v1.5") {
+      vectorNomic = caps.vector && vector.healthy;
+    } else if (vector.model === "jina-embeddings-v2-base-code") {
+      vectorJinaCode = caps.vector && vector.healthy;
     }
   }
 
   return {
     fts: caps.fts && health.fts.healthy,
+    fileSummaryFts: false,
     vectorNomic,
     vectorJinaCode,
+    coveragePermille: {
+      symbolVector: 0,
+      fileSummaryVector: 0,
+    },
     degradationReasons: buildDegradationReasons(health, caps),
   };
 }
@@ -90,43 +95,26 @@ export function buildRetrievalCapabilitiesFromIndexHealth(
  * @param _repoId - Repository ID (reserved for future per-repo index scoping).
  */
 export async function checkRetrievalHealth(
-  _repoId?: string,
+  repoId = "",
 ): Promise<RetrievalCapabilities> {
-  const caps = getExtensionCapabilities();
-
-  // Fast path: if neither extension is loaded, indexes cannot exist.
-  if (!caps.fts && !caps.vector) {
-    return {
-      fts: false,
-      vectorNomic: false,
-      vectorJinaCode: false,
-      degradationReasons: [
-        { code: "fts-extension-unavailable", message: "FTS extension not loaded", affects: "fts" },
-        { code: "vector-extension-unavailable", message: "Vector extension not loaded", affects: "vector" },
-      ],
-    };
-  }
-
-  // Extension(s) available - query for real index existence.
   try {
     const conn = await getLadybugConn();
-    const health = await checkIndexHealth(conn);
-
-    return buildRetrievalCapabilitiesFromIndexHealth(health, caps);
+    return await checkStrictRetrievalHealth(conn, repoId, loadConfig().semantic);
   } catch (err) {
-    // Index health check failed - fall back to extension-based proxy
-    // so we don't block startup or degrade the caller.
-    logger.warn(
-      `[retrieval] checkIndexHealth failed, falling back to extension proxy: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn(`[retrieval] strict health admission failed: ${message}`);
     return {
-      fts: caps.fts,
-      vectorNomic: caps.vector,
-      vectorJinaCode: caps.vector,
-      degradationReasons: [{ code: "health-check-error", message: err instanceof Error ? err.message : String(err), affects: "all" }],
+      fts: false,
+      fileSummaryFts: false,
+      vectorNomic: false,
+      vectorJinaCode: false,
+      coveragePermille: {
+        symbolVector: 0,
+        fileSummaryVector: 0,
+      },
+      degradationReasons: [
+        { code: "health-check-error", message, affects: "all" },
+      ],
     };
   }
 }
@@ -183,7 +171,12 @@ export function shouldFallbackToLegacy(
   * - FTS index is healthy
   * - At least one real-model vector index is healthy
  */
-export async function isHybridRetrievalAvailable(): Promise<boolean> {
+export async function isHybridRetrievalAvailable(
+  repoId = "",
+  healthFactory: () => Promise<RetrievalCapabilities> = () =>
+    checkRetrievalHealth(repoId),
+): Promise<boolean> {
+  let healthStarted = false;
   try {
     const config = loadConfig();
     const semanticConfig = config.semantic;
@@ -194,14 +187,17 @@ export async function isHybridRetrievalAvailable(): Promise<boolean> {
     // Explicit hybrid mode still needs a healthy FTS index; extension-level
     // capability alone can leave the retrieval path pointed at a broken index.
     if (retrievalConfig?.mode === "hybrid") {
-      const health = await checkRetrievalHealth();
+      healthStarted = true;
+      const health = await healthFactory();
       return health.fts;
     }
 
     // Legacy mode - auto-promote when infrastructure is healthy.
-    const health = await checkRetrievalHealth();
+    healthStarted = true;
+    const health = await healthFactory();
     return health.fts && (health.vectorNomic || health.vectorJinaCode);
-  } catch {
+  } catch (err) {
+    if (healthStarted) throw err;
     return false;
   }
 }

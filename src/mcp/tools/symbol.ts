@@ -36,6 +36,9 @@ import {
 
 import {
   checkRetrievalHealth,
+  createRetrievalQueryContext,
+  getOrCreateHealthPromise,
+  runAfterGraphRetrievalAdmission,
   shouldFallbackToLegacy,
 } from "../../retrieval/index.js";
 import type { RetrievalEvidence } from "../../retrieval/types.js";
@@ -299,6 +302,7 @@ export async function handleSymbolSearch(
   context?: ToolContext,
 ): Promise<SymbolSearchResponse> {
   const startedAt = Date.now();
+  const queryContext = createRetrievalQueryContext();
   const request = args as SymbolSearchRequest;
   // Normalize: fold 'pattern' alias into 'query' if query was not provided
   const query = request.query ?? request.pattern ?? "";
@@ -342,10 +346,18 @@ export async function handleSymbolSearch(
     semanticConfig?.enabled === true &&
     retrievalConfig?.mode === "hybrid"
   ) {
+    // Reject unavailable graph-backed retrieval before health/procedure work.
+    await runAfterGraphRetrievalAdmission(
+      conn,
+      request.repoId,
+      async () => undefined,
+    );
     try {
-      // NOTE: checkRetrievalHealth is also called inside hybridSearch().
-      // A future optimisation could pass pre-resolved caps via options.
-      const caps = await checkRetrievalHealth(request.repoId);
+      const caps = await getOrCreateHealthPromise(
+        queryContext,
+        request.repoId,
+        () => checkRetrievalHealth(request.repoId),
+      );
       if (!shouldFallbackToLegacy(caps, retrievalConfig)) {
         useHybrid = true;
       } else {
@@ -389,6 +401,7 @@ export async function handleSymbolSearch(
             pprDirection: request.pprDirection,
             pprWeight: request.pprWeight,
             excludeExternal: request.excludeExternal,
+            queryContext,
           },
         );
       rows = hybridRows;

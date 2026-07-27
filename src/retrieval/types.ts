@@ -85,8 +85,14 @@ export interface RetrievalEvidence {
 /** Snapshot of which retrieval backends are available at runtime. */
 export interface RetrievalCapabilities {
   fts: boolean;
+  fileSummaryFts: boolean;
   vectorNomic: boolean;
   vectorJinaCode: boolean;
+  /** Per-logical-source embedding coverage, rounded once to integer permille. */
+  coveragePermille: {
+    symbolVector: number;
+    fileSummaryVector: number;
+  };
   /** Structured reasons explaining why capabilities are unavailable. */
   degradationReasons?: DegradationReason[];
 }
@@ -113,6 +119,13 @@ export interface DegradationReason {
 // ---------------------------------------------------------------------------
 
 /** Options for the hybrid search orchestrator. */
+export interface RetrievalQueryContext {
+  /** One strict health inspection promise per repository for this request. */
+  healthPromises: Map<string, Promise<RetrievalCapabilities>>;
+  /** One embedding promise per model and fully-prefixed query for this request. */
+  embeddingPromises: Map<string, Promise<number[]>>;
+}
+
 export interface HybridSearchOptions {
   repoId: string;
   query: string;
@@ -138,6 +151,8 @@ export interface HybridSearchResultItem {
   symbolId: string;
   score: number;
   source: RetrievalSource;
+  /** Deterministic 1-based ranks from every contributing physical lane. */
+  sourceRanks: Partial<Record<RetrievalSource, number>>;
 }
 
 /** Response envelope from the hybrid search orchestrator. */
@@ -169,6 +184,8 @@ export interface EntitySearchResultItem {
   entityId: string;
   score: number;
   source: RetrievalSource;
+  /** Deterministic 1-based ranks from every contributing physical lane. */
+  sourceRanks: Partial<Record<RetrievalSource, number>>;
 }
 
 /** Response envelope from the multi-entity hybrid search orchestrator. */

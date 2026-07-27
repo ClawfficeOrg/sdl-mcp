@@ -49,8 +49,16 @@ import type {
   GraphSlice,
 } from "../domain/types.js";
 import { logger } from "../util/logger.js";
-import { isHybridRetrievalAvailable } from "../retrieval/fallback.js";
-import { hybridSearch } from "../retrieval/orchestrator.js";
+import {
+  checkRetrievalHealth,
+  isHybridRetrievalAvailable,
+} from "../retrieval/fallback.js";
+import {
+  createRetrievalQueryContext,
+  getOrCreateHealthPromise,
+  hybridSearch,
+  runAfterGraphRetrievalAdmission,
+} from "../retrieval/orchestrator.js";
 import { queryFeedbackBoosts } from "../retrieval/feedback-boost.js";
 import {
   getOverlaySnapshot,
@@ -1296,9 +1304,19 @@ export class Executor {
           : this.extractIdentifiersFromTask(task).slice(0, maxTerms);
 
         const seen = new Set<string>();
+        const queryContext = createRetrievalQueryContext();
         const useHybrid =
           task.options?.semantic !== false &&
-          (await isHybridRetrievalAvailable());
+          (await isHybridRetrievalAvailable(task.repoId, async () => {
+            const conn = await this.getConn();
+            return runAfterGraphRetrievalAdmission(conn, task.repoId, () =>
+              getOrCreateHealthPromise(
+                queryContext,
+                task.repoId,
+                () => checkRetrievalHealth(task.repoId),
+              ),
+            );
+          }));
 
         // 2. Search for each identifier individually and combine results
         for (const term of searchTerms) {
@@ -1310,7 +1328,7 @@ export class Executor {
                 searchFallbackLimit / Math.max(searchTerms.length, 1),
               ),
               includeEvidence: false,
-            });
+            }, queryContext);
             for (const item of hybridResult.results) {
               if (!seen.has(item.symbolId)) {
                 seen.add(item.symbolId);
@@ -1342,7 +1360,7 @@ export class Executor {
               query: task.taskText,
               limit: searchFallbackLimit,
               includeEvidence: false,
-            });
+            }, queryContext);
             for (const item of hybridResult.results) {
               allSymbols.push(item.symbolId);
             }

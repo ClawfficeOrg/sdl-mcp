@@ -31,7 +31,10 @@ import {
 } from "../../../util/eol.js";
 import { NotFoundError, ValidationError } from "../../../domain/errors.js";
 import { resolveSymbolRef } from "../../../util/resolve-symbol-ref.js";
-import { narrowFilesForQuery } from "../../../retrieval/orchestrator.js";
+import {
+  createRetrievalQueryContext,
+  narrowFilesForQuery,
+} from "../../../retrieval/orchestrator.js";
 import type { RetrievalEvidence } from "../../../retrieval/types.js";
 
 import {
@@ -1862,6 +1865,7 @@ export async function planSearchEditPreview(
 async function planSingleSearchEditPreview(
   request: SearchEditSingleOperationRequest,
 ): Promise<PreviewResult> {
+  const queryContext = createRetrievalQueryContext();
   const conn = await getLadybugConn();
   const repo = await ladybugDb.getRepo(conn, request.repoId);
   if (!repo) {
@@ -1991,7 +1995,7 @@ async function planSingleSearchEditPreview(
         query: narrowQuery,
         limit: Math.max(maxFiles, 32),
         includeEvidence: true,
-      });
+      }, queryContext);
       retrievalEvidence = narrowed.evidence;
       if (narrowed.paths.length > 0) {
         const seen = new Set<string>();

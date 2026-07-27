@@ -12,6 +12,7 @@ import type {
 } from "../../../dist/agent/types.js";
 
 const REPO_ID = "context-seeding-runtime-repo";
+const UNVERIFIED_REPO_ID = "context-seeding-unverified-repo";
 const INGRESS_TASK_TEXT =
   "Review the current SDL-MCP tool surface for contracts, output noise, deterministic responses, and safe errors.";
 const INGRESS_TARGET_IDS = [
@@ -166,14 +167,26 @@ describe("context seeding runtime lanes", () => {
       delete process.env.SDL_MCP_DISABLE_NATIVE_ADDON;
     }
 
-    const [ladybug, queries, lifecycle, seeding, executor, contextEngine] =
-      await Promise.all([
+    const [
+      ladybug,
+      queries,
+      lifecycle,
+      seeding,
+      executor,
+      contextEngine,
+      ladybugCore,
+      derivedState,
+      graphIntegrity,
+    ] = await Promise.all([
         import("../../../dist/db/ladybug.js"),
         import("../../../dist/db/ladybug-queries.js"),
         import("../../../dist/retrieval/index-lifecycle.js"),
         import("../../../dist/agent/context-seeding.js"),
         import("../../../dist/agent/executor.js"),
         import("../../../dist/agent/context-engine.js"),
+        import("../../../dist/db/ladybug-core.js"),
+        import("../../../dist/db/ladybug-derived-state.js"),
+        import("../../../dist/indexer/provider-first/persisted-graph-integrity.js"),
       ]);
     closeLadybugDb = ladybug.closeLadybugDb;
     buildSeedContext = seeding.buildSeedContext;
@@ -189,6 +202,12 @@ describe("context seeding runtime lanes", () => {
     await queries.upsertRepo(conn, {
       repoId: REPO_ID,
       rootPath: "C:/tmp/context-seeding-runtime-repo",
+      configJson: "{}",
+      createdAt: now,
+    });
+    await queries.upsertRepo(conn, {
+      repoId: UNVERIFIED_REPO_ID,
+      rootPath: "C:/tmp/context-seeding-unverified-repo",
       configJson: "{}",
       createdAt: now,
     });
@@ -535,6 +554,59 @@ describe("context seeding runtime lanes", () => {
       true,
       "runtime lane fixture requires a healthy symbol FTS index",
     );
+
+    const files = await queries.getFilesByRepo(conn, REPO_ID);
+    const symbols = await queries.getSymbolsByRepo(conn, REPO_ID);
+    const symbolsByFile = new Map<string, typeof symbols>();
+    for (const symbol of symbols) {
+      const fileSymbols = symbolsByFile.get(symbol.fileId) ?? [];
+      fileSymbols.push(symbol);
+      symbolsByFile.set(symbol.fileId, fileSymbols);
+    }
+    const manifestFiles = files.map((file) =>
+      graphIntegrity.createGraphIntegrityFileState(
+        REPO_ID,
+        file.fileId,
+        file.relPath,
+        symbolsByFile.get(file.fileId) ?? [],
+        [],
+      ),
+    );
+    const expectation =
+      graphIntegrity.createGraphIntegrityExpectationFromManifest(
+        manifestFiles,
+        [],
+      );
+    const versionId = `${REPO_ID}:v1`;
+    await ladybug.withWriteConn((writeConn) =>
+      ladybugCore.withTransaction(writeConn, async () => {
+        await queries.createVersion(writeConn, {
+          versionId,
+          repoId: REPO_ID,
+          createdAt: now,
+          reason: "verified semantic fixture",
+          prevVersionHash: null,
+          versionHash: null,
+        });
+        await queries.replaceGraphIntegrityManifestInTransaction(
+          writeConn,
+          REPO_ID,
+          { files: manifestFiles, fileless: [] },
+        );
+        await derivedState.beginGraphIntegrityVersion(
+          writeConn,
+          REPO_ID,
+          versionId,
+          expectation.digest,
+          true,
+        );
+      }),
+    );
+    await derivedState.markGraphIntegrityVerified(
+      REPO_ID,
+      versionId,
+      expectation.digest,
+    );
   });
 
   after(async () => {
@@ -552,6 +624,17 @@ describe("context seeding runtime lanes", () => {
     } else {
       process.env.SDL_MCP_DISABLE_NATIVE_ADDON = previousNativeDisabled;
     }
+  });
+
+  it("rejects forced semantic seeding when graph integrity is unavailable", async () => {
+    await assert.rejects(
+      () =>
+        buildSeedContext({
+          ...task(true),
+          repoId: UNVERIFIED_REPO_ID,
+        }),
+      /--safe-rebuild <absolute-new-path>/,
+    );
   });
 
   it("keeps bounded lexical fallback in forced semantic mode", async () => {

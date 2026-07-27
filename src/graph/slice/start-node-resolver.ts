@@ -18,10 +18,22 @@ import type { Connection } from "kuzu";
 import type { RepoId, SymbolId } from "../../domain/types.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import { tokenize } from "../../util/tokenize.js";
-import { isHybridRetrievalAvailable } from "../../retrieval/fallback.js";
+import {
+  checkRetrievalHealth,
+  isHybridRetrievalAvailable,
+} from "../../retrieval/fallback.js";
 import { logger } from "../../util/logger.js";
-import { hybridSearch } from "../../retrieval/orchestrator.js";
-import type { RetrievalEvidence, HybridSearchResultItem } from "../../retrieval/types.js";
+import {
+  createRetrievalQueryContext,
+  getOrCreateHealthPromise,
+  hybridSearch,
+  runAfterGraphRetrievalAdmission,
+} from "../../retrieval/orchestrator.js";
+import type {
+  RetrievalEvidence,
+  HybridSearchResultItem,
+  RetrievalQueryContext,
+} from "../../retrieval/types.js";
 import {
   compareTaskScopedCandidates,
 } from "../../retrieval/task-query-ranking.js";
@@ -420,6 +432,7 @@ export async function resolveStartNodesLadybug(
   conn: Connection,
   repoId: RepoId,
   request: SliceBuildRequestBase,
+  queryContext: RetrievalQueryContext = createRetrievalQueryContext(),
 ): Promise<StartNodeResolutionResult> {
   const startNodes = new Map<SymbolId, StartNodeSource>();
   const explicitEntrySymbols: SymbolId[] = [];
@@ -471,8 +484,16 @@ export async function resolveStartNodesLadybug(
     ? limits.maxTaskTextStartNodes * 2
     : limits.maxTaskTextStartNodes;
 
-  // Stage 2: check once whether hybrid retrieval is available for this request.
-  const useHybrid = await isHybridRetrievalAvailable();
+  // Check once, after graph admission, and share the promise with every lane.
+  const useHybrid = await isHybridRetrievalAvailable(repoId, () =>
+    runAfterGraphRetrievalAdmission(conn, repoId, () =>
+      getOrCreateHealthPromise(
+        queryContext,
+        repoId,
+        () => checkRetrievalHealth(repoId),
+      ),
+    ),
+  );
   let retrievalEvidence: RetrievalEvidence | undefined;
   let hybridSearchItems: HybridSearchResultItem[] | undefined;
 
@@ -513,7 +534,7 @@ export async function resolveStartNodesLadybug(
         query: request.stackTrace.slice(0, STACK_TRACE_QUERY_MAX_LENGTH),
         limit: Math.min(20, limits.maxTotalStartNodes - startNodes.size),
         includeEvidence: false,
-      });
+      }, queryContext);
       // hybridSearch queries Symbol nodes in the DB — returned symbolIds are valid.
       // The `as SymbolId` cast is consistent with how other DB query results are used.
       for (const item of hybridResult.results) {
@@ -541,7 +562,7 @@ export async function resolveStartNodesLadybug(
         query: request.failingTestPath,
         limit: Math.min(15, limits.maxTotalStartNodes - startNodes.size),
         includeEvidence: false,
-      });
+      }, queryContext);
       for (const item of hybridResult.results) {
         if (startNodes.size >= limits.maxTotalStartNodes) break;
         addStartNode(item.symbolId, "failingTestPath");
@@ -593,7 +614,7 @@ export async function resolveStartNodesLadybug(
         query: request.taskText,
         limit: effectiveTaskTextLimit,
         includeEvidence: true,
-      });
+      }, queryContext);
       retrievalEvidence = hybridResult.evidence;
       hybridSearchItems = hybridResult.results;
       let taskTextSeedCount = 0;

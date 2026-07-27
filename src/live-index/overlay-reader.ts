@@ -18,7 +18,10 @@ import {
   SYMBOL_SEARCH_MIN_QUERY_TOKEN_LENGTH,
 } from "../config/constants.js";
 import { splitCamelSubwords } from "../util/symbol-relevance.js";
-import type { RetrievalEvidence } from "../retrieval/types.js";
+import type {
+  RetrievalEvidence,
+  RetrievalQueryContext,
+} from "../retrieval/types.js";
 import type { DraftOverlayEntry } from "./overlay-store.js";
 import { getOverlayEmbeddingCache } from "./overlay-embedding-cache.js";
 import { logger } from "../util/logger.js";
@@ -380,6 +383,7 @@ export async function searchSymbolsHybridWithOverlay(
     pprDirection?: "out" | "in" | "both";
     pprWeight?: number;
     excludeExternal?: boolean;
+    queryContext?: RetrievalQueryContext;
   },
 ): Promise<{ rows: OverlaySearchResult[]; evidence?: RetrievalEvidence }> {
   const snapshot = getOverlaySnapshot(repoId);
@@ -400,7 +404,7 @@ export async function searchSymbolsHybridWithOverlay(
     chatMentionWeights: hybridOptions.chatMentionWeights,
     pprDirection: hybridOptions.pprDirection,
     pprWeight: hybridOptions.pprWeight,
-  });
+  }, hybridOptions.queryContext);
 
   // 2. Hydrate hybrid results — get symbol/file data, filter out touched files
   const hybridSymbolIds = hybridResult.results.map((r) => r.symbolId);
@@ -434,6 +438,7 @@ export async function searchSymbolsHybridWithOverlay(
       file: file?.relPath ?? "",
       exported: sym.exported,
       filePath: file?.relPath ?? "",
+      sourceRanks: item.sourceRanks,
     });
   }
 
@@ -488,7 +493,12 @@ export async function searchSymbolsHybridWithOverlay(
   //    Overlay takes precedence for matching symbolIds.
   //    Durable results retain their hybrid RRF ordering via the merge sort.
   //    Overlay-only hits are preserved regardless of score (see mergeSearchResults).
-  const merged = mergeSearchResults(durableRows, overlayRows, query, limit);
+  const rankedOverlayRows = mergeSearchResults([], overlayRows, query, overlayRows.length)
+    .map((row, index) => ({
+      ...row,
+      sourceRanks: { ...row.sourceRanks, overlay: index + 1 },
+    }));
+  const merged = mergeSearchResults(durableRows, rankedOverlayRows, query, limit);
 
   // 5. Update evidence with overlay-only candidate count.
   const overlayOnlyCount = overlayRows.filter((r) => r.overlayOnly).length;

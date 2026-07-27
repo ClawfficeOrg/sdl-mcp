@@ -1,10 +1,13 @@
 import type { SearchSymbolLiteRow } from "../db/ladybug-queries.js";
+import type { SourceRanks } from "../retrieval/fusion.js";
 
 export interface OverlaySearchResult extends SearchSymbolLiteRow {
   filePath: string;
   summary?: string | null;
   searchText?: string | null;
   matchedTermCount?: number;
+  /** Stable rank contributed by each durable or draft retrieval lane. */
+  sourceRanks?: SourceRanks;
   /** True for symbols that exist only in the draft overlay (no durable DB record). */
   overlayOnly?: boolean;
 }
@@ -91,7 +94,14 @@ export function mergeSearchResults(
   }
 
   for (const row of overlayRows) {
-    merged.set(row.symbolId, row);
+    const durableRow = merged.get(row.symbolId);
+    merged.set(row.symbolId, durableRow
+      ? {
+          ...durableRow,
+          ...row,
+          sourceRanks: { ...durableRow.sourceRanks, ...row.sourceRanks },
+        }
+      : row);
   }
 
   const sorted = Array.from(merged.values())
@@ -107,7 +117,9 @@ export function mergeSearchResults(
       const leftIsTest = (left.filePath.startsWith("tests/") || left.filePath.includes("/tests/")) ? 1 : 0;
       const rightIsTest = (right.filePath.startsWith("tests/") || right.filePath.includes("/tests/")) ? 1 : 0;
       if (leftIsTest !== rightIsTest) return leftIsTest - rightIsTest;
-      return left.name.localeCompare(right.name) || left.filePath.localeCompare(right.filePath);
+      return left.name.localeCompare(right.name)
+        || left.filePath.localeCompare(right.filePath)
+        || left.symbolId.localeCompare(right.symbolId);
     });
 
   // Overlay-only hits must never be dropped by fusion truncation.

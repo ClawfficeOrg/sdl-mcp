@@ -26,6 +26,7 @@
 import type { Connection } from "kuzu";
 import { queryStoredProcAll } from "../db/ladybug-core.js";
 import { getLadybugConn } from "../db/ladybug.js";
+import { IndexError } from "../domain/errors.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
 import { loadConfig } from "../config/loadConfig.js";
 import {
@@ -37,6 +38,7 @@ import {
   type SourceRanking,
   type EntitySourceRanking,
   DEFAULT_RRF_K,
+  coverageAdjustedFusionWeights,
   rrfFuse,
   buildEvidence,
   rrfFuseEntities,
@@ -56,11 +58,15 @@ import { getEmbeddingProvider } from "../indexer/embeddings.js";
 import { applyQueryPrefix } from "../indexer/model-registry.js";
 import { EMBEDDING_MODELS } from "./model-mapping.js";
 import { ENTITY_FTS_INDEX_NAMES } from "./index-lifecycle.js";
-import { checkRetrievalHealth, shouldFallbackToLegacy } from "./fallback.js";
+import { assertGraphRetrievalAvailable } from "../services/graph-retrieval-availability.js";
+import { shouldFallbackToLegacy } from "./fallback.js";
+import { checkRetrievalHealth } from "./health.js";
 import type {
   HybridSearchOptions,
   HybridSearchResult,
+  RetrievalCapabilities,
   RetrievalEvidence,
+  RetrievalQueryContext,
   RetrievalSource,
   EntityType,
   EntitySearchOptions,
@@ -198,6 +204,93 @@ function cypherNumberArray(values: readonly number[]): string {
     .join(", ")}]`;
 }
 
+
+/** Create an isolated cache for one top-level retrieval request. */
+export function createRetrievalQueryContext(): RetrievalQueryContext {
+  return {
+    healthPromises: new Map(),
+    embeddingPromises: new Map(),
+  };
+}
+
+/** Cache before deferred work starts so concurrent lanes share one health read. */
+export function getOrCreateHealthPromise(
+  context: RetrievalQueryContext,
+  repoId: string,
+  factory: () => Promise<RetrievalCapabilities>,
+): Promise<RetrievalCapabilities> {
+  const existing = context.healthPromises.get(repoId);
+  if (existing) {
+    return existing;
+  }
+  const created = Promise.resolve().then(factory);
+  context.healthPromises.set(repoId, created);
+  return created;
+}
+
+
+/** Run no retrieval work until the graph-read integrity gate admits the request. */
+export async function runAfterGraphRetrievalAdmission<T>(
+  conn: Connection,
+  repoId: string,
+  work: () => Promise<T>,
+  assertAvailable: (
+    conn: Connection,
+    repoId: string,
+  ) => Promise<void> = assertGraphRetrievalAvailable,
+): Promise<T> {
+  await assertAvailable(conn, repoId);
+  return work();
+}
+/** Cache by model and fully-prefixed query so semantically distinct inputs never alias. */
+export function getOrCreateEmbeddingPromise(
+  context: RetrievalQueryContext,
+  model: string,
+  prefixedQuery: string,
+  factory: () => Promise<number[]>,
+): Promise<number[]> {
+  const key = `${model}\u0000${prefixedQuery}`;
+  const existing = context.embeddingPromises.get(key);
+  if (existing) {
+    return existing;
+  }
+  const created = Promise.resolve().then(factory);
+  context.embeddingPromises.set(key, created);
+  return created;
+}
+
+/** Order raw HNSW results before assigning ranks; Ladybug does not guarantee order. */
+export function sortVectorRowsByDistance(
+  rows: readonly VectorRawRow[],
+  idField = "symbolId",
+): VectorRawRow[] {
+  return [...rows].sort((a, b) => {
+    const distanceOrder = vectorDistance(a) - vectorDistance(b);
+    if (distanceOrder !== 0) {
+      return distanceOrder;
+    }
+    const aId = vectorRowId(a, idField);
+    const bId = vectorRowId(b, idField);
+    return aId < bId ? -1 : aId > bId ? 1 : 0;
+  });
+}
+
+function vectorDistance(row: VectorRawRow): number {
+  const distance = Number(row.distance ?? row._distance);
+  return Number.isFinite(distance) ? distance : Number.POSITIVE_INFINITY;
+}
+
+function vectorRowId(row: VectorRawRow, idField = "symbolId"): string {
+  const candidates = [
+    row[idField],
+    row.node?.[idField],
+    row._node?.[idField],
+    row.symbolId,
+    row.node?.symbolId,
+    row._node?.symbolId,
+  ];
+  return candidates.find((value): value is string => typeof value === "string") ?? "";
+}
 function timingKeySegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_.-]/g, "_");
 }
@@ -298,8 +391,8 @@ async function queryVectorIndex(
       conn,
       `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${vectorLiteral}, ${k}) RETURN node, distance`,
     );
-    return rows.map((r) => ({
-      symbolId: r.symbolId ?? r.node?.symbolId ?? r._node?.symbolId ?? "",
+    return sortVectorRowsByDistance(rows).map((r) => ({
+      symbolId: vectorRowId(r),
       // Kuzu vector index returns distance; convert to a similarity score.
       // Lower distance = more similar, so score = 1 / (1 + distance).
       score:
@@ -366,7 +459,17 @@ function resolveConfig(): SemanticRetrievalConfig {
         "nomic-embed-text-v1.5": { indexName: "symbol_vec_nomic_embed_v15" },
       },
     },
-    fusion: { strategy: "rrf", rrfK: DEFAULT_RRF_K },
+    fusion: {
+      strategy: "rrf",
+      rrfK: DEFAULT_RRF_K,
+      weights: {
+        fts: 1,
+        vector: 1,
+        legacyFallback: 1,
+        overlay: 1,
+      },
+      partialCoverageThresholdPermille: 1000,
+    },
     candidateLimit: DEFAULT_CANDIDATE_LIMIT,
   };
 }
@@ -400,9 +503,43 @@ function resolveEmbeddingProviderType(): "api" | "local" | "mock" {
  */
 export async function hybridSearch(
   options: HybridSearchOptions,
+  queryContext?: RetrievalQueryContext,
 ): Promise<HybridSearchResult> {
   const config = resolveConfig();
-  const caps = await checkRetrievalHealth(options.repoId);
+  let conn: Connection;
+  try {
+    conn = await getLadybugConn();
+  } catch (err) {
+    logger.warn(
+      `[hybrid-search] Failed to obtain DB connection: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return {
+      results: [],
+      ...(options.includeEvidence
+        ? {
+            evidence: buildEvidence([], [], 0, "db-connection-unavailable"),
+          }
+        : {}),
+    };
+  }
+
+  const caps = await runAfterGraphRetrievalAdmission(
+    conn,
+    options.repoId,
+    async () => {
+      const healthFactory = () =>
+        checkRetrievalHealth(conn, options.repoId, loadConfig().semantic);
+      return queryContext
+        ? await getOrCreateHealthPromise(
+            queryContext,
+            options.repoId,
+            healthFactory,
+          )
+        : healthFactory();
+    },
+  );
 
   // Honour explicit option overrides, then fall back to config.
   const ftsEnabled = options.ftsEnabled ?? config.fts.enabled;
@@ -429,25 +566,6 @@ export async function hybridSearch(
                 (caps.degradationReasons?.map((r) => r.message).join("; ") ??
                   "retrieval unavailable"),
             ),
-          }
-        : {}),
-    };
-  }
-
-  let conn: Connection;
-  try {
-    conn = await getLadybugConn();
-  } catch (err) {
-    logger.warn(
-      `[hybrid-search] Failed to obtain DB connection: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return {
-      results: [],
-      ...(options.includeEvidence
-        ? {
-            evidence: buildEvidence([], [], 0, "db-connection-unavailable"),
           }
         : {}),
     };
@@ -553,8 +671,16 @@ export async function hybridSearch(
       const embedStartedAt = performance.now();
       try {
         const prefixedQuery = applyQueryPrefix(modelName, options.query);
-        const embeddings = await provider.embed([prefixedQuery]);
-        queryEmbedding = embeddings[0];
+        const embeddingFactory = async () =>
+          (await provider.embed([prefixedQuery]))[0] ?? [];
+        queryEmbedding = queryContext
+          ? await getOrCreateEmbeddingPromise(
+              queryContext,
+              modelName,
+              prefixedQuery,
+              embeddingFactory,
+            )
+          : await embeddingFactory();
         if (!queryEmbedding || queryEmbedding.length === 0) {
           logger.debug(
             `[hybrid-search] Empty embedding returned for model '${modelName}'; skipping`,
@@ -635,7 +761,12 @@ export async function hybridSearch(
 
   // ----- RRF fusion -----
   const rrfStartedAt = performance.now();
-  const fusedResults = rrfFuse(rankings, rrfK, limit);
+  const fusedResults = rrfFuse(rankings, rrfK, limit, {
+    weights: coverageAdjustedFusionWeights(
+      config.fusion.weights,
+      caps.coveragePermille.symbolVector,
+    ),
+  });
   recordRetrievalTiming(diagnosticTimings, "fusion", rrfStartedAt);
 
   logger.debug(
@@ -801,12 +932,58 @@ const ENTITY_VECTOR_CONFIG: Partial<
  */
 export async function entitySearch(
   options: EntitySearchOptions,
+  queryContext?: RetrievalQueryContext,
 ): Promise<EntitySearchResult> {
   /* sdl.context: entity-search telemetry */
   const entitySearchStart = Date.now();
   const diagnosticTimings = new Map<string, number>();
   const config = resolveConfig();
-  const caps = await checkRetrievalHealth(options.repoId);
+  let conn: Connection;
+  try {
+    conn = await getLadybugConn();
+  } catch (err) {
+    logger.info("Entity search", {
+      eventType: "entity_search", timestamp: new Date().toISOString(),
+      repoId: options.repoId, latencyMs: Date.now() - entitySearchStart,
+      candidateCount: 0, candidateCountPerSource: {}, finalResultCount: 0,
+      retrievalMode: "legacy", retrievalType: "lexical-only", fallbackReason: "db-connection-unavailable",
+      ftsAvailable: false, vectorAvailable: false,
+    });
+    logger.warn(
+      `[entity-search] Failed to obtain DB connection: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return {
+      results: [],
+      ...(options.includeEvidence
+        ? {
+            evidence: buildEntityEvidence(
+              [],
+              [],
+              0,
+              "db-connection-unavailable",
+            ),
+          }
+        : {}),
+    };
+  }
+
+  const caps = await runAfterGraphRetrievalAdmission(
+    conn,
+    options.repoId,
+    async () => {
+      const healthFactory = () =>
+        checkRetrievalHealth(conn, options.repoId, loadConfig().semantic);
+      return queryContext
+        ? await getOrCreateHealthPromise(
+            queryContext,
+            options.repoId,
+            healthFactory,
+          )
+        : healthFactory();
+    },
+  );
 
   const ftsEnabled = options.ftsEnabled ?? config.fts.enabled;
   const vectorEnabled = options.vectorEnabled ?? config.vector.enabled;
@@ -846,37 +1023,6 @@ export async function entitySearch(
               "fallback-to-legacy: " +
                 (caps.degradationReasons?.map((r) => r.message).join("; ") ??
                   "retrieval unavailable"),
-            ),
-          }
-        : {}),
-    };
-  }
-
-  let conn: Connection;
-  try {
-    conn = await getLadybugConn();
-  } catch (err) {
-    logger.info("Entity search", {
-      eventType: "entity_search", timestamp: new Date().toISOString(),
-      repoId: options.repoId, latencyMs: Date.now() - entitySearchStart,
-      candidateCount: 0, candidateCountPerSource: {}, finalResultCount: 0,
-      retrievalMode: "legacy", retrievalType: "lexical-only", fallbackReason: "db-connection-unavailable",
-      ftsAvailable: false, vectorAvailable: false,
-    });
-    logger.warn(
-      `[entity-search] Failed to obtain DB connection: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
-    return {
-      results: [],
-      ...(options.includeEvidence
-        ? {
-            evidence: buildEntityEvidence(
-              [],
-              [],
-              0,
-              "db-connection-unavailable",
             ),
           }
         : {}),
@@ -996,8 +1142,16 @@ export async function entitySearch(
       const entityEmbedStartedAt = performance.now();
       try {
         const prefixedQuery = applyQueryPrefix(modelName, options.query);
-        const embeddings = await provider.embed([prefixedQuery]);
-        queryEmbedding = embeddings[0];
+        const embeddingFactory = async () =>
+          (await provider.embed([prefixedQuery]))[0] ?? [];
+        queryEmbedding = queryContext
+          ? await getOrCreateEmbeddingPromise(
+              queryContext,
+              modelName,
+              prefixedQuery,
+              embeddingFactory,
+            )
+          : await embeddingFactory();
         if (!queryEmbedding || queryEmbedding.length === 0) {
           logger.debug(
             `[entity-search] Empty embedding returned for model '${modelName}'; skipping`,
@@ -1047,7 +1201,10 @@ export async function entitySearch(
             conn,
             `CALL QUERY_VECTOR_INDEX('${entityFtsCfg.tableName}', '${indexName}', ${vectorLiteral}, ${k}) RETURN node, distance`,
           );
-          vecRows = rawRows.map((r) => {
+          vecRows = sortVectorRowsByDistance(
+            rawRows,
+            entityVecCfg.idField,
+          ).map((r) => {
             // The id field varies by entity type.
             const idField = entityVecCfg.idField;
             const entityId =
@@ -1116,7 +1273,20 @@ export async function entitySearch(
     };
   }
 
-  const fusedResults = rrfFuseEntities(rankings, rrfK, limit);
+  const entityVectorCoveragePermille = Math.min(
+    entityTypes.includes("symbol")
+      ? caps.coveragePermille.symbolVector
+      : 1000,
+    entityTypes.includes("fileSummary")
+      ? caps.coveragePermille.fileSummaryVector
+      : 1000,
+  );
+  const fusedResults = rrfFuseEntities(rankings, rrfK, limit, {
+    weights: coverageAdjustedFusionWeights(
+      config.fusion.weights,
+      entityVectorCoveragePermille,
+    ),
+  });
 
   logger.debug(
     `[entity-search] Fused ${rankings.length} source(s) into ${fusedResults.length} results (${fusionLatencyMs}ms)`,
@@ -1203,7 +1373,12 @@ export async function entitySearch(
         // Boost only symbol entities; other entity types pass through.
         const symbolItems = fusedResults
           .filter((r) => r.entityType === "symbol")
-          .map((r) => ({ symbolId: r.entityId, score: r.score, source: r.source }));
+          .map((r) => ({
+            symbolId: r.entityId,
+            score: r.score,
+            source: r.source,
+            sourceRanks: r.sourceRanks,
+          }));
         const otherItems = fusedResults.filter((r) => r.entityType !== "symbol");
         const originalScores = new Map(
           symbolItems.map((r) => [r.symbolId, r.score] as const),
@@ -1225,6 +1400,7 @@ export async function entitySearch(
           entityId: item.symbolId,
           score: item.score,
           source: item.source,
+          sourceRanks: item.sourceRanks,
         }));
         pprAdjusted = [...reweightedSymbols, ...otherItems].sort(
           (a, b) => b.score - a.score,
@@ -1294,6 +1470,7 @@ export interface NarrowFilesForQueryResult {
 
 export async function narrowFilesForQuery(
   options: NarrowFilesForQueryOptions,
+  queryContext: RetrievalQueryContext = createRetrievalQueryContext(),
 ): Promise<NarrowFilesForQueryResult> {
   const limit = Math.max(1, Math.min(options.limit ?? 32, 200));
   let entityResult;
@@ -1304,8 +1481,9 @@ export async function narrowFilesForQuery(
       limit,
       entityTypes: ["symbol"],
       includeEvidence: options.includeEvidence ?? true,
-    });
+    }, queryContext);
   } catch (err) {
+    if (err instanceof IndexError) throw err;
     logger.debug(
       `[narrow-files] entitySearch failed: ${
         err instanceof Error ? err.message : String(err)
