@@ -882,13 +882,15 @@ function fmtGeneric(
   }
 
   const status =
-    str(result.status) ||
-    str(result.mode) ||
-    (typeof result.success === "boolean"
-      ? result.success
-        ? "success"
-        : "error"
-      : "complete");
+    "error" in result
+      ? "error"
+      : str(result.status) ||
+        str(result.mode) ||
+        (typeof result.success === "boolean"
+          ? result.success
+            ? "success"
+            : "error"
+          : "complete");
   const lines = [`${toolName || "tool"} [${status}]`];
 
   const error = record(result.error);

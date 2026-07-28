@@ -436,6 +436,7 @@ describe("visible tool output", () => {
     const details = error.details as Array<Record<string, unknown>>;
 
     assert.equal(result.isError, true);
+    assert.match(String(content[0]?.text), /^sdl.test.validation \[error\]/);
     assert.match(String(content[0]?.text), /Invalid tool arguments/);
     assert.doesNotMatch(String(content[0]?.text), /^\s*\{/);
     assert.equal(error.code, "VALIDATION_ERROR");
