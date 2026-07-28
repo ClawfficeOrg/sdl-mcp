@@ -217,6 +217,101 @@ describe("Context code evidence snapshot identity", () => {
     });
   });
 
+  it("bounds qualified literal matching after integrated context identifiers", async () => {
+    const hotPathModule = await import("../../dist/code/hotpath.js");
+    const { identifiersForContextRequest } = await import(
+      "../../dist/context/engine.js"
+    );
+    const retainedTerms = Array.from(
+      { length: 16 },
+      (_, index) => `api.slot${String(index).padStart(2, "0")}x`,
+    );
+    const seventeenthTerm = "api.slot16x";
+    const oversizedRaw = "api." + "x".repeat(150);
+    const identifiers = identifiersForContextRequest({
+      repoId: "repo",
+      taskType: "explain",
+      taskText: retainedTerms.join(" "),
+      chatMentions: [seventeenthTerm, oversizedRaw],
+      budget: { maxTokens: 1_400 },
+    });
+    const capturedContent = [
+      "// file header",
+      "export function selectedSymbol() {",
+      "  const first = 1;",
+      `  const retained = "${retainedTerms[0]}";`,
+      "  const second = 2;",
+      `  const unboundedCount = "${seventeenthTerm}";`,
+      "  const third = 3;",
+      `  const unboundedLength = "${oversizedRaw}";`,
+      "}",
+    ].join("\n");
+    const symbol = {
+      ...symbolRow("bounded-symbol", "bounded-file", "selectedSymbol"),
+      rangeStartLine: 2,
+      rangeEndLine: 9,
+    };
+    const prepared = {
+      symbol,
+      filePath: "src/bounded-symbol.ts",
+      relativePath: "src/bounded-symbol.ts",
+      extension: "ts",
+      sourceKind: "overlay",
+      capturedContentHash: hashContent(capturedContent),
+      capturedContent,
+    };
+
+    const hotPath = await hotPathModule.renderPreparedHotPath(
+      prepared as never,
+      identifiers,
+      { contextLines: 0, maxLines: 4, maxTokens: 200 },
+    );
+
+    assert.ok(hotPath);
+    assert.deepEqual(hotPath.matchedIdentifiers, [retainedTerms[0]]);
+    assert.deepEqual(hotPath.matchedLineNumbers, [4]);
+    assert.ok(hotPath.excerpt.includes(retainedTerms[0]));
+    assert.equal(hotPath.excerpt.includes(seventeenthTerm), false);
+    assert.equal(hotPath.excerpt.includes(oversizedRaw), false);
+  });
+
+  it("keeps qualified includes visibility without broadening AST identifiers", async () => {
+    const hotPathModule = await import("../../dist/code/hotpath.js");
+    const capturedContent = [
+      "const ordinaryName = 1;",
+      "export function selectedSymbol() {",
+      "  const ordinaryNameSuffix = ordinaryNameExtra;",
+      '  const first = "$root._child9" + ordinaryNameSuffix;',
+      '  const second = "A.BC";',
+      "}",
+    ].join("\n");
+    const symbol = {
+      ...symbolRow("visibility-symbol", "visibility-file", "selectedSymbol"),
+      rangeStartLine: 2,
+      rangeEndLine: 6,
+    };
+    const prepared = {
+      symbol,
+      filePath: "src/visibility-symbol.ts",
+      relativePath: "src/visibility-symbol.ts",
+      extension: "ts",
+      sourceKind: "overlay",
+      capturedContentHash: hashContent(capturedContent),
+      capturedContent,
+    };
+
+    const hotPath = await hotPathModule.renderPreparedHotPath(
+      prepared as never,
+      ["$root._child9", "A.B", "ordinaryName"],
+      { contextLines: 0, maxLines: 4, maxTokens: 200 },
+    );
+
+    assert.ok(hotPath);
+    assert.deepEqual(hotPath.matchedIdentifiers, ["$root._child9", "A.B"]);
+    assert.deepEqual(hotPath.matchedLineNumbers, [4, 5]);
+    assert.equal(hotPath.matchedIdentifiers.includes("ordinaryName"), false);
+  });
+
   it("fails closed when a durable file changes after preparation", async () => {
     const skeletonModule = await import("../../dist/code/skeleton.js");
     const hotPathModule = await import("../../dist/code/hotpath.js");

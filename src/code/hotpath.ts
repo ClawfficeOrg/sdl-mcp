@@ -46,6 +46,8 @@ interface IdentifierMatchResult {
 
 const QUALIFIED_IDENTIFIER =
   /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/;
+const MAX_QUALIFIED_TERM_COUNT = 16;
+const MAX_QUALIFIED_TERM_CODE_POINTS = 128;
 
 export function findQualifiedTermLines(
   lines: readonly string[],
@@ -56,7 +58,12 @@ export function findQualifiedTermLines(
   const considered = new Set<string>();
 
   for (const identifier of identifiersToFind) {
-    if (considered.has(identifier) || !QUALIFIED_IDENTIFIER.test(identifier)) {
+    if (considered.size === MAX_QUALIFIED_TERM_COUNT) break;
+    if (
+      considered.has(identifier) ||
+      !QUALIFIED_IDENTIFIER.test(identifier) ||
+      Array.from(identifier).length > MAX_QUALIFIED_TERM_CODE_POINTS
+    ) {
       continue;
     }
     considered.add(identifier);
@@ -163,7 +170,9 @@ function filterVisibleIdentifiers(
   identifiers: Set<string>,
 ): string[] {
   return Array.from(identifiers).filter((identifier) =>
-    new RegExp("\\b" + escapeRegExp(identifier) + "\\b").test(excerpt),
+    QUALIFIED_IDENTIFIER.test(identifier)
+      ? excerpt.includes(identifier)
+      : new RegExp("\\b" + escapeRegExp(identifier) + "\\b").test(excerpt),
   );
 }
 
