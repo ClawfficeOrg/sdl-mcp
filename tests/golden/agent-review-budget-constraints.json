@@ -7,20 +7,19 @@
     "taskType": "review",
     "taskText": "Review the data access layer for security issues",
     "budget": {
-      "maxTokens": 500,
-      "maxDurationMs": 1000
+      "maxTokens": 512
     },
-    "options": {
-      "focusPaths": ["src/data"],
-      "includeTests": true
-    }
+    "focusPaths": ["src/data"],
+    "includeTests": true
   },
   "expectedResponse": {
-    "taskId": "string",
+    "status": "string",
     "taskType": "review",
-    "finalEvidence": "array",
-    "summary": "string",
-    "success": "boolean",
-    "answer": "string"
+    "retrieval": "object",
+    "evidence": "array",
+    "edges": "array",
+    "omitted": "object",
+    "nextActions": "array",
+    "etag": "string"
   }
 }

@@ -1048,8 +1048,8 @@ describe("code-mode workflow executor", () => {
         repoId: "test",
         toolName: "sdl.context",
         payload: {
-          summary: "compact summary",
-          finalEvidence: [{ reference: "symbol:target" }],
+          status: "complete",
+          evidence: [{ rung: "card", symbolId: "symbol:target" }],
         },
         responseMode: "handle",
         artifactBaseDir,
@@ -1091,7 +1091,7 @@ describe("code-mode workflow executor", () => {
       assert.strictEqual(Array.isArray(first), false);
       assert.strictEqual(first.results[0].status, "error");
       assert.deepStrictEqual(trace?.details?.details, [
-        "Available top-level keys: finalEvidence, summary",
+        "Available top-level keys: evidence, status",
       ]);
       assert.deepStrictEqual(trace?.details?.nextCalls, [
         {
@@ -1099,7 +1099,7 @@ describe("code-mode workflow executor", () => {
           args: {
             repoId: "test",
             handle,
-            jsonPath: "finalEvidence",
+            jsonPath: "evidence",
             offset: 0,
             limit: 5,
           },

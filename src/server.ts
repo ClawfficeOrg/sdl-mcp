@@ -46,8 +46,7 @@ import {
 } from "./mcp/tool-presentation.js";
 import { getPackageVersion } from "./util/package-info.js";
 import {
-  projectBroadContextResult,
-  projectContextResultForUsageAccounting,
+  projectResultForUsageAccounting,
   projectToolResultForModelContent,
 } from "./mcp/context-response-projection.js";
 import { logger } from "./util/logger.js";
@@ -223,7 +222,6 @@ const STRUCTURED_CONTENT_INTERNAL_KEYS = new Set([
   "_tokenUsage",
   "_displayFooter",
   "actionsTaken",
-  "contextModeHint",
   "metrics",
   "rungs",
   "taskId",
@@ -270,16 +268,6 @@ function asStructuredContent(
         continue;
       }
       if (key === "retrievalEvidence" && !activeOptions.includeRetrievalEvidence) {
-        continue;
-      }
-      if (key === "finalEvidence" && Array.isArray(itemValue)) {
-        sanitized.finalEvidence = itemValue.map((evidenceItem) => {
-          if (!isRecordValue(evidenceItem)) {
-            return evidenceItem;
-          }
-          const { timestamp: _timestamp, ...evidence } = evidenceItem;
-          return sanitize(evidence, activeOptions);
-        });
         continue;
       }
       if (isRoot && key === "results" && Array.isArray(itemValue)) {
@@ -337,7 +325,7 @@ function collectDeliveredSymbolIds(
   }
   addSymbolIdsFromRows(result.cards, ids);
   addSymbolIdFromCard(result.card, ids);
-  addSymbolIdsFromEvidence(result.finalEvidence, ids);
+  addSymbolIdsFromEvidence(result.evidence, ids);
   if (typeof result._packedPayload === "string") {
     addSymbolIdsFromPackedPayload(result._packedPayload, ids);
   }
@@ -381,10 +369,8 @@ function addSymbolIdsFromEvidence(value: unknown, ids: Set<string>): void {
   if (!Array.isArray(value)) return;
   for (const item of value) {
     if (!isRecordValue(item) || item.unchanged === true) continue;
-    if (item.type !== "symbolCard") continue;
-    const reference = item.reference;
-    if (typeof reference === "string") {
-      ids.add(reference.startsWith("symbol:") ? reference.slice("symbol:".length) : reference);
+    if (typeof item.symbolId === "string" && item.symbolId.length > 0) {
+      ids.add(item.symbolId);
     }
   }
 }
@@ -748,12 +734,11 @@ export class MCPServer {
             let userDisplay: string | null = null;
             if (result && typeof result === "object") {
               const r = result as Record<string, unknown>;
-              const usageAccountingResult =
-                projectContextResultForUsageAccounting(
-                  toolName,
-                  r,
-                  normalizedArgs as Record<string, unknown>,
-                );
+              const usageAccountingResult = projectResultForUsageAccounting(
+                toolName,
+                r,
+                normalizedArgs as Record<string, unknown>,
+              );
               if (
                 shouldAttachUsage(toolName) &&
                 usageAccountingResult._rawContext
@@ -856,8 +841,6 @@ export class MCPServer {
               ) {
                 delete (finalResult as Record<string, unknown>)._tokenUsage;
               }
-              // Compact broad context responses — hide actionsTaken, path, metrics, retrievalEvidence
-              finalResult = projectBroadContextResult(toolName, finalResult);
             }
 
             // Capture formatted summary for content block before it gets deleted

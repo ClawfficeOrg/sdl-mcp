@@ -16,8 +16,11 @@ import { SHUTDOWN_FORCE_EXIT_TIMEOUT_MS } from "../../dist/config/constants.js";
 import { closeLadybugDb, initLadybugDb } from "../../dist/db/ladybug.js";
 import type { CodeModeConfig } from "../../dist/config/types.js";
 import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
+import { sessionContentLedger } from "../../dist/mcp/session-dedupe.js";
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "../../dist/mcp/server-instructions.js";
+import { handleAgentContext } from "../../dist/mcp/tools/context.js";
 import { handleSymbolGetCard } from "../../dist/mcp/tools/symbol.js";
+import { indexRepo } from "../../dist/indexer/indexer.js";
 import type { MCPServer, ToolContext } from "../../dist/server.js";
 import {
   DeltaGetResponseSchema,
@@ -114,7 +117,7 @@ function writeConfig(): void {
         prefetch: { enabled: false, warmTopN: 0 },
         tracing: { enabled: false },
         gateway: { enabled: false, emitLegacyTools: true },
-        codeMode: { enabled: false, exclusive: false },
+        codeMode: { enabled: true, exclusive: false },
         memory: { enabled: false },
         scip: { enabled: false, generator: { enabled: false } },
         observability: { enabled: false },
@@ -484,6 +487,75 @@ test("SESSION BOUNDARY: refsMode auto may compact repeated evidence", async () =
       unchanged: true,
     });
   } finally {
+    try {
+      await closeLadybugDb();
+    } finally {
+      if (previousConfig === undefined) delete process.env.SDL_CONFIG;
+      else process.env.SDL_CONFIG = previousConfig;
+      if (previousConfigPath === undefined) delete process.env.SDL_CONFIG_PATH;
+      else process.env.SDL_CONFIG_PATH = previousConfigPath;
+    }
+  }
+});
+
+test("SESSION BOUNDARY: context refs preserve identity across a no-op re-index", async () => {
+  const previousConfig = process.env.SDL_CONFIG;
+  const previousConfigPath = process.env.SDL_CONFIG_PATH;
+  const sessionId = `determinism-context-refs-${process.pid}`;
+  process.env.SDL_CONFIG = CONFIG_PATH;
+  process.env.SDL_CONFIG_PATH = CONFIG_PATH;
+  try {
+    await initLadybugDb(GRAPH_DB_PATH);
+    const args = {
+      repoId: REPO_ID,
+      taskType: "explain" as const,
+      taskText: "Explain UserRepository findById behavior",
+      budget: { maxTokens: 2_048 },
+      focusSymbols: ["UserRepository", "findById"],
+      refsMode: "auto" as const,
+      responseMode: "inline" as const,
+      wireFormat: "json" as const,
+    };
+    const context: ToolContext = {
+      sessionId,
+      signal: new AbortController().signal,
+      sendNotification: async () => undefined,
+    };
+    const first = (await handleAgentContext(args, context)) as Record<
+      string,
+      unknown
+    >;
+    const second = (await handleAgentContext(args, context)) as Record<
+      string,
+      unknown
+    >;
+    const firstCards = (first.evidence as Array<Record<string, unknown>>).filter(
+      (item) => item.rung === "card",
+    );
+    const secondCards = (
+      second.evidence as Array<Record<string, unknown>>
+    ).filter((item) => item.rung === "card");
+    assert.ok(firstCards.length > 0);
+    assert.deepStrictEqual(
+      secondCards.map(({ content: _content, ref: _ref, unchanged: _unchanged, ...item }) => item),
+      firstCards.map(({ content: _content, ref: _ref, unchanged: _unchanged, ...item }) => item),
+    );
+    assert.ok(secondCards.every((item) => item.unchanged === true && item.ref));
+    assert.equal(second.etag, first.etag);
+
+    const refresh = await indexRepo(REPO_ID, "incremental");
+    assert.equal(refresh.changedFiles, 0);
+    const third = (await handleAgentContext(args, context)) as Record<
+      string,
+      unknown
+    >;
+    const thirdCards = (third.evidence as Array<Record<string, unknown>>).filter(
+      (item) => item.rung === "card",
+    );
+    assert.deepStrictEqual(thirdCards, secondCards);
+    assert.equal(third.etag, first.etag);
+  } finally {
+    sessionContentLedger.clearSession(sessionId);
     try {
       await closeLadybugDb();
     } finally {

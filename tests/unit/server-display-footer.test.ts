@@ -37,26 +37,24 @@ describe("attachDisplayFooter", () => {
     assert.strictEqual(output, arr);
   });
 
-  it("works correctly with projected broad context results", () => {
-    // Simulates what server.ts does: project then attach footer
-    const projected = {
-      taskId: "task-1",
+  it("works correctly with canonical context results", () => {
+    const context = {
+      status: "complete",
       taskType: "explain",
-      success: true,
-      summary: "done",
-      answer: "results",
-      finalEvidence: [],
+      retrieval: { level: "lexical", lanes: [] },
+      evidence: [],
+      edges: [],
+      omitted: { total: 0, byReason: { budget: 0 }, highestRanked: [] },
+      nextActions: [],
+      etag: "etag-1",
     };
     const output = attachDisplayFooter(
-      projected,
+      context,
       "📊 1k / 5k tokens",
     ) as Record<string, unknown>;
 
-    assert.strictEqual(output.taskId, "task-1");
+    assert.strictEqual(output.status, "complete");
     assert.strictEqual(output._displayFooter, "📊 1k / 5k tokens");
-    // Ensure no actionsTaken, path, metrics leaked back
-    assert.strictEqual(output.actionsTaken, undefined);
-    assert.strictEqual(output.path, undefined);
-    assert.strictEqual(output.metrics, undefined);
+    assert.deepStrictEqual(output.evidence, []);
   });
 });

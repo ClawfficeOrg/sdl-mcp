@@ -66,7 +66,6 @@ import { applyQueryPrefix } from "../indexer/model-registry.js";
 import { EMBEDDING_MODELS } from "./model-mapping.js";
 import { ENTITY_FTS_INDEX_NAMES } from "./index-lifecycle.js";
 import { assertGraphRetrievalAvailable } from "../services/graph-retrieval-availability.js";
-import { shouldFallbackToLegacy } from "./fallback.js";
 import { checkRetrievalHealth } from "./health.js";
 import type {
   HybridSearchOptions,
@@ -657,7 +656,6 @@ function resolveConfig(): SemanticRetrievalConfig {
   }
   // Defaults matching the Zod schema defaults.
   return {
-    mode: "legacy",
     extensionsOptional: true,
     fts: {
       enabled: true,
@@ -683,7 +681,6 @@ function resolveConfig(): SemanticRetrievalConfig {
       weights: {
         fts: 1,
         vector: 1,
-        legacyFallback: 1,
         overlay: 1,
       },
       partialCoverageThresholdPermille: 1000,
@@ -777,28 +774,6 @@ export async function hybridSearch(
       "symbol:vector:configured",
       false,
     );
-  }
-
-  // If the system should fall back to legacy, return empty with reason.
-  if (shouldFallbackToLegacy(caps, config)) {
-    logger.debug(
-      "[hybrid-search] Falling back to legacy -- caps or config require it",
-    );
-    return {
-      results: [],
-      ...(options.includeEvidence
-        ? {
-            evidence: buildEvidence(
-              [],
-              [],
-              0,
-              "fallback-to-legacy: " +
-                (caps.degradationReasons?.map((r) => r.message).join("; ") ??
-                  "retrieval unavailable"),
-            ),
-          }
-        : {}),
-    };
   }
 
   const rankings: SourceRanking[] = [];
@@ -1196,7 +1171,7 @@ async function runEntitySearch<T = never>(
       eventType: "entity_search", timestamp: new Date().toISOString(),
       repoId: options.repoId, latencyMs: Date.now() - entitySearchStart,
       candidateCount: 0, candidateCountPerSource: {}, finalResultCount: 0,
-      retrievalMode: "legacy", retrievalType: "lexical-only", fallbackReason: "db-connection-unavailable",
+      retrievalMode: "unavailable", retrievalType: "none", fallbackReason: "db-connection-unavailable",
       ftsAvailable: false, vectorAvailable: false,
     });
     logger.warn(
@@ -1271,32 +1246,6 @@ async function runEntitySearch<T = never>(
         false,
       );
     }
-  }
-
-  if (!consumeRankings && shouldFallbackToLegacy(caps, config)) {
-    const fallbackReason = "fallback-to-legacy: " + (caps.degradationReasons?.map((r) => r.message).join("; ") ?? "retrieval unavailable");
-    logger.info("Entity search", {
-      eventType: "entity_search", timestamp: new Date().toISOString(),
-      repoId: options.repoId, latencyMs: Date.now() - entitySearchStart,
-      candidateCount: 0, candidateCountPerSource: {}, finalResultCount: 0,
-      retrievalMode: "legacy", retrievalType: "lexical-only", fallbackReason,
-      ftsAvailable: false, vectorAvailable: false,
-    });
-    return {
-      results: [],
-      ...(options.includeEvidence
-        ? {
-            evidence: buildEntityEvidence(
-              [],
-              [],
-              0,
-              "fallback-to-legacy: " +
-                (caps.degradationReasons?.map((r) => r.message).join("; ") ??
-                  "retrieval unavailable"),
-            ),
-          }
-        : {}),
-    };
   }
 
   const rankings: EntitySourceRanking[] = [];

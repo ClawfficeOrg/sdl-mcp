@@ -263,7 +263,7 @@ function validateResponseArtifactReadMode(
                   args: {
                     repoId: opts.repoId,
                     handle: opts.handle,
-                    jsonPath: "finalEvidence",
+                    jsonPath: "evidence",
                     offset: 0,
                     limit: 20,
                   },
@@ -831,8 +831,8 @@ export async function readResponseArtifact(
           ? (parsed as Record<string, unknown>)
           : undefined;
       const availableKeys = topLevel ? Object.keys(topLevel).sort() : [];
-      const preferredPath = availableKeys.includes("finalEvidence")
-        ? "finalEvidence"
+      const preferredPath = availableKeys.includes("evidence")
+        ? "evidence"
         : availableKeys.includes("summary")
           ? "summary"
           : availableKeys[0];

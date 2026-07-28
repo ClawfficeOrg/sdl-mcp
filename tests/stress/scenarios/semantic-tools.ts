@@ -83,26 +83,24 @@ async function runSemanticWorkflow(
 
 
     // 3. Agent context with tight budget
-    const contextResult = await client.callToolParsed(
-      "sdl.context",
-      {
-        repoId: "stress-fixtures",
-        taskType: "explain",
-        taskText: `Explain how ${query} works in this codebase`,
-        budget: {
-          maxTokens: 3000,
-          maxActions: 3,
-        },
-        options: {
-          focusPaths: [],
-          includeTests: false,
-        },
-      },
-    );
+    await client.callToolParsed("sdl.context", {
+      repoId: "stress-fixtures",
+      taskType: "explain",
+      taskText: `Explain how ${query} works in this codebase`,
+      budget: { maxTokens: 3000 },
+      includeTests: false,
+    });
 
     // 4. Agent feedback — record useful symbols from the workflow
-    const sliceHandle = contextResult?.sliceHandle as string | undefined;
-    const versionId = contextResult?.versionId as string | undefined;
+    const sliceResult = await client.callToolParsed("sdl.slice.build", {
+      repoId: "stress-fixtures",
+      entrySymbols: topSymbolIds.slice(0, 3),
+      budget: { maxCards: 20, maxEstimatedTokens: 3000 },
+    }) as Record<string, unknown> & { slice?: { vid?: string } };
+    const sliceHandle = sliceResult?.sliceHandle as string | undefined;
+    const versionId = (
+      sliceResult?.ledgerVersion ?? sliceResult?.slice?.vid
+    ) as string | undefined;
     if (sliceHandle && versionId && topSymbolIds.length > 0) {
       await client.callToolParsed("sdl.agent.feedback", {
         repoId: "stress-fixtures",

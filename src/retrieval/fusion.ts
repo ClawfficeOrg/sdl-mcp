@@ -40,7 +40,6 @@ export type FusionSourceKind =
   | "exactIdentifier"
   | "fts"
   | "vector"
-  | "legacyFallback"
   | "overlay";
 
 /** Context-only fusion route; public retrieval evidence remains unchanged. */
@@ -49,7 +48,6 @@ export type ContextCandidateSource = RetrievalSource | "exactIdentifier";
 export interface FusionWeights {
   fts: number;
   vector: number;
-  legacyFallback: number;
   overlay: number;
 }
 
@@ -101,7 +99,6 @@ const SOURCE_KIND_ORDER: readonly FusionSourceKind[] = [
   "fts",
   "vector",
   "overlay",
-  "legacyFallback",
 ];
 const SCORE_QUANTIZATION = 1_000_000_000_000;
 const DEFAULT_PINNED_FUSION_SOURCE = "fts" as const;
@@ -114,7 +111,6 @@ function sourceKind(source: ContextCandidateSource): FusionSourceKind {
   if (
     source === "exactIdentifier" ||
     source === "fts" ||
-    source === "legacyFallback" ||
     source === "overlay"
   ) {
     return source;

@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 
-import { extractIdentifiersFromText } from "../../../dist/agent/identifier-extraction.js";
+import { extractIdentifiersFromText } from "../../../dist/retrieval/identifier-extraction.js";
 
 describe("extractIdentifiersFromText", () => {
   it("retains natural-language domain terms alongside identifier variants", () => {

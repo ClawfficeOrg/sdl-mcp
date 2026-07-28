@@ -279,10 +279,8 @@ function expectedPathRecovery(query: string): {
       repoId: "symbol-search-nearmiss-repo",
       taskType: "explain",
       taskText: `Inspect repository path: ${query}`,
-      options: {
-        focusPaths: [query],
-        contextMode: "precise",
-      },
+      budget: { maxTokens: 512 },
+      focusPaths: [query],
     },
     rationale:
       "The query looks like a repository path. Use path-scoped context retrieval instead of symbol-name search.",

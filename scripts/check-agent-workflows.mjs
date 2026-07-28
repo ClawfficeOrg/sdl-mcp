@@ -6,13 +6,36 @@ const args = new Set(process.argv.slice(2));
 const writeMode = args.has("--write");
 const checkMode = args.has("--check") || !writeMode;
 
-const canonicalPath = "templates/SDL.md";
-const exactCopies = ["SDL.md", "tests/stress/fixtures/SDL.md"];
+const exactCopySets = [
+  {
+    canonicalPath: "templates/SDL.md",
+    copies: ["SDL.md", "tests/stress/fixtures/SDL.md"],
+  },
+  {
+    canonicalPath: "templates/sdl-mcp-agent-workflow/SKILL.md",
+    copies: [".codex/skills/sdl-mcp-agent-workflow/SKILL.md"],
+  },
+  {
+    canonicalPath:
+      "templates/sdl-mcp-agent-workflow/references/tool-recipes.md",
+    copies: [
+      ".codex/skills/sdl-mcp-agent-workflow/references/tool-recipes.md",
+    ],
+  },
+];
 
 const syncSurfaces = [
   {
     path: "templates/SDL.md",
     required: ["slice.build", "file.read` for indexed source", "symbol.edit", "symbolEditPreview", "search.edit", "previewWindow"],
+  },
+  {
+    path: "templates/sdl-mcp-agent-workflow/SKILL.md",
+    required: ["budget.maxTokens", "sdl.context", "sdl.retrieve", "response.get"],
+  },
+  {
+    path: "templates/sdl-mcp-agent-workflow/references/tool-recipes.md",
+    required: ["focusSymbols", "includeTests", "jsonPath", "evidence"],
   },
   {
     path: "templates/AGENTS.md.template",
@@ -136,20 +159,22 @@ function lineNumber(text, index) {
 }
 
 const failures = [];
-const canonical = read(canonicalPath);
-const normalizedCanonical = normalizeEol(canonical);
+for (const { canonicalPath, copies } of exactCopySets) {
+  const canonical = read(canonicalPath);
+  const normalizedCanonical = normalizeEol(canonical);
 
-for (const path of exactCopies) {
-  const current = read(path);
-  if (normalizeEol(current) === normalizedCanonical) continue;
+  for (const path of copies) {
+    const current = read(path);
+    if (normalizeEol(current) === normalizedCanonical) continue;
 
-  if (writeMode) {
-    writeFileSync(path, preserveEol(canonical, current));
-    console.log(`synced ${path} from ${canonicalPath}`);
-  } else {
-    failures.push(
-      `${path} differs from ${canonicalPath} (${shortHash(current)} != ${shortHash(canonical)})`,
-    );
+    if (writeMode) {
+      writeFileSync(path, preserveEol(canonical, current));
+      console.log(`synced ${path} from ${canonicalPath}`);
+    } else {
+      failures.push(
+        `${path} differs from ${canonicalPath} (${shortHash(current)} != ${shortHash(canonical)})`,
+      );
+    }
   }
 }
 

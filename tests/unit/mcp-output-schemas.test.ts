@@ -61,41 +61,58 @@ function responseArtifact(toolName: string) {
 }
 
 describe("MCP output schemas", () => {
-  it("preserves context continuation metadata", () => {
+  it("parses the canonical v2 context payload and standard wrappers", () => {
     const schema = requireSchema("AgentContextResponseSchema");
-    const truncation = {
-      originalTokens: 1_200,
-      truncatedTokens: 480,
-      fieldsAffected: ["finalEvidence", "summary"],
-      continuationHandle: "continuation-1",
-      continuationAction: "workflowContinuationGet",
-    };
-    const parsed = schema.parse({
-      taskId: "task-1",
+    const payload = {
+      status: "complete",
       taskType: "debug",
-      actionsTaken: [],
-      path: {
-        rungs: ["card"],
-        estimatedTokens: 100,
-        estimatedDurationMs: 10,
-        reasoning: "focused regression",
+      retrieval: {
+        level: "hybrid",
+        lanes: [
+          { id: "exactIdentifier", available: true },
+          { id: "symbolVec", available: true, coveragePermille: 1000 },
+        ],
       },
-      finalEvidence: [],
-      summary: "Retrieve the complete context with the continuation.",
-      success: true,
-      metrics: {
-        totalDurationMs: 10,
-        totalTokens: 480,
-        totalActions: 0,
-        successfulActions: 0,
-        failedActions: 0,
-        cacheHits: 0,
+      evidence: [
+        {
+          rung: "card",
+          symbolId: "sym-1",
+          path: "src/example.ts",
+          rank: 1,
+          tier: 0,
+          lanes: ["exactIdentifier"],
+          content: { kind: "function", name: "example" },
+        },
+      ],
+      edges: [],
+      omitted: {
+        total: 0,
+        byReason: { budget: 0 },
+        highestRanked: [],
       },
-      truncation,
+      nextActions: [],
       etag: "context-etag",
-    }) as { truncation?: unknown };
+    };
 
-    assert.deepEqual(parsed.truncation, truncation);
+    assert.deepEqual(schema.parse(payload), payload);
+    schema.parse({
+      isError: true,
+      error: {
+        code: "CONTEXT_RETRIEVAL_INSUFFICIENT",
+        message: "Restore graph integrity.",
+        recovery: [{ id: "repoStatus", args: {} }],
+      },
+    });
+    schema.parse({ notModified: true, etag: "context-etag" });
+    schema.parse(responseArtifact("sdl.context"));
+    assert.throws(() =>
+      schema.parse({
+        taskId: "legacy-task",
+        taskType: "debug",
+        actionsTaken: [],
+        finalEvidence: [],
+      }),
+    );
   });
 
   it("parses raw and compact info reports", () => {

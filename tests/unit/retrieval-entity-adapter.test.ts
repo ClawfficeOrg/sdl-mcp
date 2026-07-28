@@ -18,7 +18,6 @@ it("executes exact entity lanes for specialized health", async (t) => {
     embeddingProfile: "specialized",
     symbolEmbeddingModels: ["jina-embeddings-v2-base-code"],
     fileSummaryEmbeddingModels: ["nomic-embed-text-v1.5"],
-    retrieval: { mode: "hybrid" },
   });
   const queries: string[] = [];
   const providerModels: string[] = [];

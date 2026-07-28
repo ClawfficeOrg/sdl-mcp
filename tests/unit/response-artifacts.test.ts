@@ -356,7 +356,7 @@ describe("response artifact storage", () => {
     );
   });
 
-  it("requires an explicit retrieval mode before slicing JSON artifacts", async () => {
+  it("requires an explicit retrieval selector before slicing JSON artifacts", async () => {
     const baseDir = makeTempDir();
     const configPath = join(baseDir, "sdl.config.json");
     writeFileSync(
@@ -366,7 +366,7 @@ describe("response artifact storage", () => {
     process.env.SDL_CONFIG = configPath;
     invalidateConfigCache();
     const payload = {
-      finalEvidence: [{ reference: "symbol:alpha" }],
+      evidence: [{ symbolId: "symbol:alpha", rung: "card" }],
       padding: "x".repeat(2000),
     };
 
@@ -404,7 +404,7 @@ describe("response artifact storage", () => {
             args: {
               repoId: "repo-a",
               handle: stored.payload.handle,
-              jsonPath: "finalEvidence",
+              jsonPath: "evidence",
               offset: 0,
               limit: 20,
             },
@@ -1254,7 +1254,7 @@ describe("response artifact maxTokens enforcement", () => {
       toolName: "sdl.context",
       payload: {
         summary: "compact summary",
-        finalEvidence: [{ reference: "symbol:target", summary: "target" }],
+        evidence: [{ symbolId: "symbol:target", rung: "card" }],
       },
       responseMode: "handle",
       artifactBaseDir: baseDir,
@@ -1278,14 +1278,14 @@ describe("response artifact maxTokens enforcement", () => {
           nextCalls?: Array<{ action: string; args: Record<string, unknown> }>;
         };
         assert.match(recovery.message, /jsonPath not found/);
-        assert.match(recovery.details?.join(" ") ?? "", /finalEvidence/);
+        assert.match(recovery.details?.join(" ") ?? "", /evidence/);
         assert.deepEqual(recovery.fallbackTools, ["response.get"]);
         assert.deepEqual(recovery.nextCalls?.[0], {
           action: "response.get",
           args: {
             repoId: "repo-a",
             handle: stored.payload.handle,
-            jsonPath: "finalEvidence",
+            jsonPath: "evidence",
             offset: 0,
             limit: 5,
           },

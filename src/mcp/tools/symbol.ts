@@ -36,11 +36,7 @@ import {
 
 import {
   createRetrievalQueryContext,
-  getOrCreateHealthPromise,
-  runAfterGraphRetrievalAdmission,
-  shouldFallbackToLegacy,
 } from "../../retrieval/index.js";
-import { checkRetrievalHealth } from "../../retrieval/health.js";
 import type { RetrievalEvidence } from "../../retrieval/types.js";
 import { autoExtractMentions } from "../../retrieval/seed-resolver.js";
 import { logger } from "../../util/logger.js";
@@ -52,7 +48,6 @@ import {
   resolveSymbolRef,
   type SymbolRefResolution,
 } from "../../util/resolve-symbol-ref.js";
-import { IndexError } from "../../domain/errors.js";
 import { DatabaseError, NotFoundError, ValidationError } from "../errors.js";
 import type { ToolContext } from "../../server.js";
 
@@ -232,10 +227,8 @@ async function buildPathRecoveryAction(
       repoId,
       taskType: "explain",
       taskText: `Inspect repository path: ${query}`,
-      options: {
-        focusPaths: [query],
-        contextMode: "precise",
-      },
+      budget: { maxTokens: 512 },
+      focusPaths: [query],
     },
     rationale: PATH_RECOVERY_RATIONALE,
   };
@@ -303,7 +296,6 @@ export async function handleSymbolSearch(
   context?: ToolContext,
 ): Promise<SymbolSearchResponse> {
   const startedAt = Date.now();
-  const queryContext = createRetrievalQueryContext();
   const request = args as SymbolSearchRequest;
   // Normalize: fold 'pattern' alias into 'query' if query was not provided
   const query = request.query ?? request.pattern ?? "";
@@ -329,93 +321,64 @@ export async function handleSymbolSearch(
   });
 
   const conn = await getLadybugConn();
+  const queryContext = createRetrievalQueryContext({ connection: conn });
 
   const repo = await ladybugDb.getRepo(conn, request.repoId);
   if (!repo) {
     throw new NotFoundError(`Repository not found: ${request.repoId}`);
   }
 
-  // Determine retrieval mode
+  // Explicit lexical requests stay lexical. Semantic retrieval uses the shared
+  // coverage-aware pipeline, then preserves symbol.search's lexical behavior
+  // when no semantic lane can contribute.
   const retrievalConfig = semanticConfig?.retrieval;
-  let useHybrid = false;
-  let retrievalEvidence: RetrievalEvidence | undefined;
-  let fallbackReason: string | undefined;
-
-  if (
+  const useUnifiedRetrieval =
     !lexicalFastPath &&
     !semanticOptOut &&
-    semanticConfig?.enabled === true &&
-    retrievalConfig?.mode === "hybrid"
-  ) {
-    // Reject unavailable graph-backed retrieval before health/procedure work.
-    await runAfterGraphRetrievalAdmission(
-      conn,
-      request.repoId,
-      async () => undefined,
-    );
-    try {
-      const caps = await getOrCreateHealthPromise(
-        queryContext,
-        request.repoId,
-        () =>
-          checkRetrievalHealth(conn, request.repoId, semanticConfig),
-      );
-      if (!shouldFallbackToLegacy(caps, retrievalConfig)) {
-        useHybrid = true;
-      } else {
-        fallbackReason =
-          caps.degradationReasons?.map((r) => r.message).join("; ") ??
-          (!caps.fts
-            ? "FTS extension unavailable"
-            : "Retrieval health check failed");
-      }
-    } catch (err) {
-      fallbackReason = `Health check error: ${err instanceof Error ? err.message : String(err)}`;
-      logger.warn(
-        `[symbol.search] Hybrid health check failed, using legacy: ${fallbackReason}`,
-      );
-    }
-  }
+    semanticConfig?.enabled === true;
+  let retrievalEvidence: RetrievalEvidence | undefined;
+  let fallbackReason =
+    semanticRequested && !useUnifiedRetrieval
+      ? "semantic retrieval is disabled"
+      : undefined;
 
   let rows: Awaited<ReturnType<typeof searchSymbolsWithOverlay>>;
   let semanticEnabled = false;
 
-  if (useHybrid) {
-    // --- HYBRID PATH: FTS + vector + RRF fusion for durable, lexical for overlay ---
-    try {
-      const { rows: hybridRows, evidence } =
-        await searchSymbolsHybridWithOverlay(
-          conn,
-          request.repoId,
-          query,
-          limit,
-          {
-            ftsTopK: retrievalConfig?.fts?.topK,
-            vectorTopK: retrievalConfig?.vector?.topK,
-            rrfK: retrievalConfig?.fusion?.rrfK,
-            candidateLimit: retrievalConfig?.candidateLimit,
-            includeEvidence: request.includeRetrievalEvidence === true,
-            chatMentions:
-              request.chatMentions !== undefined
-                ? request.chatMentions
-                : autoExtractMentions(query),
-            chatMentionWeights: request.chatMentionWeights,
-            pprDirection: request.pprDirection,
-            pprWeight: request.pprWeight,
-            excludeExternal: request.excludeExternal,
-            queryContext,
-          },
-        );
-      rows = hybridRows;
-      retrievalEvidence = evidence;
-      semanticEnabled = true;
-    } catch (err) {
-      if (err instanceof IndexError) throw err;
-      // Graceful degradation: fall back to legacy search
-      logger.warn(
-        `[symbol.search] Hybrid search failed, falling back to legacy: ${err instanceof Error ? err.message : String(err)}`,
+  if (useUnifiedRetrieval) {
+    const { rows: hybridRows, evidence } =
+      await searchSymbolsHybridWithOverlay(
+        conn,
+        request.repoId,
+        query,
+        limit,
+        {
+          ftsTopK: retrievalConfig?.fts?.topK,
+          vectorTopK: retrievalConfig?.vector?.topK,
+          rrfK: retrievalConfig?.fusion?.rrfK,
+          candidateLimit: retrievalConfig?.candidateLimit,
+          // Evidence also records which durable lanes actually participated;
+          // public attachment remains opt-in below.
+          includeEvidence: true,
+          chatMentions:
+            request.chatMentions !== undefined
+              ? request.chatMentions
+              : autoExtractMentions(query),
+          chatMentionWeights: request.chatMentionWeights,
+          pprDirection: request.pprDirection,
+          pprWeight: request.pprWeight,
+          excludeExternal: request.excludeExternal,
+          queryContext,
+        },
       );
-      fallbackReason = `Hybrid search error: ${err instanceof Error ? err.message : String(err)}`;
+    retrievalEvidence = evidence;
+    semanticEnabled =
+      evidence?.sources.some(
+        (source) => source === "fts" || source.startsWith("vector:"),
+      ) ?? false;
+    if (semanticEnabled) {
+      rows = hybridRows;
+    } else {
       rows = await searchSymbolsWithOverlay(
         conn,
         request.repoId,
@@ -424,9 +387,10 @@ export async function handleSymbolSearch(
         request.kinds,
         request.excludeExternal,
       );
+      fallbackReason =
+        evidence?.fallbackReason ?? "semantic retrieval lanes unavailable";
     }
   } else {
-    // --- LEGACY PATH: lexical search + optional semantic reranking ---
     rows = await searchSymbolsWithOverlay(
       conn,
       request.repoId,
@@ -599,7 +563,7 @@ export async function handleSymbolSearch(
     }
   }
 
-  // Filter by kinds if specified (after semantic reranking, so it applies to both paths)
+  // Apply kind filtering after either retrieval path.
   if (request.kinds && request.kinds.length > 0) {
     const kindsSet = new Set(request.kinds);
     results = results.filter((r) => kindsSet.has(r.kind));
@@ -619,12 +583,8 @@ export async function handleSymbolSearch(
     latencyMs: Date.now() - startedAt,
     candidateCount: rows.length,
     alpha: semanticConfig?.alpha ?? 0.6,
-    retrievalMode: useHybrid ? "hybrid" : "legacy",
-    retrievalType: useHybrid
-      ? "hybrid"
-      : semanticEnabled
-        ? "legacy-rerank"
-        : "lexical-only",
+    retrievalMode: semanticEnabled ? "hybrid" : "lexical",
+    retrievalType: semanticEnabled ? "hybrid" : "lexical-only",
     ...(retrievalEvidence?.candidateCountPerSource && {
       candidateCountPerSource: retrievalEvidence.candidateCountPerSource,
     }),
@@ -637,7 +597,7 @@ export async function handleSymbolSearch(
     ...(fallbackReason && { fallbackReason }),
     finalResultCount: results.length,
     ...(semanticRequested &&
-      retrievalConfig?.mode === "hybrid" && {
+      useUnifiedRetrieval && {
         ftsAvailable: retrievalEvidence?.sources?.includes("fts") ?? false,
         vectorAvailable:
           retrievalEvidence?.sources?.some((s) => s.startsWith("vector:")) ??
@@ -727,7 +687,7 @@ export async function handleSymbolSearch(
     ...(nextBestAction !== undefined && { nextBestAction }),
   };
   if (request.includeRetrievalEvidence) {
-    if (useHybrid && retrievalEvidence) {
+    if (semanticEnabled && retrievalEvidence) {
       (response as Record<string, unknown>).retrievalEvidence = relevant.map(
         (r) => ({
           symbolId: r.symbolId,

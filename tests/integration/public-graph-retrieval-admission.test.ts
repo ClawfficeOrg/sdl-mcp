@@ -436,6 +436,7 @@ function centralCalls(repoId: string): PublicCall[] {
         repoId,
         taskType: "explain",
         taskText: "Explain alpha",
+        budget: { maxTokens: 1024 },
       },
     },
     ...Object.entries(retrieveArgs).map(([op, args]) => ({
@@ -1009,9 +1010,10 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
           repoId,
           taskType: "explain",
           taskText: "Explain alpha",
+          budget: { maxTokens: 1024 },
           refsMode: "off",
           responseMode: "inline",
-          options: { contextMode: "precise" },
+          wireFormat: "json",
         },
       },
       ...[

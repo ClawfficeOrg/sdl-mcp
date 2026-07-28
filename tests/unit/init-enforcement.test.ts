@@ -188,6 +188,40 @@ describe("init agent enforcement", () => {
     assert.ok(
       existsSync(join(tempDir, ".codex", "hooks", "load-sdl-skill.mjs")),
     );
+    const generatedSkillPath = join(
+      tempDir,
+      ".codex",
+      "skills",
+      "sdl-mcp-agent-workflow",
+      "SKILL.md",
+    );
+    const generatedRecipePath = join(
+      tempDir,
+      ".codex",
+      "skills",
+      "sdl-mcp-agent-workflow",
+      "references",
+      "tool-recipes.md",
+    );
+    assert.strictEqual(
+      readFileSync(generatedSkillPath, "utf8"),
+      readFileSync(
+        join("templates", "sdl-mcp-agent-workflow", "SKILL.md"),
+        "utf8",
+      ),
+    );
+    assert.strictEqual(
+      readFileSync(generatedRecipePath, "utf8"),
+      readFileSync(
+        join(
+          "templates",
+          "sdl-mcp-agent-workflow",
+          "references",
+          "tool-recipes.md",
+        ),
+        "utf8",
+      ),
+    );
     assert.ok(
       existsSync(join(tempDir, ".codex", "hooks", "force-sdl-mcp.mjs")),
     );
@@ -244,6 +278,18 @@ describe("init agent enforcement", () => {
     assert.match(sessionHookOutput.systemMessage, /skill auto-loaded/);
     assert.match(sessionHookOutput.systemMessage, /sdl-mcp-agent-workflow/);
     assert.match(sessionHookOutput.systemMessage, /repo\.status/);
+
+    const { SDL_MCP_AGENT_WORKFLOW_SKILL_PATH: _skillOverride, ...hookEnv } =
+      process.env;
+    const repoSkillRun = spawnSync(process.execPath, [sessionHookPath], {
+      input: JSON.stringify({ hook_event_name: "SessionStart", cwd: tempDir }),
+      encoding: "utf8",
+      env: hookEnv,
+    });
+    assert.strictEqual(repoSkillRun.status, 0, repoSkillRun.stderr);
+    const repoSkillOutput = JSON.parse(repoSkillRun.stdout);
+    assert.match(repoSkillOutput.systemMessage, /budget\.maxTokens/);
+    assert.doesNotMatch(repoSkillOutput.systemMessage, /options\.contextMode/);
 
     const runHook = (payload: Record<string, unknown>): string => {
       const hookRun = spawnSync(process.execPath, [hookPath], {

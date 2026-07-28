@@ -562,34 +562,33 @@ Connect SDL-MCP to an MCP client (Codex, Claude Code, etc.) and test each tool.
   "repoId": "test-repo",
   "taskType": "explain",
   "taskText": "Explain the MCP server implementation",
-  "budget": { "maxTokens": 2000, "maxActions": 5 }
+  "budget": { "maxTokens": 2000 }
 }
 ```
 
-**Expected:** Returns compact broad context response.
+**Expected:** Returns the canonical v2 context payload.
 
-- [ ] Returns taskId and taskType
-- [ ] Returns finalEvidence array
-- [ ] Returns summary and answer
-- [ ] `answer` field is a non-empty string on successful responses (never removed by budget trimming)
-- [ ] Does not include actionsTaken, path, or metrics in default broad response
+- [ ] Returns `status`, `taskType`, and `etag`
+- [ ] Returns `retrieval`, `evidence`, `edges`, `omitted`, and `nextActions`
+- [ ] Evidence rungs are `card`, `skeleton`, or `hotPath`
+- [ ] Does not include synthesized `summary` or `answer`
 
-**Input (tight budget, verify answer preservation):**
+**Input (tight budget, verify deterministic budget handling):**
 
 ```json
 {
   "repoId": "test-repo",
   "taskType": "explain",
   "taskText": "Explain the MCP server implementation",
-  "budget": { "maxTokens": 500, "maxActions": 2 }
+  "budget": { "maxTokens": 512 }
 }
 ```
 
-**Expected:** Compact broad response with answer preserved even under budget pressure.
+**Expected:** Canonical response remains within budget.
 
-- [ ] `answer` field is present and non-empty on success
-- [ ] `finalEvidence` may be shorter but is present
-- [ ] Response does not include `actionsTaken`, `path`, or `metrics`
+- [ ] `status` is `complete`, `budgetLimited`, or `empty`
+- [ ] `evidence` is present
+- [ ] Budget-limited recovery appears in `omitted.highestRanked`
 
 #### sdl.agent.feedback
 
@@ -645,16 +644,15 @@ Connect SDL-MCP to an MCP client (Codex, Claude Code, etc.) and test each tool.
   "repoId": "test-repo",
   "taskType": "review",
   "taskText": "Review the MCP server request routing",
-  "budget": { "maxTokens": 1500, "maxActions": 4 }
+  "budget": { "maxTokens": 1500 }
 }
 ```
 
 **Expected:** Returns Code Mode task-shaped context retrieval results.
 
-- [ ] Returns taskId
-- [ ] Returns path with rungs
-- [ ] Returns finalEvidence
-- [ ] Returns metrics
+- [ ] Returns `status` and `taskType`
+- [ ] Returns `retrieval`, `evidence`, and `edges`
+- [ ] Returns `omitted`, `nextActions`, and `etag`
 
 #### sdl.workflow
 

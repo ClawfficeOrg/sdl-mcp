@@ -15,7 +15,6 @@ import * as retrievalFusion from "../../dist/retrieval/fusion.js";
 const equalWeights: FusionWeights = {
   fts: 1,
   vector: 1,
-  legacyFallback: 1,
   overlay: 1,
 };
 

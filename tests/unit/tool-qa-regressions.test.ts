@@ -12,7 +12,6 @@ import {
   detectRuntimeHints,
   detectPowerShellStderrErrors,
 } from "../../dist/mcp/tools/runtime.js";
-import { buildSeedEntitySearchPlan } from "../../dist/agent/context-seeding.js";
 
 describe("SDL tool QA regressions", () => {
   it("summarizes semantic provider selections in compact status output", () => {
@@ -129,28 +128,6 @@ describe("SDL tool QA regressions", () => {
       false,
     );
     assert.equal(detectPowerShellStderrErrors(""), false);
-  });
-
-  it("narrows broad sdl.context entity search for tool-QA prompts", () => {
-    const toolQaPlan = buildSeedEntitySearchPlan(
-      "QA runtime.execute output modes and stderr handling",
-      true,
-    );
-    assert.equal(toolQaPlan.toolQaFocused, true);
-    assert.deepEqual(toolQaPlan.entityTypes, ["symbol", "fileSummary"]);
-    assert.match(toolQaPlan.ftsQuery, /handleRuntimeExecute/);
-
-    const genericPlan = buildSeedEntitySearchPlan(
-      "how does authentication session renewal work?",
-      true,
-    );
-    assert.equal(genericPlan.toolQaFocused, false);
-    assert.deepEqual(genericPlan.entityTypes, [
-      "symbol",
-      "cluster",
-      "process",
-      "fileSummary",
-    ]);
   });
 
   it("builds a cheap pr.risk preflight response without blast-radius data", () => {

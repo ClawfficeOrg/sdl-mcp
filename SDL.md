@@ -10,14 +10,13 @@ SDL-MCP is the normal repository interface. Native filesystem and shell tools ar
 
 1. Confirm server and repository state with `repo.status`.
 2. For code context, use the cheapest SDL surface that can answer the question:
-   - Use `sdl.context` for explain, debug, review, implement, understand, or investigate prompts. For explain/debug, try `options.answerFirst: true` before card-heavy context. When summary coverage is insufficient, the fallback includes a concise `answer` explaining why and a `nextBestAction`; retry without `options.answerFirst` to inspect `finalEvidence`.
+   - Use `sdl.context` for task-shaped evidence. Always provide `budget.maxTokens`; add flat `focusPaths`, `focusSymbols`, or `chatMentions` when the request names exact targets.
    - Use `sdl.retrieve` for one-hop retrieval: `symbolSearch`, `symbolGetCard`, `sliceBuild`, `codeSkeleton`, `codeHotPath`, or a bounded `codeNeedWindow`.
    - Use `sdl.workflow` only when steps need result piping, transforms, runtime execution, batch operations, or mutations.
 3. Never use `file.read` for indexed source. It is only for non-indexed files such as docs, configs, templates, JSON, and YAML.
-4. Use `options.contextMode: "precise"` for named symbols, exact paths, narrow bugs, focused reviews, and implementation follow-up.
-5. Use `options.contextMode: "broad"` for subsystem mapping, behavior tracing, unfamiliar areas, or broad investigation.
-6. Keep `responseMode: "auto"` for potentially large responses. If a response handle is returned, use `response.get` only for the needed excerpt. For JSON artifacts, prefer `jsonPath` with dot or bracket array paths, add `offset`/`limit` for large arrays, and use `raw: true` only when byte-slicing JSON text is intentional. A missing path reports the available top-level keys and returns a same-handle `response.get` recovery call, preferring `finalEvidence` and then `summary`.
-7. Use focused `sdl.manual` only when composing a non-obvious request. Use `sdl.action.search` when the correct SDL action is unclear.
+4. Treat focus fields as seed priorities, not output boundaries. The task profile and token budget determine expansion and evidence rungs.
+5. Keep `responseMode: "auto"` for potentially large responses. If a response handle is returned, use `response.get` only for the needed excerpt. For JSON artifacts, prefer `jsonPath` with dot or bracket array paths, add `offset`/`limit` for large arrays, and use `raw: true` only when byte-slicing JSON text is intentional. A missing path reports the available top-level keys and returns a same-handle `response.get` recovery call, preferring `evidence` and then `omitted`.
+6. Use focused `sdl.manual` only when composing a non-obvious request. Use `sdl.action.search` when the correct SDL action is unclear.
 
 Do not run `index.refresh` by habit. Refresh only when `repo.status` shows stale or missing indexed state and the task depends on current code.
 
@@ -27,14 +26,11 @@ Use `repo.unregister` only to permanently remove a runtime registration. Confirm
 
 ## 2. Retrieval Ladder
 
-Use `sdl.context` for task-shaped understanding. For explain/debug tasks, start with `options.answerFirst: true` and expand through evidence IDs only when the answer is insufficient. Exact tool/action names are seeded from the action catalog, but use `sdl.retrieve` for one-hop retrieval when the task already names a symbol, API, operation, or focused code target. If you need to decide which files or symbols to edit, build a slice through `sdl.retrieve` before requesting code.
+Use `sdl.context` for task-shaped understanding. It returns deterministic `evidence`, compact selected-symbol `edges`, bounded `omitted` details, and logical `nextActions`; it does not synthesize an answer. Use `sdl.retrieve` for one-hop retrieval when the task already names a symbol, API, operation, or focused code target. If you need to decide which files or symbols to edit, build a slice through `sdl.retrieve` before requesting code.
 
-Leave `options.semantic` unset for normal use: broad mode uses bounded hybrid
-retrieval by default, while precise mode keeps the lexical fast path. Set it to
-`true` to force hybrid retrieval in either mode and to `false` for lexical-only
-diagnostics. Explicit precise scope remains strict. Forced semantic precise
-retrieval also preserves bounded per-concept and named-action coverage, so do
-not replace one focused call with several broad searches.
+SDL-MCP selects available lexical, vector, graph, overlay, feedback, and memory
+lanes automatically. The response reports the resulting retrieval level and
+lane availability. Callers do not select a retrieval mode.
 
 Use `sdl.workflow` only when steps need fields from earlier results, transforms, runtime execution, batch operations, mutations, or result piping. With `onError: "continueAll"`, failed and policy-denied gateway results continue execution but retain `status: "error"` and count as errors in the workflow summary.
 Workflow continuations return the same model-projected data as their first page, while internal `$N` piping retains raw step data. When a `codeSkeleton` response is truncated, repeat the original target and all original arguments, then change only `skeletonOffset` to the returned value. `workflowContinuationGet` pages array paths in items and JSON/text values in characters; its `limit` is capped at `1000`.
@@ -56,37 +52,34 @@ For `codeSkeleton` file-mode retrieval, `file` is canonical. `sdl.retrieve` also
 
 When workflow steps need fields from earlier `$N` references, force JSON-compatible output on the earlier step. Keep limits tight; `sdl.workflow` manages ETags automatically. Do not include retrieval evidence unless you are debugging retrieval quality.
 
-### Precise Context
+### Focused Context
 
 ```json
 {
   "repoId": "<repoId>",
   "taskType": "debug",
   "taskText": "Check why parseConfig rejects valid timeout values",
+  "budget": { "maxTokens": 4000 },
+  "focusPaths": ["src/config/parse.ts"],
+  "includeTests": false,
   "responseMode": "auto",
-  "options": {
-    "contextMode": "precise",
-    "focusPaths": ["src/config/parse.ts"],
-    "includeRetrievalEvidence": false
-  },
-  "budget": { "maxTokens": 4000 }
+  "refsMode": "auto",
+  "wireFormat": "auto"
 }
 ```
 
-### Broad Context
+### Exploratory Context
 
 ```json
 {
   "repoId": "<repoId>",
   "taskType": "explain",
   "taskText": "Trace the request dispatch path from server entrypoint to tool handler",
+  "budget": { "maxTokens": 7000 },
+  "includeTests": false,
   "responseMode": "auto",
-  "options": {
-    "contextMode": "broad",
-    "semantic": true,
-    "includeRetrievalEvidence": false
-  },
-  "budget": { "maxTokens": 7000 }
+  "refsMode": "auto",
+  "wireFormat": "auto"
 }
 ```
 
@@ -197,7 +190,7 @@ Use the cheapest rung that answers the task. Static price tags in `sdl.manual` a
 - Short IDs: packed payloads may introduce `s1`, `s2`, ... aliases with an `@ids=s1:<full-symbol-id>` line. Use `sN` anywhere a symbol ID is accepted; if an alias is unknown, re-run the producing call or use the full ID from the introducing `@ids` line.
 - Action discovery: set `sdl.action.search` `maxTokens` to bound a catalog page; use its `offset` to request the next page rather than increasing the first response.
 - Search misses: when `symbol.search` returns `nearMisses`, retry with one listed `name` instead of inventing broader queries.
-- Answer first: for explain/debug, call `sdl.context` with `options.answerFirst: true`; expand with `symbol.getCard` or a normal context call on the returned evidence IDs only if needed.
+- Evidence first: inspect `evidence`, then follow `nextActions` or use `symbol.getCard` only when the selected content is insufficient.
 - Targeted files: if `file.read` returns the large-read hint, retry with `search` plus `searchContext`, `offset` plus `limit`, `jsonPath`, `maxTokens`, or `maxBytes`.
 
 For document-heavy planning, locate the relevant README, ADR, specification, or plan and use targeted `sdl.file` `op: "read"` with `search`, bounded ranges, or `jsonPath`. If broad `sdl.context` returns irrelevant symbol evidence, switch retrieval surfaces instead of widening symbol budgets.

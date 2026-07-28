@@ -7,24 +7,23 @@
     "taskType": "implement",
     "taskText": "Add error handling to API endpoint handlers",
     "budget": {
-      "maxTokens": 2000,
-      "maxActions": 5
+      "maxTokens": 2000
     },
-    "options": {
-      "focusSymbols": [
-        "api:handleRequest",
-        "api:validateInput",
-        "api:sendResponse"
-      ],
-      "focusPaths": ["src/api/handlers"]
-    }
+    "focusSymbols": [
+      "api:handleRequest",
+      "api:validateInput",
+      "api:sendResponse"
+    ],
+    "focusPaths": ["src/api/handlers"]
   },
   "expectedResponse": {
-    "taskId": "string",
+    "status": "string",
     "taskType": "implement",
-    "finalEvidence": "array",
-    "summary": "string",
-    "success": "boolean",
-    "answer": "string"
+    "retrieval": "object",
+    "evidence": "array",
+    "edges": "array",
+    "omitted": "object",
+    "nextActions": "array",
+    "etag": "string"
   }
 }

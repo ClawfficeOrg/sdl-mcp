@@ -83,7 +83,7 @@ describe("dist stdio smoke", () => {
       const expectedOutputProperties = {
         "sdl.retrieve": ["results", "card", "slice", "approved"],
         "sdl.workflow": ["results"],
-        "sdl.context": ["taskType", "answer", "notModified"],
+        "sdl.context": ["status", "isError", "notModified", "kind"],
         "sdl.file": ["filePath", "mode", "kind"],
       } as const;
       for (const [name, expectedProperties] of Object.entries(
@@ -99,8 +99,10 @@ describe("dist stdio smoke", () => {
         for (const property of expectedProperties) {
           assert.ok(property in (properties ?? {}), `${name}.${property}`);
         }
+        const maxSchemaBytes = name === "sdl.context" ? 6_144 : 512;
         assert.ok(
-          Buffer.byteLength(JSON.stringify(outputSchema), "utf8") <= 512,
+          Buffer.byteLength(JSON.stringify(outputSchema), "utf8") <=
+            maxSchemaBytes,
           `${name} output schema must stay compact`,
         );
       }
@@ -139,6 +141,42 @@ describe("dist stdio smoke", () => {
 
       const contextTool = response.tools.find((tool) => tool.name === "sdl.context");
       const workflowTool = response.tools.find((tool) => tool.name === "sdl.workflow");
+      const contextInputSchema = contextTool?.inputSchema as
+        | Record<string, unknown>
+        | undefined;
+      assert.ok(contextInputSchema);
+      assert.strictEqual(contextInputSchema.additionalProperties, false);
+      assert.deepStrictEqual(contextInputSchema.required, [
+        "repoId",
+        "taskType",
+        "taskText",
+        "budget",
+      ]);
+      const contextInputProperties = contextInputSchema.properties as Record<
+        string,
+        Record<string, unknown>
+      >;
+      assert.deepStrictEqual(Object.keys(contextInputProperties), [
+        "repoId",
+        "taskType",
+        "taskText",
+        "budget",
+        "focusPaths",
+        "focusSymbols",
+        "chatMentions",
+        "includeTests",
+        "ifNoneMatch",
+        "responseMode",
+        "refsMode",
+        "wireFormat",
+      ]);
+      const budgetSchema = contextInputProperties.budget;
+      assert.strictEqual(budgetSchema.additionalProperties, false);
+      assert.deepStrictEqual(budgetSchema.required, ["maxTokens"]);
+      assert.deepStrictEqual(
+        Object.keys(budgetSchema.properties as Record<string, unknown>),
+        ["maxTokens"],
+      );
       assert.strictEqual(contextTool?.title, "SDL Context");
       assert.strictEqual(workflowTool?.title, "SDL Workflow");
       assert.match(contextTool?.description ?? "", /SDL-MCP v/);

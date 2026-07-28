@@ -18,9 +18,6 @@ import type { Connection } from "kuzu";
 import type { RepoId, SymbolId } from "../../domain/types.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import { tokenize } from "../../util/tokenize.js";
-import { loadConfig } from "../../config/loadConfig.js";
-import { isHybridRetrievalAvailable } from "../../retrieval/fallback.js";
-import { checkRetrievalHealth } from "../../retrieval/health.js";
 import { logger } from "../../util/logger.js";
 import {
   getOverlaySnapshot,
@@ -30,9 +27,7 @@ import {
 import { searchContextCandidates } from "../../retrieval/context-candidate-search.js";
 import {
   createRetrievalQueryContext,
-  getOrCreateHealthPromise,
   hybridSearch,
-  runAfterGraphRetrievalAdmission,
 } from "../../retrieval/orchestrator.js";
 import type {
   RetrievalEvidence,
@@ -523,19 +518,10 @@ export async function resolveStartNodesLadybug(
     ? limits.maxTaskTextStartNodes * 2
     : limits.maxTaskTextStartNodes;
 
-  // Check once, after graph admission, and share the promise with every lane.
-  const semanticConfig = loadConfig().semantic;
-  const useHybrid = await isHybridRetrievalAvailable(repoId, () =>
-    runAfterGraphRetrievalAdmission(conn, repoId, () =>
-      getOrCreateHealthPromise(
-        queryContext,
-        repoId,
-        () => checkRetrievalHealth(conn, repoId, semanticConfig),
-      ),
-    ),
-  );
   let retrievalEvidence: RetrievalEvidence | undefined;
   let hybridSearchItems: HybridSearchResultItem[] | undefined;
+  let taskTextSeedCount = 0;
+  let sharedTaskTextCandidateCount = 0;
 
   for (const symbolId of explicitEntrySymbols) {
     if (startNodes.size >= limits.maxTotalStartNodes) break;
@@ -567,8 +553,7 @@ export async function resolveStartNodesLadybug(
   }
 
   if (request.stackTrace) {
-    // Stage 2: try hybrid retrieval for stack trace context first
-    if (useHybrid) {
+    {
       const hybridResult = await hybridSearch({
         repoId,
         query: request.stackTrace.slice(0, STACK_TRACE_QUERY_MAX_LENGTH),
@@ -595,8 +580,7 @@ export async function resolveStartNodesLadybug(
   }
 
   if (request.failingTestPath) {
-    // Stage 2: try hybrid retrieval for failing test context first
-    if (useHybrid) {
+    {
       const hybridResult = await hybridSearch({
         repoId,
         query: request.failingTestPath,
@@ -647,89 +631,45 @@ export async function resolveStartNodesLadybug(
   }
 
   if (request.taskText) {
-    if (useHybrid) {
-      const sharedResult = await searchContextCandidates(
-        conn,
-        {
-          repoId,
-          query: request.taskText,
-          limit: effectiveTaskTextLimit,
-          includeFileSummary: false,
-          includeTests: true,
-          symbolsPerFileSummary: 1,
-          includeEvidence: true,
-        },
-        queryContext,
-        overlaySnapshot,
-      );
-      retrievalEvidence = sharedResult.evidence;
-      hybridSearchItems = sharedResult.rows.flatMap((row) =>
-        row.source === "exactIdentifier"
-          ? []
-          : [
-              {
-                symbolId: row.symbolId,
-                score: row.score,
-                source: row.source,
-                sourceRanks: row.sourceRanks,
-              },
-            ],
-      );
-      let taskTextSeedCount = 0;
-      for (const item of sharedResult.rows) {
-        if (taskTextSeedCount >= effectiveTaskTextLimit || startNodes.size >= limits.maxTotalStartNodes) break;
-        if (startNodes.has(item.symbolId)) continue;
-        addStartNode(item.symbolId, "taskText");
-        if (startNodes.has(item.symbolId)) {
-          taskTextSeedCount++;
-        }
-      }
-    } else {
-      // Legacy fallback: batch the token search, then replay token order
-      // locally so start-node priority remains stable.
-      const taskTokens = collectTaskTextSeedTokens(request.taskText);
-      let taskTextSeedCount = 0;
-      const perTokenLimit = Math.max(
-        1,
-        Math.min(
-          DB_QUERY_LIMIT_DEFAULT,
-          TASK_TEXT_TOKEN_QUERY_LIMIT,
-          effectiveTaskTextLimit,
-        ),
-      );
-      const resultsByToken = await ladybugDb.searchSymbolsLiteBatch(
-        conn,
+    const sharedResult = await searchContextCandidates(
+      conn,
+      {
         repoId,
-        taskTokens,
-        perTokenLimit,
-      );
-      for (const [tokenIndex, results] of resultsByToken.entries()) {
-        if (
-          taskTextSeedCount >= effectiveTaskTextLimit ||
-          startNodes.size >= limits.maxTotalStartNodes
-        ) {
-          break;
-        }
-        const candidateIds = mergeLegacyTaskTextCandidateIds(
-          results,
-          overlaySnapshot,
-          repoId,
-          taskTokens[tokenIndex] ?? "",
-          perTokenLimit,
-        );
-        for (const symbolId of candidateIds) {
-          if (
-            taskTextSeedCount >= effectiveTaskTextLimit ||
-            startNodes.size >= limits.maxTotalStartNodes
-          ) {
-            break;
-          }
-          if (startNodes.has(symbolId)) continue;
-          addStartNode(symbolId, "taskText");
-          if (startNodes.has(symbolId)) {
-            taskTextSeedCount++;
-          }
-        }
+        query: request.taskText,
+        limit: effectiveTaskTextLimit,
+        includeFileSummary: false,
+        includeTests: true,
+        symbolsPerFileSummary: 1,
+        includeEvidence: true,
+      },
+      queryContext,
+      overlaySnapshot,
+    );
+    retrievalEvidence = sharedResult.evidence;
+    sharedTaskTextCandidateCount = sharedResult.rows.length;
+    hybridSearchItems = sharedResult.rows.flatMap((row) =>
+      row.source === "exactIdentifier"
+        ? []
+        : [
+            {
+              symbolId: row.symbolId,
+              score: row.score,
+              source: row.source,
+              sourceRanks: row.sourceRanks,
+            },
+          ],
+    );
+    for (const item of sharedResult.rows) {
+      if (
+        taskTextSeedCount >= effectiveTaskTextLimit ||
+        startNodes.size >= limits.maxTotalStartNodes
+      ) {
+        break;
+      }
+      if (startNodes.has(item.symbolId)) continue;
+      addStartNode(item.symbolId, "taskText");
+      if (startNodes.has(item.symbolId)) {
+        taskTextSeedCount++;
       }
     }
   }
@@ -737,7 +677,11 @@ export async function resolveStartNodesLadybug(
   // Fallback: if taskText was provided but no start nodes were found from it,
   // retry with individual words from the raw taskText (skip stop-word filter)
   // so that common programming terms like "error" can still seed the slice.
-  if (request.taskText && startNodes.size === 0) {
+  if (
+    request.taskText &&
+    sharedTaskTextCandidateCount === 0 &&
+    startNodes.size < limits.maxTotalStartNodes
+  ) {
     const rawWords = request.taskText
       .toLowerCase()
       .split(/[\s,;:!?()]+/)

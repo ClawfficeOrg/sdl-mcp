@@ -3,7 +3,7 @@
  *
  * Each describe block maps to a specific fix:
  *   1. symbolSearch exact match priority
- *   2. Executor identifier-based fallback search
+ *   2. Retrieval identifier extraction
  *   3. includeMemories defaults to false
  *   4. deltaGet budget cap
  *   5. codeNeedWindow downgradeGuidance
@@ -30,7 +30,7 @@ import {
   extractIdentifiersFromText,
   IDENTIFIER_STOP_WORDS,
   MAX_IDENTIFIERS,
-} from "../../dist/agent/executor.js";
+} from "../../dist/retrieval/identifier-extraction.js";
 
 // ---------------------------------------------------------------------------
 // 1. symbolSearch exact match priority
@@ -143,11 +143,9 @@ describe("file.read JSON path maxBytes handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. Executor identifier-based fallback search
+// 2. Retrieval identifier extraction
 // ---------------------------------------------------------------------------
 describe("extractIdentifiersFromTask logic", () => {
-  // Uses the real extractIdentifiersFromText from dist/agent/executor.js
-
   it("extracts camelCase identifiers from natural language", () => {
     const ids = extractIdentifiersFromText(
       "Fix the handleRequest function that calls parseJsonBody",
@@ -196,31 +194,6 @@ describe("extractIdentifiersFromTask logic", () => {
     assert.ok(ids.length <= MAX_IDENTIFIERS);
   });
 
-  it("uses searchTerms option when provided instead of extraction", () => {
-    // This tests the logic at executor.ts line 396-398:
-    // const searchTerms = task.options?.searchTerms?.length
-    //   ? task.options.searchTerms.slice(0, 5)
-    //   : this.extractIdentifiersFromTask(task).slice(0, 5);
-    const searchTerms = ["alpha", "beta", "gamma"];
-    const extracted = extractIdentifiersFromText("handleRequest parseJson doSomething");
-
-    // When searchTerms is provided and non-empty, it should be used
-    const result = searchTerms.length
-      ? searchTerms.slice(0, 5)
-      : extracted.slice(0, 5);
-    assert.deepEqual(result, ["alpha", "beta", "gamma"]);
-
-    // When searchTerms is empty, fall back to extraction
-    const emptySearchTerms: string[] = [];
-    const fallback = emptySearchTerms.length
-      ? emptySearchTerms.slice(0, 5)
-      : extracted.slice(0, 5);
-    assert.ok(fallback.length > 0, "should fall back to extracted identifiers");
-    assert.ok(
-      fallback.includes("handleRequest"),
-      "fallback should contain extracted identifiers",
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------

@@ -137,7 +137,6 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
     const retrievalConfig = semanticConfig.retrieval;
     const shouldRunFileSummaryEmbeddings =
-      (retrievalConfig?.mode ?? "hybrid") === "hybrid" &&
       retrievalConfig?.vector?.enabled !== false;
     if (shouldRunFileSummaryEmbeddings) {
       fileSummaryEmbeddingStats = {};

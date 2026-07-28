@@ -276,6 +276,38 @@ describe("computePpr", () => {
     assert.ok(result.scores.has("a"), "a should be reachable upstream");
     assert.ok(result.scores.has("c"), "c should be reachable downstream");
   });
+
+  it("does not reuse scores across graph versions with the same timestamp", async () => {
+    const snapshotCreatedAt = 6;
+    const options = {
+      seeds: new Map([["seed", 1.0]]),
+      direction: "both" as const,
+    };
+    const v1 = await computePpr({
+      graph: buildMiniGraph(
+        ["seed", "a"],
+        new Map([["seed", [{ to: "a" }]]]),
+      ),
+      graphVersionId: "v1",
+      snapshotCreatedAt,
+      repoId: "r",
+      options,
+    });
+    const v2 = await computePpr({
+      graph: buildMiniGraph(
+        ["seed", "b"],
+        new Map([["seed", [{ to: "b" }]]]),
+      ),
+      graphVersionId: "v2",
+      snapshotCreatedAt,
+      repoId: "r",
+      options,
+    });
+
+    assert.notStrictEqual(v2, v1);
+    assert.ok(v2.scores.has("b"));
+    assert.equal(v2.scores.has("a"), false);
+  });
 });
 
 

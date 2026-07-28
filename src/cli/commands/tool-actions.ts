@@ -1373,8 +1373,8 @@ const responseGet: CliActionDefinition = {
   ],
   examples: [
     'sdl-mcp tool response.get --repo-id my-repo --handle "response-myrepo-1770000000000-0123456789abcdef" --raw --max-bytes 8192',
-    'sdl-mcp tool response.get --repo-id my-repo --handle "response-myrepo-1770000000000-0123456789abcdef" --json-path finalEvidence[0]',
-    'sdl-mcp tool response.get --repo-id my-repo --handle "response-myrepo-1770000000000-0123456789abcdef" --json-path finalEvidence --offset 0 --limit 5',
+    'sdl-mcp tool response.get --repo-id my-repo --handle "response-myrepo-1770000000000-0123456789abcdef" --json-path evidence[0]',
+    'sdl-mcp tool response.get --repo-id my-repo --handle "response-myrepo-1770000000000-0123456789abcdef" --json-path evidence --offset 0 --limit 5',
   ],
 };
 

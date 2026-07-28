@@ -1,340 +1,320 @@
-/**
- * hybrid-start-nodes.test.ts
- *
- * Stage 2 tests for the hybrid retrieval integration in start-node
- * resolution, auto-flip logic, and fallback decision-making.
- *
- * Like the existing retrieval-fallback.test.ts, we use inline
- * re-implementations and source-text verification because the real
- * modules pull in OpenTelemetry transitive imports that are
- * incompatible with the tsx unit-test environment.
- */
-
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { describe, it, type TestContext } from "node:test";
 
-import type { RetrievalCapabilities } from "../../dist/retrieval/types.js";
+const resolverSource = readFileSync(
+  new URL("../../src/graph/slice/start-node-resolver.ts", import.meta.url),
+  "utf8",
+);
 
-// ---------------------------------------------------------------------------
-// Minimal types (mirrors config/types.ts SemanticRetrievalConfig shape)
-// ---------------------------------------------------------------------------
+const emptyOverlaySnapshot = {
+  repoId: "repo",
+  touchedFileIds: new Set<string>(),
+  symbolsById: new Map(),
+  filesById: new Map(),
+  outgoingEdgesBySymbolId: new Map(),
+};
 
-interface MinimalRetrievalConfig {
-  mode: "legacy" | "hybrid";
+function mockStartNodeModules(
+  t: TestContext,
+  options: {
+    searchContextCandidates: (...args: unknown[]) => Promise<unknown>;
+    ladybug?: Record<string, unknown>;
+  },
+): void {
+  t.mock.module("../../dist/retrieval/context-candidate-search.js", {
+    namedExports: {
+      searchContextCandidates: options.searchContextCandidates,
+    },
+  });
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      createRetrievalQueryContext: () => ({
+        healthPromises: new Map(),
+        embeddingPromises: new Map(),
+      }),
+      hybridSearch: async () => ({ results: [] }),
+    },
+  });
+  t.mock.module("../../dist/live-index/overlay-reader.js", {
+    namedExports: {
+      getOverlaySnapshot: () => emptyOverlaySnapshot,
+      rankOverlaySymbolsForQuery: () => [],
+    },
+  });
+  t.mock.module("../../dist/retrieval/feedback-boost.js", {
+    namedExports: {
+      queryFeedbackBoosts: async () => ({ boosts: new Map() }),
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      getSymbolsByIds: async () => new Map(),
+      getFilesByIds: async () => new Map(),
+      getFileByRepoPath: async () => null,
+      getSymbolIdsByFile: async () => [],
+      getCallersOfSymbols: async () => [],
+      searchSymbolsLiteBatch: async () => [],
+      ...options.ladybug,
+    },
+  });
 }
 
-// ---------------------------------------------------------------------------
-// Inline re-implementation of shouldFallbackToLegacy with auto-flip
-// (mirrors the Stage 2 implementation in src/retrieval/fallback.ts)
-// ---------------------------------------------------------------------------
+describe("start-node resolver unified retrieval", () => {
+  it("routes task text through the shared candidate core", () => {
+    assert.match(resolverSource, /searchContextCandidates\(/);
+    assert.doesNotMatch(resolverSource, /isHybridRetrievalAvailable/);
+    assert.doesNotMatch(resolverSource, /shouldFallbackToLegacy/);
+    assert.doesNotMatch(resolverSource, /from "\.\.\/\.\.\/retrieval\/fallback\.js"/);
+  });
 
-/**
- * Inline mirror of shouldFallbackToLegacy for unit testing.
- *
- * Returns true (use legacy) when:
- *  - mode is "legacy"
- *  - mode is "hybrid" but FTS is unavailable
- *
- * Returns false (use hybrid) when:
- *  - mode is "hybrid" and FTS is available
- *
- * Note: auto-flip from legacy to hybrid is now handled by
- * isHybridRetrievalAvailable() separately, not by shouldFallbackToLegacy.
- */
-function shouldFallbackToLegacy(
-  caps: RetrievalCapabilities,
-  config: MinimalRetrievalConfig,
-): boolean {
-  // Explicit legacy mode -- always fall back.
-  if (config.mode === "legacy") {
-    return true;
-  }
+  it("retains slice-owned exact recovery sources", () => {
+    assert.match(resolverSource, /extractSymbolsFromStackTraceLadybug\(/);
+    assert.match(resolverSource, /getSymbolsByPathLadybug\(/);
+    assert.match(resolverSource, /searchSymbolsLiteBatch\(/);
+  });
 
-  // Hybrid mode requested but FTS is unavailable.
-  if (!caps.fts) {
-    return true;
-  }
+  it("preserves retrieval evidence for slice responses", () => {
+    assert.match(resolverSource, /retrievalEvidence = sharedResult\.evidence/);
+    assert.match(resolverSource, /hybridSearchItems = sharedResult\.rows/);
+  });
 
-  // Hybrid mode with at least FTS available -- proceed with hybrid.
-  return false;
-}
+  it("uses the admitted connection for shared task-text candidates", async (t) => {
+    const conn = { id: "admitted" };
+    const queryContext: { connection?: unknown } = {};
+    let receivedConn: unknown;
+    let receivedQueryContext: { connection?: unknown } | undefined;
 
-/**
- * Inline mirror of isHybridRetrievalAvailable decision logic.
- * The real function calls loadConfig(), getExtensionCapabilities(), and
- * checkRetrievalHealth() internally.  We test the decision tree directly.
- */
-function isHybridRetrievalAvailableLogic(opts: {
-  semanticEnabled: boolean;
-  retrievalMode?: "legacy" | "hybrid";
-  extensionCaps: { fts: boolean; vector: boolean };
-  health: RetrievalCapabilities;
-}): boolean {
-  if (!opts.semanticEnabled) return false;
-
-  // Explicit hybrid mode -- require a healthy FTS index before retrieval paths run.
-  if (opts.retrievalMode === "hybrid") {
-    return opts.health.fts;
-  }
-
-  // Legacy mode (default) -- auto-promote when infrastructure is healthy.
-  return opts.health.fts && (opts.health.vectorJinaCode || opts.health.vectorNomic);
-}
-
-function makeCaps(
-  overrides: Partial<RetrievalCapabilities> = {},
-): RetrievalCapabilities {
-  return { fts: true, vectorJinaCode: true, vectorNomic: true, ...overrides };
-}
-
-// ---------------------------------------------------------------------------
-// isHybridRetrievalAvailable — logic tests
-// ---------------------------------------------------------------------------
-
-describe("isHybridRetrievalAvailable — logic", () => {
-  it("returns true when FTS + vector healthy (auto-flip from legacy)", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: true,
-      retrievalMode: "legacy",
-      extensionCaps: { fts: true, vector: true },
-      health: { fts: true, vectorJinaCode: true, vectorNomic: false },
+    mockStartNodeModules(t, {
+      searchContextCandidates: async (
+        candidateConn,
+        _options,
+        candidateQueryContext,
+      ) => {
+        receivedConn = candidateConn;
+        receivedQueryContext = candidateQueryContext as {
+          connection?: unknown;
+        };
+        return {
+          rows: [
+            {
+              symbolId: "shared-symbol",
+              filePath: "src/shared.ts",
+              score: 1,
+              source: "fts",
+              tier: 1,
+              sourceRanks: { fts: 1 },
+              provenance: {},
+            },
+          ],
+          capabilities: {},
+          evidence: {
+            sources: ["fts"],
+            candidateCountPerSource: { fts: 1 },
+            topRanksPerSource: { fts: [1] },
+            fusionLatencyMs: 0,
+          },
+        };
+      },
     });
-    assert.strictEqual(result, true);
+
+    const { resolveStartNodesLadybug } = await import(
+      "../../dist/graph/slice/start-node-resolver.js?shared-connection"
+    );
+    const result = await resolveStartNodesLadybug(
+      conn as never,
+      "repo",
+      { taskText: "shared symbol" },
+      queryContext as never,
+      emptyOverlaySnapshot as never,
+    );
+
+    assert.strictEqual(receivedConn, conn);
+    assert.strictEqual(receivedQueryContext, queryContext);
+    assert.strictEqual(queryContext.connection, conn);
+    assert.deepEqual(result.startNodes, [
+      { symbolId: "shared-symbol", source: "taskText" },
+    ]);
   });
 
-  it("returns false when semantic disabled", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: false,
-      retrievalMode: "legacy",
-      extensionCaps: { fts: true, vector: true },
-      health: { fts: true, vectorJinaCode: true, vectorNomic: false },
+  it("retains raw task-text recovery alongside structural seeds", async (t) => {
+    const conn = { id: "admitted" };
+    const queryContext: { connection?: unknown } = {};
+    let lexicalCalls = 0;
+
+    mockStartNodeModules(t, {
+      searchContextCandidates: async () => ({
+        rows: [],
+        capabilities: {},
+        evidence: {
+          sources: [],
+          candidateCountPerSource: {},
+          topRanksPerSource: {},
+          fusionLatencyMs: 0,
+          fallbackReason: "all-backends-returned-empty",
+        },
+      }),
+      ladybug: {
+        getFileByRepoPath: async () => ({
+          fileId: "edited-file",
+          repoId: "repo",
+          relPath: "src/edited.ts",
+        }),
+        getSymbolIdsByFile: async () => ["edited-symbol"],
+        getCallersOfSymbols: async () => [],
+        searchSymbolsLiteBatch: async (
+          _conn: unknown,
+          _repoId: string,
+          words: string[],
+        ) => {
+          lexicalCalls += 1;
+          return words.map((_, index) =>
+            index === 0
+              ? [{ symbolId: "lexical-symbol", fileId: "lexical-file" }]
+              : [],
+          );
+        },
+        getSymbolsByIds: async () =>
+          new Map([
+            [
+              "edited-symbol",
+              {
+                symbolId: "edited-symbol",
+                fileId: "edited-file",
+                name: "EditedSymbol",
+                kind: "function",
+                exported: true,
+              },
+            ],
+            [
+              "lexical-symbol",
+              {
+                symbolId: "lexical-symbol",
+                fileId: "lexical-file",
+                name: "DurableKeyword",
+                kind: "function",
+                exported: true,
+              },
+            ],
+          ]),
+        getFilesByIds: async () =>
+          new Map([
+            [
+              "edited-file",
+              { fileId: "edited-file", relPath: "src/edited.ts" },
+            ],
+            [
+              "lexical-file",
+              { fileId: "lexical-file", relPath: "src/durable.ts" },
+            ],
+          ]),
+      },
     });
-    assert.strictEqual(result, false);
+
+    const { resolveStartNodesLadybug } = await import(
+      "../../dist/graph/slice/start-node-resolver.js?mixed-recovery"
+    );
+    const result = await resolveStartNodesLadybug(
+      conn as never,
+      "repo",
+      {
+        editedFiles: ["src/edited.ts"],
+        taskText: "durable keyword",
+      },
+      queryContext as never,
+      emptyOverlaySnapshot as never,
+    );
+
+    assert.equal(lexicalCalls, 1);
+    assert.strictEqual(queryContext.connection, conn);
+    assert.deepEqual(result.startNodes, [
+      { symbolId: "edited-symbol", source: "editedFile" },
+      { symbolId: "lexical-symbol", source: "taskText" },
+    ]);
   });
 
-  it("returns false when no vector indexes available", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: true,
-      retrievalMode: "legacy",
-      extensionCaps: { fts: true, vector: false },
-      health: { fts: true, vectorJinaCode: false, vectorNomic: false },
+  it("does not run raw recovery when a shared row duplicates a structural seed", async (t) => {
+    let lexicalCalls = 0;
+    mockStartNodeModules(t, {
+      searchContextCandidates: async () => ({
+        rows: [
+          {
+            symbolId: "edited-symbol",
+            filePath: "src/edited.ts",
+            score: 1,
+            source: "fts",
+            tier: 1,
+            sourceRanks: { fts: 1 },
+            provenance: {},
+          },
+        ],
+        capabilities: {},
+      }),
+      ladybug: {
+        getFileByRepoPath: async () => ({
+          fileId: "edited-file",
+          repoId: "repo",
+          relPath: "src/edited.ts",
+        }),
+        getSymbolIdsByFile: async () => ["edited-symbol"],
+        getCallersOfSymbols: async () => [],
+        searchSymbolsLiteBatch: async () => {
+          lexicalCalls += 1;
+          return [];
+        },
+      },
     });
-    assert.strictEqual(result, false);
+
+    const { resolveStartNodesLadybug } = await import(
+      "../../dist/graph/slice/start-node-resolver.js?duplicate-structural"
+    );
+    const result = await resolveStartNodesLadybug(
+      {} as never,
+      "repo",
+      {
+        editedFiles: ["src/edited.ts"],
+        taskText: "edited symbol",
+      },
+      {} as never,
+      emptyOverlaySnapshot as never,
+    );
+
+    assert.equal(lexicalCalls, 0);
+    assert.deepEqual(result.startNodes, [
+      { symbolId: "edited-symbol", source: "editedFile" },
+    ]);
   });
 
-  it("returns true for explicit hybrid mode with FTS", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: true,
-      retrievalMode: "hybrid",
-      extensionCaps: { fts: true, vector: true },
-      health: { fts: true, vectorJinaCode: false, vectorNomic: false },
+  it("does not turn shared retrieval admission errors into lexical fallback", async (t) => {
+    const { IndexError } = await import("../../dist/domain/errors.js");
+    let lexicalCalls = 0;
+
+    mockStartNodeModules(t, {
+      searchContextCandidates: async () => {
+        throw new IndexError("graph retrieval rejected");
+      },
+      ladybug: {
+        searchSymbolsLiteBatch: async () => {
+          lexicalCalls += 1;
+          return [];
+        },
+      },
     });
-    assert.strictEqual(result, true);
-  });
 
-  it("returns false for explicit hybrid mode without FTS", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: true,
-      retrievalMode: "hybrid",
-      extensionCaps: { fts: true, vector: true },
-      health: { fts: false, vectorJinaCode: true, vectorNomic: true },
-    });
-    assert.strictEqual(result, false);
-  });
-
-  it("returns true when only vectorNomic is available (legacy auto-promote)", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: true,
-      retrievalMode: "legacy",
-      extensionCaps: { fts: true, vector: true },
-      health: { fts: true, vectorJinaCode: false, vectorNomic: true },
-    });
-    assert.strictEqual(result, true);
-  });
-
-  it("returns false when FTS healthy but no vector models (legacy mode)", () => {
-    const result = isHybridRetrievalAvailableLogic({
-      semanticEnabled: true,
-      retrievalMode: "legacy",
-      extensionCaps: { fts: true, vector: true },
-      health: { fts: true, vectorJinaCode: false, vectorNomic: false },
-    });
-    assert.strictEqual(result, false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// shouldFallbackToLegacy — auto-flip tests (Stage 2 addition)
-// ---------------------------------------------------------------------------
-
-describe("shouldFallbackToLegacy — no auto-flip (Stage 2)", () => {
-  it("returns true when mode is legacy (no auto-flip in shouldFallbackToLegacy)", () => {
-    const caps = makeCaps({ fts: true, vectorJinaCode: true });
-    const config: MinimalRetrievalConfig = { mode: "legacy" };
-    assert.strictEqual(shouldFallbackToLegacy(caps, config), true);
-  });
-
-  it("returns true when mode is legacy, regardless of full capabilities", () => {
-    const caps = makeCaps({ fts: true, vectorJinaCode: true, vectorNomic: true });
-    const config: MinimalRetrievalConfig = { mode: "legacy" };
-    assert.strictEqual(shouldFallbackToLegacy(caps, config), true);
-  });
-
-  it("returns false when mode is hybrid and FTS is available", () => {
-    const caps = makeCaps({ fts: true });
-    const config: MinimalRetrievalConfig = { mode: "hybrid" };
-    assert.strictEqual(shouldFallbackToLegacy(caps, config), false);
-  });
-
-  it("returns true when mode is hybrid but FTS is unavailable", () => {
-    const caps = makeCaps({ fts: false });
-    const config: MinimalRetrievalConfig = { mode: "hybrid" };
-    assert.strictEqual(shouldFallbackToLegacy(caps, config), true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Source-text verification — shouldFallbackToLegacy auto-flip
-// ---------------------------------------------------------------------------
-
-describe("shouldFallbackToLegacy — source verification (Stage 2)", () => {
-  const src = readFileSync(
-    join(process.cwd(), "src/retrieval/fallback.ts"),
-    "utf8",
-  );
-
-  it("shouldFallbackToLegacy takes caps and config parameters", () => {
-    assert.ok(
-      src.includes("caps: RetrievalCapabilities"),
-      "shouldFallbackToLegacy should accept a caps parameter",
+    const { resolveStartNodesLadybug } = await import(
+      "../../dist/graph/slice/start-node-resolver.js?admission-error"
     );
-    assert.ok(
-      src.includes("config: SemanticRetrievalConfig"),
-      "shouldFallbackToLegacy should accept a config parameter",
+    await assert.rejects(
+      () =>
+        resolveStartNodesLadybug(
+          {} as never,
+          "repo",
+          { taskText: "durable keyword" },
+          {} as never,
+          emptyOverlaySnapshot as never,
+        ),
+      (error: unknown) => error instanceof IndexError,
     );
-  });
-
-  it("shouldFallbackToLegacy checks mode and fts", () => {
-    assert.ok(
-      src.includes('config.mode === "legacy"'),
-      "should check for legacy mode",
-    );
-    assert.ok(
-      src.includes("!caps.fts"),
-      "should check FTS availability",
-    );
-  });
-
-  it("isHybridRetrievalAvailable is exported", () => {
-    assert.ok(
-      src.includes("export async function isHybridRetrievalAvailable"),
-      "isHybridRetrievalAvailable should be an exported async function",
-    );
-  });
-
-  it("isHybridRetrievalAvailable checks semantic.enabled", () => {
-    assert.ok(
-      src.includes("semanticConfig?.enabled"),
-      "should check semantic enabled flag",
-    );
-  });
-
-  it("isHybridRetrievalAvailable checks explicit hybrid mode health", () => {
-    assert.ok(
-      src.includes('retrievalConfig?.mode === "hybrid"'),
-      "should check for explicit hybrid mode",
-    );
-    assert.ok(
-      src.includes("return health.fts;"),
-      "should check FTS health for explicit hybrid mode",
-    );
-  });
-
-  it("isHybridRetrievalAvailable auto-promotes from legacy when healthy", () => {
-    assert.ok(
-      src.includes("health.fts && (health.vectorNomic || health.vectorJinaCode)"),
-      "should auto-promote from legacy when FTS + vector healthy",
-    );
-  });
-
-  it("isHybridRetrievalAvailable catches exceptions and returns false", () => {
-    assert.ok(
-      src.includes("catch"),
-      "should have try/catch",
-    );
-    assert.ok(
-      src.includes("return false"),
-      "should return false on exception",
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Source-text verification — start-node-resolver hybrid integration
-// ---------------------------------------------------------------------------
-
-describe("start-node-resolver — hybrid retrieval integration (Stage 2)", () => {
-  const src = readFileSync(
-    join(process.cwd(), "src/graph/slice/start-node-resolver.ts"),
-    "utf8",
-  );
-
-  it("imports hybrid retrieval types", () => {
-    assert.ok(
-      src.includes("HybridSearchResultItem") || src.includes("hybridSearch"),
-      "should reference hybrid search types or functions",
-    );
-  });
-
-  it("imports or references isHybridRetrievalAvailable or shouldFallbackToLegacy", () => {
-    const hasHybridCheck =
-      src.includes("isHybridRetrievalAvailable") ||
-      src.includes("shouldFallbackToLegacy") ||
-      src.includes("hybridSearch");
-    assert.ok(
-      hasHybridCheck,
-      "should reference hybrid retrieval availability check or hybrid search",
-    );
-  });
-
-  it("references retrieval evidence in start node resolution", () => {
-    const hasEvidence =
-      src.includes("retrievalEvidence") ||
-      src.includes("RetrievalEvidence") ||
-      src.includes("evidence");
-    assert.ok(
-      hasEvidence,
-      "should reference retrieval evidence gathering",
-    );
-  });
-
-  it("routes taskText through the shared candidate core and preserves slice seeds", () => {
-    const ladybugSource = src.slice(
-      src.indexOf("export async function resolveStartNodesLadybug"),
-      src.indexOf("async function collectEntryFirstHopSymbolsLadybug"),
-    );
-    const taskTextBlock =
-      ladybugSource.match(
-        /if \(request\.taskText\) \{[\s\S]*?\/\/ Fallback: if taskText/,
-      )?.[0] ?? "";
-    const explicitEntryReturn = ladybugSource.indexOf(
-      "if ((request.entrySymbols?.length ?? 0) > 0)",
-    );
-    const sharedCoreCall = ladybugSource.indexOf(
-      "searchContextCandidates(",
-    );
-
-    assert.match(taskTextBlock, /searchContextCandidates\(/);
-    assert.doesNotMatch(taskTextBlock, /hybridSearch\(/);
-    assert.ok(explicitEntryReturn >= 0 && explicitEntryReturn < sharedCoreCall);
-    assert.match(ladybugSource, /if \(request\.stackTrace\)/);
-    assert.match(ladybugSource, /if \(request\.failingTestPath\)/);
-    assert.match(ladybugSource, /if \(request\.editedFiles\)/);
-    assert.match(
-      ladybugSource,
-      /return \{ startNodes: sortedNodes, retrievalEvidence, hybridSearchItems \};/,
-    );
+    assert.equal(lexicalCalls, 0);
   });
 });

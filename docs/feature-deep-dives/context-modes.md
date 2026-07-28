@@ -1,263 +1,107 @@
-# Context Modes
+# Context Profiles
 
-[Back to README](../../README.md) | [Agent Context Overview](./agent-context.md)
-
----
-
-## The Problem
-
-Agents need different amounts of code context for different jobs.
-
-A targeted question such as "check NaN handling in `normalizeEdgeConfidence`" should not return the same envelope as "understand the auth pipeline." Manual `sdl.workflow` assembly can get either answer, but it forces the model to spend tokens on planning, step wiring, and repeated envelopes.
-
-`sdl.context` solves that by exposing two retrieval modes inside Code Mode:
-
-- `contextMode: "precise"` for minimal, targeted evidence
-- `contextMode: "broad"` for richer surrounding context
-
----
+`sdl.context` uses one retrieval pipeline with declarative task profiles. Callers describe the task, priority targets, and token budget instead of selecting a breadth or semantic mode.
 
 ## Mental Model
 
-```text
-"What does X do?"          -> precise
-"Check Y for bugs"         -> precise
-"Review this symbol"       -> precise
-"Understand this module"   -> broad
-"Trace this flow"          -> broad
-"Investigate this system"  -> broad
+Three inputs shape a request:
+
+1. `taskType` selects the deterministic profile.
+2. Flat focus fields identify Tier-0 seed priorities.
+3. `budget.maxTokens` bounds the complete response.
+
+The engine chooses available retrieval lanes, expands the graph, and selects evidence bundles under that budget. Focus fields do not create an unlimited guarantee or hard path boundary.
+
+## Task Profiles
+
+| Task type | Primary goal | Preferred evidence | Test default |
+| --- | --- | --- | --- |
+| `debug` | Trace a failure and its nearby implementation | card, hot path, skeleton | included |
+| `review` | Inspect behavior, dependencies, and risk | card, skeleton, hot path | included |
+| `implement` | Find edit targets and supporting structure | card, skeleton | included |
+| `explain` | Describe an API or behavior from source evidence | card, skeleton | excluded |
+
+The profile also selects expansion direction and depth. Explicit `includeTests` overrides the profile default.
+
+## Priority Seeds
+
+Use `focusSymbols` when canonical symbol IDs or names are known. Use `focusPaths` for repository-relative files or directories, and use `chatMentions` for identifiers named in the current conversation.
+
+Resolved focus candidates enter Tier 0 in deterministic order. Exact task-text identifiers can also enter Tier 0. Remaining fused and graph-expanded candidates enter Tier 1.
+
+If every selected Tier-0 rung cannot fit, the response uses `status: "budgetLimited"`, emits no Tier-1 evidence, and identifies the highest-ranked omitted Tier-0 work.
+
+## Retrieval Levels
+
+The engine reports capability, not caller preference:
+
+| Level | Meaning |
+| --- | --- |
+| `hybrid` | Lexical and vector lanes contribute with full configured coverage |
+| `hybrid-partial` | Vector retrieval contributes with partial coverage and adjusted weight |
+| `lexical` | Lexical evidence contributes without vector evidence |
+| `graph-only` | Resolved graph seeds remain available without text or vector candidates |
+
+An unreadable graph fails before lane selection. A request with insufficient capabilities returns a structured error rather than a successful `graph-only` or `empty` payload.
+
+## Evidence Selection
+
+Each candidate owns one bundle:
+
+- card
+- optional skeleton
+- optional hot path
+
+The selector orders Tier 0 before Tier 1 and compares deterministic value per estimated token. Hydration runs only for selected bundles. After hydration, one exact serialized-size pass evicts optional Tier-1 rungs when estimates were low.
+
+Raw windows are not a context rung. Use `sdl.retrieve` `codeNeedWindow` with a concrete reason and identifiers when exact source is necessary.
+
+## Response Status
+
+- `complete` means all selected evidence fits.
+- `budgetLimited` means the budget excludes resolved priority or optional work.
+- `empty` means healthy available lanes found no candidates.
+
+`omitted.byReason` summarizes the full omitted set. `omitted.highestRanked` remains bounded and includes logical recovery actions.
+
+## Focused Request
+
+```json
+{
+  "repoId": "my-repo",
+  "taskType": "review",
+  "taskText": "Review parseConfig timeout validation",
+  "budget": { "maxTokens": 3000 },
+  "focusSymbols": ["parseConfig"],
+  "focusPaths": ["src/config/parse.ts"],
+  "includeTests": true
+}
 ```
 
-If the task names a specific symbol or line of reasoning, start with `precise`.
-If the task names a behavior, subsystem, or relationship, start with `broad`.
+## Exploratory Request
 
----
-
-## Precise Mode
-
-Precise mode is designed for targeted lookups.
-
-Characteristics:
-
-- aggressively ranks symbols and keeps only the most relevant ones
-- cluster expansion is capped at 4 symbols maximum, ensuring tight focus
-- uses smaller rung plans
-- strips non-essential response-envelope fields
-- usually beats manual `sdl.workflow` retrieval on both bytes and latency
-
-Best for:
-
-- symbol explanations
-- focused bug checks
-- review of one known area
-- pattern lookup before a narrow implementation
-
----
-
-## Broad Mode
-
-Broad mode is designed for investigation and exploration.
-
-Characteristics:
-
-- admits more surrounding symbols via graph-guided cluster expansion (capped at 10 symbols, max 3 per cluster, with diversity scoring to avoid over-representing a single cluster)
-- returns a compact response with `finalEvidence`, `answer`, and `summary` as the primary model-visible fields
-- the `answer` field is always preserved on successful responses -- budget pressure trims other fields first and may shorten the answer, but never removes it
-- surfaces next-step guidance via `nextBestAction` when relevant
-- favors structural understanding over minimum size
-
-Best for:
-
-- module or subsystem walkthroughs
-- tracing a pipeline or request path
-- broader debugging with uncertain scope
-- exploratory review work
-
----
-
-## Task-Type Plans
-
-| Task type   | Precise          | Broad                                |
-| :---------- | :--------------- | :----------------------------------- |
-| `debug`     | card -> hotPath  | card -> skeleton -> hotPath -> raw\* |
-| `review`    | card -> skeleton -> hotPath | card -> skeleton                     |
-| `implement` | card -> skeleton | card -> skeleton -> hotPath          |
-| `explain`   | card -> skeleton | card -> skeleton                     |
-
-`*` Raw still depends on policy and diagnostics requirements.
-
-The important part is not the exact rung count. It is the routing choice:
-
-- use context tools for understanding
-- use workflows for procedure
-
----
-
-## Seeding and Ranking
-
-Candidate seeding uses a mode-based retrieval pipeline:
-
-1. **Exact scope** -- explicit `focusSymbols`, exact symbol mentions, and exact explicit file paths seed first so known targets stay fast. Directory paths scope retrieval and expand only when scoped seeding returns no candidates.
-2. **Path inference** -- file-like task text is mapped to indexed files and nearby symbols, but inferred paths are low-priority anchors rather than a reason to stop discovery.
-3. **Lexical search** -- identifier extraction from camelCase, PascalCase, snake_case, path segments, and domain terms is matched against symbol names and summaries.
-4. **Hybrid entity search** -- broad mode uses bounded FTS + vector retrieval with reciprocal-rank fusion by default; precise mode uses it only when `options.semantic` is `true`. Symbol candidates support precise lookup, while file-summary, cluster, and process candidates expand into representative symbols for broad discovery.
-5. **Feedback priors** -- symbols previously marked useful or missing in past tasks are boosted when the task asks about related feedback or the retrieval signal is otherwise thin.
-
-`options.semantic` controls the retrieval gate:
-
-- omitted: use bounded hybrid entity search in broad mode and lexical retrieval in precise mode
-- `true`: force bounded hybrid entity search in either mode and retain the bounded lexical lane for exact identifiers and domain terms
-- `false`: disable hybrid entity search and keep either mode lexical-only
-
-Explicit `focusPaths` constrain whichever retrieval lane is active. Broad mode defaults to hybrid discovery for recall, while precise mode preserves the lexical fast path unless the caller forces semantic retrieval.
-
-Forced semantic retrieval treats inferred paths as soft coverage hints. With explicit precise scope, SDL also runs deterministic scoped lexical queries for every named concept and catalog action. Each resolved named seed remains eligible even when another concept misses or the semantic lane found the same symbol first. Multi-term lexical matches prefer complete query coverage before name/path affinity breaks ties.
-
-Precise forced-semantic calls may retain up to 20 cards. Once at least five named/action seeds resolve, the card budget tightens to those seeds plus two semantic complements, still within the 20-card ceiling. Repeated evidence from one file is capped at three cards, with named/action representatives selected inside that hard cap. The skeleton rung can expand from five to at most eight named targets. Every skeleton summary keeps a structural/signature prefix plus task-relevant imports and declarations inside 480 characters, so increased coverage does not create an unbounded response.
-
-Broad review retrieval derives a bounded evidence scope from multi-term declaration coverage in the retrieved candidates. It may add existing companion modules for a strongly supported file, but it does not promote inferred paths into explicit caller focus or add prompt-specific symbol vocabulary.
-
-After seeding, an evidence-aware multi-factor scorer ranks every candidate using:
-
-- retrieval confidence from the seeding stage
-- graph proximity to anchor symbols
-- lexical overlap between symbol names/summaries and task text
-- summary support (does the symbol's summary relate to the task?)
-- feedback history from prior tasks
-- structural signals (exported symbols, entry-point position)
-
-For task-relevant broad-review candidates, the final selector also considers bounded graph importance from fan-in, fan-out, K-core, test references, and candidate-relative PageRank. PageRank refines ordering only after lexical and path evidence establishes scope; global centrality cannot introduce unrelated symbols or override explicit focus.
-
-The threshold changes by mode:
-
-- precise keeps only top-scoring symbols
-- broad admits more near-matches to widen context
-
-## Budget Trimming and Confidence
-
-When the planner must trim rungs to stay within budget, it now considers the retrieval confidence tier:
-
-- **High confidence**: trims aggressively to the cheapest rungs (usually card-only)
-- **Medium confidence**: retains card and at least one diagnostic rung (skeleton or hotPath)
-- **Low confidence**: escalates to more rungs to compensate for uncertainty
-
-This means budget pressure no longer uniformly removes expensive rungs -- the planner preserves diagnostic depth when the retrieval signal is weak.
-
-## Evidence Optimization
-
-`options.evidenceOptimization: "dedupe"` is experimental and opt-in. It normalizes `finalEvidence`, removes exact duplicates, and applies first-pass dominance across ladder evidence: when a card, skeleton, hot path, or code window repeats the same meaningful content, SDL-MCP keeps the richer evidence item and drops the weaker duplicate before building the summary and answer.
-
-`options.evidenceOptimization: "budgeted"` runs the same normalization/dedupe pass, then uses `budget.maxTokens` as an evidence budget. Selection is deterministic greedy by value per token and preserves required groups: a selected hot path must carry a matching symbol card when one is available.
-
-`options.evidenceOptimization: "global"` is the Phase 3 broad-response optimizer. In broad mode, it treats `summary`, `answer`, and `finalEvidence` as one response budget: evidence summaries stay in `finalEvidence`, narrative fields collapse to counts and pointers, and oversized responses run the budgeted selector against the remaining response headroom before falling back to truncation. In precise mode, `global` behaves like `budgeted`.
-
-The default is `"off"`, so existing `sdl.context` responses remain unchanged unless callers enable the option.
-
----
-
-## Response Differences
-
-### Broad mode
-
-Returns a compact response by default. The model-visible payload includes:
-
-- `taskId`
-- `taskType`
-- `success`
-- `summary`
-- `answer`
-- `finalEvidence` (primary evidence surface)
-- `nextBestAction` (when relevant)
-- `retrievalEvidence` (when requested and hybrid retrieval produced it)
-- `error` (when failed)
-
-The fields `actionsTaken`, `path`, and `metrics` are computed internally but omitted from the model-visible response at the MCP serialization layer.
-
-### Precise mode
-
-Returns only the context-bearing fields:
-
-- `taskId`
-- `taskType`
-- `success`
-- `path`
-- `finalEvidence`
-- `metrics`
-
-Both modes are compact. Broad mode favors `finalEvidence` and `answer` as the primary surfaces. Precise mode favors `finalEvidence` and `path` for chain-efficient downstream use.
-
----
-
-## Benchmarks
-
-Measured against manual `sdl.workflow` retrieval on the SDL-MCP codebase:
-
-| Scenario            | Manual workflow                   | Precise context        | Broad context     |
-| :------------------ | :-------------------------------- | :--------------------- | :---------------- |
-| Targeted debug      | largest response                  | smallest response      | richer but larger |
-| Focused explain     | larger envelope                   | smallest useful answer | richer structure  |
-| Broad investigation | incomplete without extra planning | often too narrow       | best fit          |
-
-The consistent pattern is:
-
-- precise wins when the target is already known
-- broad wins when the agent is still mapping the problem space
-- forced semantic/hybrid retrieval must keep aggregate recall at or above `85%`, noise at or below `10%`, and zero failed cases; precise/broad recall and forced-semantic latency remain reported diagnostics, while the separate default scoped-precise path must keep `p95 <= 250ms`
-
----
+```json
+{
+  "repoId": "my-repo",
+  "taskType": "explain",
+  "taskText": "Trace request dispatch from the server entrypoint to handlers",
+  "budget": { "maxTokens": 7000 },
+  "includeTests": false,
+  "responseMode": "auto"
+}
+```
 
 ## Decision Guide
 
-```mermaid
-%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
-flowchart TD
-    Q["Does the task name a specific symbol or narrow check?"]
-    P["Use contextMode: precise"]
-    B["Use contextMode: broad"]
-    W["Need a procedural pipeline instead of retrieval?"]
-    WF["Use sdl.workflow"]
-
-    Q e1@-->|Yes| P
-    Q e2@-->|No| B
-    P e3@--> W
-    B e4@--> W
-    W e5@-->|No| P
-    W e6@-->|Yes| WF
-
-    classDef source fill:#E7F8F2,stroke:#0F766E,stroke-width:2px,color:#102A43;
-    classDef process fill:#E8F1FF,stroke:#2563EB,stroke-width:2px,color:#102A43;
-    classDef decision fill:#FFF4D6,stroke:#B45309,stroke-width:2px,color:#102A43;
-    classDef storage fill:#F2E8FF,stroke:#7C3AED,stroke-width:2px,color:#102A43;
-    classDef output fill:#FFE8EF,stroke:#BE123C,stroke-width:2px,color:#102A43;
-    classDef muted fill:#F8FAFC,stroke:#64748B,stroke-width:1px,color:#102A43;
-    classDef animate stroke:#0F766E,stroke-width:2px,stroke-dasharray:10\,5,stroke-dashoffset:900,animation:dash 22s linear infinite;
-    class e1,e2,e3,e4,e5,e6 animate;
-```
-
-In plain terms:
-
-- `precise` for a known target
-- `broad` for an uncertain space
-- `sdl.workflow` only when the job is actually procedural
-
----
-
-## Code Mode Implication
-
-Inside Code Mode:
-
-- `sdl.context` is the first stop for explain/debug/review/implement retrieval
-- `sdl.workflow` stays reserved for runtime execution, transforms, and batch operations
-
-When Code Mode is disabled, fall back to the manual ladder (`symbol.search` -> `symbol.getCard` -> `slice.build` -> code tools). That separation is intentional. If an agent starts using workflows for retrieval by default, it is reintroducing the planning overhead that context mode exists to remove.
-
----
+- Use `sdl.context` when the task needs task-shaped evidence across multiple symbols.
+- Add focus fields when exact targets are already known.
+- Reduce `budget.maxTokens` for a tighter payload; increase it only when bounded omissions identify required work.
+- Use `sdl.retrieve` for one exact card, slice, skeleton, hot path, or code window.
+- Use `sdl.workflow` for procedural pipelines, runtime execution, transforms, or mutations.
 
 ## Related
 
-- [Agent Context Overview](./agent-context.md)
+- [Agent Context](./agent-context.md)
 - [Code Mode](./code-mode.md)
-- [Runtime Execution](./runtime-execution.md)
-- [Token Savings Meter](./token-savings-meter.md)
-
-[Back to README](../../README.md)
+- [Token Economy](./token-economy.md)
+- [Graph Slicing](./graph-slicing.md)

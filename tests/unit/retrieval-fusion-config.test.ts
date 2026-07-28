@@ -10,7 +10,6 @@ describe("retrieval fusion config", () => {
     assert.deepEqual(fusion.weights, {
       fts: 1,
       vector: 1,
-      legacyFallback: 1,
       overlay: 1,
     });
     assert.equal(fusion.partialCoverageThresholdPermille, 1000);
@@ -22,7 +21,6 @@ describe("retrieval fusion config", () => {
         weights: {
           fts: 3,
           vector: 2,
-          legacyFallback: 1,
           overlay: 4,
         },
         partialCoverageThresholdPermille: 750,
@@ -32,7 +30,6 @@ describe("retrieval fusion config", () => {
     assert.deepEqual(fusion.weights, {
       fts: 3,
       vector: 2,
-      legacyFallback: 1,
       overlay: 4,
     });
     assert.equal(fusion.partialCoverageThresholdPermille, 750);
@@ -45,7 +42,6 @@ describe("retrieval fusion config", () => {
           weights: {
             fts: 1,
             vector: 1,
-            legacyFallback: 1,
             overlay: 1,
             other: 1,
           },

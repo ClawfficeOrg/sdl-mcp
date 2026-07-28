@@ -1025,10 +1025,8 @@ const SymbolSearchNextBestActionSchema = z.object({
     repoId: z.string().min(1),
     taskType: z.literal("explain"),
     taskText: z.string().min(1),
-    options: z.object({
-      focusPaths: z.array(z.string().min(1)).length(1),
-      contextMode: z.literal("precise"),
-    }),
+    budget: z.object({ maxTokens: z.number().int().min(512) }),
+    focusPaths: z.array(z.string().min(1)).length(1),
   }),
   rationale: z.string().min(1),
 });
@@ -2640,51 +2638,15 @@ export type PRRiskAnalysisResponse = z.infer<
 // Agent Context Schemas
 // ============================================================================
 
-const AgentContextBudgetSchema = z
-  .strictObject(
-    {
-      maxTokens: z.number().min(512).optional().describe("Maximum tokens to consume"),
-      maxEstimatedTokens: z
-        .number()
-        .min(512)
-        .optional()
-        .describe("Alias for maxTokens, accepted for slice.build compatibility"),
-      maxActions: z
-        .number()
-        .optional()
-        .describe("Maximum number of actions to execute"),
-      maxDurationMs: z
-        .number()
-        .optional()
-        .describe("Maximum duration in milliseconds"),
-    },
-    {
-      error: (issue) =>
-        issue.code === "unrecognized_keys" && issue.keys.includes("maxCards")
-          ? "sdl.context budget does not support maxCards; use maxTokens/maxEstimatedTokens or call slice.build for card-count budgets"
-          : undefined,
-    },
-  )
-  .transform((budget) => ({
-    ...(budget.maxTokens !== undefined ||
-    budget.maxEstimatedTokens !== undefined
-      ? { maxTokens: budget.maxTokens ?? budget.maxEstimatedTokens }
-      : {}),
-    ...(budget.maxActions !== undefined
-      ? { maxActions: budget.maxActions }
-      : {}),
-    ...(budget.maxDurationMs !== undefined
-      ? { maxDurationMs: budget.maxDurationMs }
-      : {}),
-  }));
+const AgentContextBudgetSchema = z.strictObject({
+  maxTokens: z
+    .number()
+    .int()
+    .min(512)
+    .describe("Maximum tokens for the complete context response"),
+});
 
-export const AgentContextRequestSchema = z.object({
-  /** Wire format for the response payload. "packed" emits packed wire format (gate-protected); "auto" picks the smaller of packed vs JSON; "json" forces legacy JSON. Default: "auto". */
-  wireFormat: z.enum(["json", "packed", "auto"]).optional().default("auto"),
-  refsMode: z.enum(["auto", "off"]).optional().default("auto"),
-  responseMode: ResponseModeSchema.describe(
-    "Large-response handling: inline preserves legacy output; auto/handle stores full responses behind response.get handles.",
-  ),
+export const AgentContextRequestSchema = z.strictObject({
   repoId: z
     .string()
     .min(1)
@@ -2694,289 +2656,185 @@ export const AgentContextRequestSchema = z.object({
     .enum(["debug", "review", "implement", "explain"])
     .describe("Type of task to perform"),
   taskText: z.string().min(1).max(2000).describe("Task description or prompt"),
-  budget: AgentContextBudgetSchema.optional().describe(
-    "Budget constraints for the task",
+  budget: AgentContextBudgetSchema.describe(
+    "Token budget for the complete context response",
   ),
-  options: z
-    .object({
-      focusSymbols: z
-        .array(z.string())
-        .optional()
-        .describe("List of symbol IDs to focus on"),
-      focusPaths: z
-        .array(z.string())
-        .optional()
-        .describe("List of file paths to focus on"),
-      includeTests: z
-        .boolean()
-        .optional()
-        .describe("Whether to include test files"),
-      requireDiagnostics: z
-        .boolean()
-        .optional()
-        .describe("Whether to require diagnostic information"),
-      contextMode: z
-        .enum(["precise", "broad"])
-        .optional()
-        .describe(
-          "Context breadth: precise returns minimal workflow-efficient context, broad returns richer surrounding context. Default: broad",
-        ),
-      semantic: z.boolean().optional().describe(
-        "Use hybrid (FTS + vector) retrieval for context seeding. Omitted: broad mode uses hybrid retrieval and precise mode uses lexical retrieval; true forces hybrid retrieval; false disables it.",
-      ),
-      includeRetrievalEvidence: z
-        .boolean()
-        .optional()
-        .describe(
-          "Include retrieval evidence (which lanes contributed, per-source counts) in the response. Default: true.",
-        ),
-      evidenceOptimization: z
-        .enum(["off", "dedupe", "budgeted", "global"] as const)
-        .optional()
-        .describe(
-          "Experimental finalEvidence optimizer. dedupe removes exact duplicates and subsumed ladder evidence; budgeted also greedily selects evidence by value per token under budget.maxTokens while preserving required card support for selected hot paths; global applies broad-mode response optimization so summary/answer/finalEvidence are selected together under the response budget. Default: off.",
-        ),
-      chatMentions: z
-        .array(z.string().min(1).max(200))
-        .max(20)
-        .optional()
-        .describe(
-          "Identifiers / symbol names / IDs the user just mentioned in chat. Seeds Personalized PageRank for chat-aware re-ranking.",
-        ),
-      chatMentionWeights: z
-        .record(z.string(), z.number().min(0).max(10))
-        .optional()
-        .describe(
-          "Optional per-mention weight overrides; missing entries default to uniform 1.0.",
-        ),
-      pprDirection: z
-        .enum(["out", "in", "both"])
-        .optional()
-        .describe(
-          "Walk direction across the dependency graph for chat-aware re-ranking. Default: both.",
-        ),
-      pprWeight: z
-        .number()
-        .min(0)
-        .max(2)
-        .optional()
-        .describe(
-          "PPR coefficient: final multiplier is `1 + pprWeight × pprScore`, capped per call at 2× and across stacked boosts at 4× the original RRF score. Default: 2.0 (tuned 2026-04-27).",
-        ),
-      cardDetail: z
-        .enum(["task", "full"])
-        .optional()
-        .describe(
-          "Context card detail: task applies task-conditioned card projection; full returns unprojected cards. Default: task.",
-        ),
-      answerFirst: z
-        .boolean()
-        .optional()
-        .describe(
-          "Experimental: for explain/debug tasks, return a compact answer plus evidence handles when summary provenance coverage is sufficient.",
-        ),
-    })
+  focusPaths: z
+    .array(z.string().min(1))
     .optional()
-    .describe("Task-specific options"),
-  includeDiagnostics: z
+    .describe("Repository-relative paths to prioritize"),
+  focusSymbols: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Symbol IDs or names to prioritize"),
+  chatMentions: z
+    .array(z.string().min(1).max(200))
+    .max(20)
+    .optional()
+    .describe("Identifiers or symbols explicitly mentioned by the caller"),
+  includeTests: z
     .boolean()
     .optional()
-    .describe(
-      "Include phase timing diagnostics for performance investigation.",
-    ),
+    .describe("Override the task profile's test-file preference"),
   ifNoneMatch: z.string().optional(),
+  responseMode: ResponseModeSchema.describe(
+    "Large-response handling: inline returns the payload; auto/handle may store it behind response.get.",
+  ),
+  refsMode: z.enum(["auto", "off"]).optional().default("auto"),
+  /** Wire format for the response payload. */
+  wireFormat: z.enum(["json", "packed", "auto"]).optional().default("auto"),
+});
+
+const ContextTaskTypeSchema = z.enum([
+  "debug",
+  "review",
+  "implement",
+  "explain",
+]);
+const ContextRungSchema = z.enum(["card", "skeleton", "hotPath"]);
+const ContextLaneIdSchema = z.enum([
+  "exactIdentifier",
+  "symbolFts",
+  "symbolVec",
+  "fileSummaryFts",
+  "fileSummaryVec",
+  "graph",
+  "overlay",
+  "feedback",
+  "memory",
+]);
+const ContextLogicalActionSchema = z.object({
+  id: z.string(),
+  args: z.record(z.string(), z.unknown()),
+});
+const ContextEvidenceSchema = z.object({
+  rung: ContextRungSchema,
+  symbolId: z.string(),
+  path: z.string(),
+  rank: z.number().int().positive(),
+  tier: z.union([z.literal(0), z.literal(1)]),
+  lanes: z.array(ContextLaneIdSchema),
+  content: z.unknown().optional(),
+  ref: SessionContentRefSchema.optional(),
+  unchanged: z.literal(true).optional(),
+  changedSincePrior: z.boolean().optional(),
+});
+const ContextEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  kind: z.string(),
+  confidencePermille: z.number().int().min(0).max(1000),
+});
+const ContextOmittedItemSchema = z.object({
+  symbolId: z.string(),
+  path: z.string(),
+  rung: ContextRungSchema,
+  rank: z.number().int().positive(),
+  tier: z.union([z.literal(0), z.literal(1)]),
+  reason: z.enum(["budget", "unavailable"]),
+  action: ContextLogicalActionSchema,
+});
+const ContextPackedStatsSchema = z.object({
+  encoderId: z.string(),
+  jsonBytes: z.number().int().nonnegative(),
+  packedBytes: z.number().int().nonnegative(),
+  jsonTokens: z.number().int().nonnegative().optional(),
+  packedTokens: z.number().int().nonnegative().optional(),
+  savedRatio: z.number(),
+  tokenSavedRatio: z.number().optional(),
+  axisHit: z.enum(["bytes", "tokens"]).optional(),
+  candidateDecision: z.enum(["packed", "fallback"]).optional(),
+  gateDecision: z.enum(["packed", "fallback"]),
+  payloadAttached: z.boolean().optional(),
+  returnFormat: z.enum(["json", "packed"]).optional(),
+});
+const ContextSessionDeltaSchema = z.object({
+  newCards: z.number().int().nonnegative(),
+  changedCards: z.number().int().nonnegative(),
+  unchangedRefs: z.number().int().nonnegative(),
 });
 
 const AgentContextPayloadSchema = z.object({
-  taskId: z.string().describe("Unique task identifier"),
-  taskType: z
-    .enum(["debug", "review", "implement", "explain"])
-    .describe("Type of task performed"),
-  actionsTaken: z
-    .array(
+  status: z.enum(["complete", "budgetLimited", "empty"]),
+  taskType: ContextTaskTypeSchema,
+  retrieval: z.object({
+    level: z.enum(["hybrid", "hybrid-partial", "lexical", "graph-only"]),
+    lanes: z.array(
       z.object({
-        id: z.string(),
-        type: z.string(),
-        status: z.enum(["pending", "inProgress", "completed", "failed"]),
-        input: z.record(z.string(), z.unknown()),
-        output: z.unknown().optional(),
-        error: z.string().optional(),
-        timestamp: z.number(),
-        durationMs: z.number(),
-        evidence: z.array(z.unknown()),
+        id: ContextLaneIdSchema,
+        available: z.boolean(),
+        coveragePermille: z.number().int().min(0).max(1000).optional(),
       }),
-    )
-    .describe("Actions taken during execution"),
-  path: z
-    .object({
-      rungs: z.array(z.enum(["card", "skeleton", "hotPath", "raw"])),
-      estimatedTokens: z.number(),
-      estimatedDurationMs: z.number(),
-      reasoning: z.string(),
-    })
-    .describe("Rung path selected for execution"),
-  contextModeHint: z
-    .string()
-    .optional()
-    .describe(
-      "Explanation of how contextMode (precise/broad) affected the results",
     ),
-  finalEvidence: z
-    .array(
-      z.object({
-        type: z.string(),
-        reference: z.string(),
-        summary: z.string().optional(),
-        timestamp: z.number().optional(),
-        ref: SessionContentRefSchema.optional(),
-        unchanged: z.literal(true).optional(),
-        changedSincePrior: z.boolean().optional(),
-      }),
-    )
-    .describe("Evidence collected during execution"),
-  truncation: z
-    .object({
-      originalTokens: z.number().int().nonnegative(),
-      truncatedTokens: z.number().int().nonnegative(),
-      fieldsAffected: z.array(z.string()),
-      continuationHandle: z.string().min(1),
-      continuationAction: z.literal("workflowContinuationGet"),
-    })
-    .optional()
-    .describe(
-      "Present when context was truncated to the response budget; use the continuation action and handle to retrieve the complete result.",
-    ),
-  sessionDelta: z
-    .object({
-      newCards: z.number().int().min(0),
-      changedCards: z.number().int().min(0),
-      unchangedRefs: z.number().int().min(0),
-    })
-    .optional(),
-  summary: z.string().describe("Summary of execution"),
-  success: z.boolean().describe("Whether execution was successful"),
-  status: z
-    .literal("partial")
-    .optional()
-    .describe("Present when a requested response mode falls back to partial output"),
-  error: z.string().optional().describe("Error message if execution failed"),
-  metrics: z
-    .object({
-      totalDurationMs: z.number(),
-      totalTokens: z.number(),
-      totalActions: z.number(),
-      successfulActions: z.number(),
-      failedActions: z.number(),
-      cacheHits: z.number(),
-    })
-    .describe("Execution metrics"),
-  answer: z
-    .string()
-    .optional()
-    .describe("Answer to the task based on collected evidence"),
-  answerFirstFallback: z
-    .literal("insufficient-summary-coverage")
-    .optional()
-    .describe("Why answerFirst fell back to normal card mode"),
-  nextBestAction: z
-    .string()
-    .optional()
-    .describe(
-      "Suggested next action based on execution results and policy decisions",
-    ),
-  /* sdl.context: enriched retrieval evidence */
-  retrievalEvidence: z
-    .object({
-      symptomType: z
-        .enum(["stackTrace", "failingTest", "taskText", "editedFiles"])
-        .optional(),
-      sources: z.array(z.string()).optional(),
-      candidateCountPerSource: z.record(z.string(), z.number()).optional(),
-      topRanksPerSource: z.record(z.string(), z.array(z.number())).optional(),
-      fusionLatencyMs: z.number().optional(),
-      diagnosticTimings: z.record(z.string(), z.number()).optional(),
-      fallbackReason: z.string().optional(),
-      ftsAvailable: z.boolean().optional(),
-      vectorAvailable: z.boolean().optional(),
-      feedbackBoosts: z
-        .object({
-          feedbackMatchCount: z.number(),
-          symbolsBoosted: z.number(),
-          feedbackIds: z.array(z.string()),
-        })
-        .optional(),
-    })
-    .optional(),
-  diagnostics: ToolTimingDiagnosticsSchema.optional(),
-  /** Packed wire-format payload. Populated when wireFormat=packed and gate decision was "packed". */
+  }),
+  evidence: z.array(ContextEvidenceSchema),
+  edges: z.array(ContextEdgeSchema),
+  omitted: z.object({
+    total: z.number().int().nonnegative(),
+    byReason: z.object({
+      budget: z.number().int().nonnegative(),
+      unavailable: z.number().int().nonnegative().optional(),
+    }),
+    highestRanked: z.array(ContextOmittedItemSchema),
+  }),
+  nextActions: z.array(ContextLogicalActionSchema),
+  sessionDelta: ContextSessionDeltaSchema.optional(),
   _packedPayload: z.string().optional(),
-  /** Packed wire-format telemetry. Populated when sdl.context ran the packed gate. */
-  _packedStats: z
-    .object({
-      encoderId: z.string(),
-      jsonBytes: z.number().int().nonnegative(),
-      packedBytes: z.number().int().nonnegative(),
-      jsonTokens: z.number().int().nonnegative().optional(),
-      packedTokens: z.number().int().nonnegative().optional(),
-      savedRatio: z.number(),
-      tokenSavedRatio: z.number().optional(),
-      axisHit: z.enum(["bytes", "tokens"]).optional(),
-      candidateDecision: z.enum(["packed", "fallback"]).optional(),
-      gateDecision: z.enum(["packed", "fallback"]),
-      payloadAttached: z.boolean().optional(),
-      returnFormat: z.enum(["json", "packed"]).optional(),
-    })
-    .optional(),
+  _packedStats: ContextPackedStatsSchema.optional(),
 });
 
-const AgentContextAnswerFirstResponseSchema = z.object({
-  answer: z.string(),
-  confidence: z.enum(["high", "medium"]),
-  evidence: z
-    .array(
-      z.object({
-        symbolId: z.string(),
-        name: z.string(),
-        file: z.string(),
-        why: z.string(),
-      }),
-    )
-    .max(8),
-  expand: z.object({
-    hint: z.string(),
-  }),
+const ContextRecoveryErrorSchema = z.object({
+  code: z.enum([
+    "CONTEXT_RETRIEVAL_INSUFFICIENT",
+    "CONTEXT_RETRIEVAL_BACKEND_FAILED",
+  ]),
+  message: z.string(),
+  recovery: z.array(ContextLogicalActionSchema),
+});
+const ContextBudgetErrorSchema = z.object({
+  code: z.literal("CONTEXT_BUDGET_TOO_SMALL"),
+  message: z.string(),
+  minimumTokens: z.number().int().positive(),
+});
+const AgentContextErrorResponseSchema = z.object({
+  isError: z.literal(true),
+  error: z.union([ContextRecoveryErrorSchema, ContextBudgetErrorSchema]),
 });
 
 export const AgentContextResponseSchema = z.union([
-  AgentContextAnswerFirstResponseSchema.extend({
-    etag: z.string(),
-  }),
-  AgentContextPayloadSchema.extend({
-    etag: z.string(),
-  }),
+  AgentContextPayloadSchema.extend({ etag: z.string() }),
+  AgentContextErrorResponseSchema,
   ConditionalNotModifiedResponseSchema,
   ResponseArtifactReferenceSchema,
 ]);
 
-const AGENT_CONTEXT_OUTPUT_KEYS = [
-  "taskType",
-  "answer",
+const AGENT_CONTEXT_V2_OUTPUT_KEYS = [
+  "status",
+  "isError",
   "notModified",
   "kind",
 ] as const;
 
-// Advertise stable outer variants without expanding the full context payload.
-export const AgentContextOutputSchema = z
-  .object({
-    taskType: z.unknown().optional(),
-    answer: z.string().optional(),
-    notModified: z.unknown().optional(),
-    kind: z.unknown().optional(),
+// Keep tools/list object-root while describing the inline payload and wrappers.
+export const AgentContextOutputSchema = AgentContextPayloadSchema.partial()
+  .extend({
+    etag: z.string().optional(),
+    isError: z.literal(true).optional(),
+    error: z
+      .union([ContextRecoveryErrorSchema, ContextBudgetErrorSchema])
+      .optional(),
+    notModified: z.literal(true).optional(),
+    responseMode: z.literal("handle").optional(),
+    kind: z.literal("responseArtifact").optional(),
+    handle: z.string().optional(),
+    action: z.literal("response.get").optional(),
+    metadata: ResponseArtifactPublicMetadataSchema.optional(),
   })
   .passthrough()
-  .refine((value) => AGENT_CONTEXT_OUTPUT_KEYS.some((key) => key in value), {
-    message: "Unrecognized sdl.context response shape",
-  });
+  .refine(
+    (value) => AGENT_CONTEXT_V2_OUTPUT_KEYS.some((key) => key in value),
+    { message: "Unrecognized sdl.context response shape" },
+  );
 
 export type AgentContextRequest = z.infer<typeof AgentContextRequestSchema>;
 export type AgentContextResponse = z.infer<typeof AgentContextResponseSchema>;

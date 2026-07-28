@@ -364,7 +364,7 @@ Search and filter memories with flexible criteria.
 | Field | Type | Required | Description |
 |:------|:-----|:---------|:------------|
 | `repoId` | string | yes | Repository ID |
-| `query` | string | no | Text search (CONTAINS match against `searchText`). When hybrid retrieval is enabled (`semantic.retrieval.mode: "hybrid"`), memories are also retrievable via FTS index on `Memory.searchText`, enabling richer semantic matching alongside symbols in entity retrieval mode. |
+| `query` | string | no | Text search (CONTAINS match against `searchText`). When the memory FTS lane is available, `Memory.searchText` also participates in entity retrieval alongside symbols. |
 | `types` | string[] | no | Filter by memory types |
 | `tags` | string[] | no | Filter by tags (OR logic) |
 | `symbolIds` | string[] | no | Filter to memories linked to these symbols |
@@ -460,7 +460,9 @@ When memory is enabled and `surfacingEnabled` is `true`, calling `sdl.slice.buil
 3. Memories are ranked using the same confidence × recency × overlap algorithm
 4. The top N memories (default: 5) are included in the slice response as `memories[]`
 
-**Hybrid retrieval integration:** When `semantic.retrieval.mode: "hybrid"` is enabled, `Memory.searchText` is indexed by the Ladybug FTS extension. This enables memories to be surfaced via entity retrieval alongside symbols — the hybrid retrieval orchestrator can search across symbols, memories, clusters, processes, and file summaries in a single fused query, boosting memory surfacing quality for task-text-driven workflows.
+**Hybrid retrieval integration:** When the Ladybug FTS extension is available,
+`Memory.searchText` participates in entity retrieval alongside symbols,
+clusters, processes, and file summaries in one fused query.
 
 **Control parameters on `sdl.slice.build`:**
 

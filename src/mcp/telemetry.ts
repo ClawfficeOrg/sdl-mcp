@@ -177,8 +177,8 @@ export interface SemanticSearchTelemetryEvent {
   latencyMs: number;
   candidateCount: number;
   alpha: number;
-  /** Retrieval mode used: "legacy" (rerank) or "hybrid" (FTS+vector+RRF) */
-  retrievalMode?: "legacy" | "hybrid";
+  /** Retrieval mode used: lexical or hybrid (FTS+vector+RRF). */
+  retrievalMode?: "lexical" | "hybrid";
   /** Per-source candidate counts before fusion (e.g. { fts: 50, "vector:jinacode": 30 }) */
   candidateCountPerSource?: Record<string, number>;
   /** Time spent in RRF fusion step (ms) */
@@ -189,17 +189,16 @@ export interface SemanticSearchTelemetryEvent {
   ftsAvailable?: boolean;
   /** Whether vector extension was available */
   vectorAvailable?: boolean;
-  /** Reason for falling back to legacy, if applicable */
+  /** Reason semantic lanes could not contribute, if applicable. */
   fallbackReason?: string;
   /** Final result count after fusion and limiting */
   finalResultCount?: number;
 
   /**
    * Normalized retrieval type for dashboards.
-   * Replaces the legacy "semantic rerank" terminology.
-   * Values: "hybrid" (FTS+vector+RRF), "legacy-rerank", "lexical-only"
+   * Values: "hybrid" (FTS+vector+RRF) or "lexical-only".
    */
-  retrievalType?: "hybrid" | "legacy-rerank" | "lexical-only";
+  retrievalType?: "hybrid" | "lexical-only";
 
   /** Number of symbols boosted by prior feedback. */
   feedbackBoostedCount?: number;

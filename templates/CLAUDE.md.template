@@ -11,7 +11,7 @@ When the SDL-MCP PID file is present, treat native repo-local shell and file too
 ## Token Economy
 
 Prefer `runtimeExecute` `outputMode: "digest"` for build/test/lint; query artifacts only when needed.
-For explain/debug, start `sdl.context` with `options.answerFirst: true`; expand through evidence IDs only if insufficient.
+For explain/debug, call `sdl.context` with a required `budget.maxTokens`; inspect its evidence and follow `nextActions` only when more detail is needed.
 Treat `{ ref, unchanged: true }` as already-held content; use `refsMode: "off"` only to recover after lost context. Use `sN` aliases from `@ids` anywhere symbol IDs are accepted.
 On search misses, retry from `nearMisses`; if `file.read` warns about a large untargeted read, retry with search, range, or token limits.
 

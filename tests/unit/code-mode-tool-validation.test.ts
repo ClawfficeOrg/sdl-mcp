@@ -10,98 +10,91 @@ import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import { AgentContextRequestSchema } from "../../dist/mcp/tools.js";
 
 describe("code-mode tool validation", () => {
-  it("maps sdl.context budget.maxEstimatedTokens to maxTokens", () => {
+  it("accepts the strict flat sdl.context v2 request", () => {
     const parsed = AgentContextRequestSchema.parse({
       repoId: "demo-repo",
       taskType: "explain",
       taskText: "explain handleSymbolSearch",
-      budget: { maxEstimatedTokens: 1234 },
+      budget: { maxTokens: 1234 },
+      focusSymbols: ["handleSymbolSearch"],
+      focusPaths: ["src/mcp/tools/symbol.ts"],
+      chatMentions: ["handleSymbolSearch"],
+      includeTests: false,
     });
 
     assert.deepEqual(parsed.budget, { maxTokens: 1234 });
+    assert.deepEqual(parsed.focusSymbols, ["handleSymbolSearch"]);
+    assert.deepEqual(parsed.focusPaths, ["src/mcp/tools/symbol.ts"]);
+    assert.deepEqual(parsed.chatMentions, ["handleSymbolSearch"]);
+    assert.equal(parsed.includeTests, false);
   });
 
-  it("rejects sdl.context budget.maxCards instead of silently ignoring it", () => {
-    assert.throws(
-      () =>
-        AgentContextRequestSchema.parse({
-          repoId: "demo-repo",
-          taskType: "explain",
-          taskText: "explain handleSymbolSearch",
-          budget: { maxCards: 5 },
-        }),
-      /sdl\.context budget does not support maxCards/,
-    );
+  it("rejects every removed sdl.context budget field", () => {
+    for (const field of [
+      "maxEstimatedTokens",
+      "maxActions",
+      "maxDurationMs",
+    ]) {
+      const result = AgentContextRequestSchema.safeParse({
+        repoId: "demo-repo",
+        taskType: "explain",
+        taskText: "explain handleSymbolSearch",
+        budget: { maxTokens: 1234, [field]: 1234 },
+      });
+
+      assert.equal(result.success, false, field);
+      if (result.success) continue;
+      const issue = result.error.issues[0];
+      assert.equal(issue?.code, "unrecognized_keys", field);
+      assert.deepEqual(issue?.path, ["budget"], field);
+      assert.deepEqual("keys" in issue ? issue.keys : undefined, [field], field);
+    }
   });
 
-  it("rejects unknown sdl.context budget fields", () => {
+  it("rejects every removed sdl.context root field", () => {
+    const removedFields: Record<string, unknown> = {
+      options: { answerFirst: true },
+      contextMode: "precise",
+      semantic: true,
+      pprDirection: "both",
+      pprWeight: 2,
+      chatMentionWeights: { handleSymbolSearch: 1 },
+      includeRetrievalEvidence: true,
+      evidenceOptimization: "dedupe",
+      answerFirst: true,
+      cardDetail: "full",
+      requireDiagnostics: true,
+      includeDiagnostics: true,
+    };
+
+    for (const [field, value] of Object.entries(removedFields)) {
+      const result = AgentContextRequestSchema.safeParse({
+        repoId: "demo-repo",
+        taskType: "implement",
+        taskText: "explain handleSymbolSearch",
+        budget: { maxTokens: 1234 },
+        [field]: value,
+      });
+
+      assert.equal(result.success, false, field);
+      if (result.success) continue;
+      const issue = result.error.issues[0];
+      assert.equal(issue?.code, "unrecognized_keys", field);
+      assert.deepEqual(issue?.path, [], field);
+      assert.deepEqual("keys" in issue ? issue.keys : undefined, [field], field);
+    }
+  });
+
+  it("requires the explicit sdl.context token budget", () => {
     const result = AgentContextRequestSchema.safeParse({
       repoId: "demo-repo",
       taskType: "explain",
       taskText: "explain handleSymbolSearch",
-      budget: { maxTotalTokens: 1234 },
     });
 
     assert.equal(result.success, false);
     if (result.success) return;
-    const issue = result.error.issues[0];
-    assert.equal(issue?.code, "unrecognized_keys");
-    assert.deepEqual(issue?.path, ["budget"]);
-    assert.deepEqual(
-      "keys" in issue ? issue.keys : undefined,
-      ["maxTotalTokens"],
-    );
-  });
-
-  it("accepts sdl.context evidenceOptimization budgeted option", () => {
-    const parsed = AgentContextRequestSchema.parse({
-      repoId: "demo-repo",
-      taskType: "explain",
-      taskText: "explain handleSymbolSearch",
-      options: { evidenceOptimization: "budgeted" },
-    });
-
-    assert.equal(parsed.options?.evidenceOptimization, "budgeted");
-  });
-  it("accepts sdl.context cardDetail full option", () => {
-    const parsed = AgentContextRequestSchema.parse({
-      repoId: "demo-repo",
-      taskType: "implement",
-      taskText: "explain handleSymbolSearch",
-      options: { cardDetail: "full" },
-    });
-
-    assert.equal(parsed.options?.cardDetail, "full");
-  });
-
-  it("accepts sdl.context evidenceOptimization global option", () => {
-    const parsed = AgentContextRequestSchema.parse({
-      repoId: "demo-repo",
-      taskType: "explain",
-      taskText: "explain handleSymbolSearch",
-      options: { contextMode: "broad", evidenceOptimization: "global" },
-    });
-
-    assert.equal(parsed.options?.evidenceOptimization, "global");
-  });
-
-  it("rejects invalid sdl.context evidenceOptimization options", () => {
-    assert.throws(
-      () =>
-        AgentContextRequestSchema.parse({
-          repoId: "demo-repo",
-          taskType: "explain",
-          taskText: "explain handleSymbolSearch",
-          options: { evidenceOptimization: "knapsack" },
-        }),
-      (error: unknown) => {
-        const issue = (error as { issues?: Array<{ path?: unknown[]; values?: unknown[] }> })
-          .issues?.[0];
-        assert.deepEqual(issue?.path, ["options", "evidenceOptimization"]);
-        assert.deepEqual(issue?.values, ["off", "dedupe", "budgeted", "global"]);
-        return true;
-      },
-    );
+    assert.deepEqual(result.error.issues[0]?.path, ["budget"]);
   });
 
   it("registers truthful per-tool output schemas for top-level gateways", () => {
@@ -166,8 +159,8 @@ describe("code-mode tool validation", () => {
       [
         "sdl.context",
         [
-          { taskType: "explain" },
-          { answer: "Use the registered handler." },
+          { status: "complete" },
+          { isError: true },
           { notModified: true },
           {
             responseMode: "handle",

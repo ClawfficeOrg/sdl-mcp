@@ -17,7 +17,6 @@ export type RetrievalSource =
   | "fts"
   | "vector:nomic"
   | "vector:jinacode"
-  | "legacyFallback"
   | "overlay";
 
 // ---------------------------------------------------------------------------

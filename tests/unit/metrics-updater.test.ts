@@ -107,15 +107,16 @@ describe("metrics-updater semantic config branching", () => {
     assert.ok(config.semantic.ann.enabled !== false);
   });
 
-  it("treats omitted retrieval config as default hybrid for FileSummary embeddings", () => {
+  it("gates FileSummary embeddings only on vector availability", () => {
     const source = readFileSync(
       join(process.cwd(), "src/indexer/metrics-updater.ts"),
       "utf8",
     );
     assert.ok(
-      source.includes('(retrievalConfig?.mode ?? "hybrid") === "hybrid"'),
-      "FileSummary embedding gate should follow the default hybrid retrieval mode",
+      source.includes("retrievalConfig?.vector?.enabled !== false"),
+      "FileSummary embedding gate should honor the vector enablement flag",
     );
+    assert.equal(source.includes("retrievalConfig?.mode"), false);
   });
 
   it("quality audit counts untyped no-file placeholders with a direct NOT pattern", () => {

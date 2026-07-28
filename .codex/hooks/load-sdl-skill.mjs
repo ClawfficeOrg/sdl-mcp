@@ -47,13 +47,13 @@ function fallbackSkillBody() {
     "",
     "Load and follow the `sdl-mcp-agent-workflow` skill when available. Fallback rules:",
     "1. Start every repository task with `repo.status`, then choose `sdl.context`, `symbolSearch`/`symbolGetCard`, or `slice.build` based on the task.",
-    '2. Use `contextMode: "precise"` for named symbols, exact paths, narrow bugs, focused reviews, and implementation follow-up.',
-    '3. Use `contextMode: "broad"` for subsystem mapping, behavior tracing, unfamiliar code, or broad investigations.',
+    "2. Give `sdl.context` a required `budget.maxTokens`; use flat `focusPaths`, `focusSymbols`, or `chatMentions` for named targets.",
+    "3. Inspect its deterministic `evidence`, `edges`, `omitted`, and `nextActions`; the tool does not synthesize answers.",
     "4. Batch follow-up retrieval through `sdl.workflow`: `symbolSearch`, `symbolGetCard`, `sliceBuild` for graph/file frontiers, `codeSkeleton`, `codeHotPath`, then `codeNeedWindow` as a last resort.",
     '5. Use `symbol.edit` for one-symbol indexed edits; use `searchEditPreview` with `targeting:"identifier"`, `targeting:"structural"`, or `operations[]` for safer cross-file edits.',
     "6. Use `runtimeExecute` with `stdin` for repo-local commands and multiline scripts/input; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.",
     "7. Use memory tools only when `memory.enabled: true`; avoid habitual `index.refresh`.",
-    "8. Finish with `usageStats`; include the returned `formattedSummary` verbatim in a fenced `text` block, including token-meter bars. If stats cannot be captured, say why.",
+    "8. Call `usageStats` only for requested savings reports, telemetry debugging, or persisted usage snapshots.",
   ].join("\n");
 }
 

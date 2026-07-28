@@ -170,65 +170,11 @@ describe("model mapping", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Fallback Decision Logic (inline re-implementation)
-// ---------------------------------------------------------------------------
-
-describe("shouldFallbackToLegacy (inline)", () => {
-  interface RetrievalCapabilities {
-    fts: boolean;
-    vectorJinaCode: boolean;
-    vectorNomic: boolean;
-  }
-  interface SemanticRetrievalConfig {
-    mode: "legacy" | "hybrid";
-    [key: string]: unknown;
-  }
-
-  /** Inline re-implementation of shouldFallbackToLegacy from fallback.ts. */
-  function shouldFallbackToLegacy(
-    caps: RetrievalCapabilities,
-    config: SemanticRetrievalConfig,
-  ): boolean {
-    if (config.mode === "legacy") return true;
-    if (!caps.fts) return true;
-    return false;
-  }
-
-  it("returns true when mode is legacy (regardless of caps)", () => {
-    assert.equal(shouldFallbackToLegacy({ fts: true, vectorJinaCode: true, vectorNomic: true, vectorJinaCode: true }, { mode: "legacy" }), true);
-  });
-
-  it("returns true when FTS is unavailable in hybrid mode", () => {
-    assert.equal(shouldFallbackToLegacy({ fts: false, vectorJinaCode: true, vectorNomic: true, vectorJinaCode: true }, { mode: "hybrid" }), true);
-  });
-
-  it("returns false when FTS available in hybrid mode (vector optional)", () => {
-    assert.equal(shouldFallbackToLegacy({ fts: true, vectorJinaCode: false, vectorNomic: false, vectorJinaCode: false }, { mode: "hybrid" }), false);
-  });
-
-  it("returns false when all capabilities available in hybrid mode", () => {
-    assert.equal(shouldFallbackToLegacy({ fts: true, vectorJinaCode: true, vectorNomic: true, vectorJinaCode: true }, { mode: "hybrid" }), false);
-  });
-
-  it("returns true when all capabilities unavailable in hybrid mode", () => {
-    assert.equal(shouldFallbackToLegacy({ fts: false, vectorJinaCode: false, vectorNomic: false, vectorJinaCode: false }, { mode: "hybrid" }), true);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Source-text verification: ensure inline tests match real code
 // ---------------------------------------------------------------------------
 
 describe("source-text verification", () => {
   const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-  it("fallback.ts uses the expected decision branches", () => {
-    const src = fs.readFileSync(path.join(repoRoot, "src/retrieval/fallback.ts"), "utf8");
-    // Mode check
-    assert.ok(src.includes('config.mode === "legacy"'), "should check for legacy mode");
-    assert.ok(src.includes("!caps.fts"), "should check FTS availability");
-    assert.ok(src.includes("return false"), "should return false for hybrid-ready");
-  });
 
   it("orchestrator.ts imports required modules", () => {
     const src = fs.readFileSync(path.join(repoRoot, "src/retrieval/orchestrator.ts"), "utf8");
@@ -236,7 +182,7 @@ describe("source-text verification", () => {
     assert.ok(src.includes("HybridSearchOptions"), "should reference HybridSearchOptions type");
     assert.ok(src.includes("HybridSearchResult"), "should reference HybridSearchResult type");
     assert.ok(src.includes("checkRetrievalHealth"), "should check retrieval health");
-    assert.ok(src.includes("shouldFallbackToLegacy"), "should check fallback");
+    assert.ok(!src.includes("shouldFallbackToLegacy"), "should not branch to a legacy engine");
     assert.ok(src.includes("getEmbeddingProvider"), "should use embedding provider");
     assert.ok(src.includes("EMBEDDING_MODELS"), "should iterate real models");
   });
@@ -250,9 +196,9 @@ describe("source-text verification", () => {
   it("symbol.ts references hybrid search path", () => {
     const src = fs.readFileSync(path.join(repoRoot, "src/mcp/tools/symbol.ts"), "utf8");
     assert.ok(src.includes("searchSymbolsHybridWithOverlay"), "should import hybrid overlay search");
-    assert.ok(src.includes("useHybrid"), "should have hybrid mode flag");
+    assert.ok(src.includes("useUnifiedRetrieval"), "should select the unified retrieval path");
     assert.ok(src.includes("retrievalEvidence"), "should populate retrieval evidence");
-    assert.ok(src.includes('retrievalMode: useHybrid ? "hybrid" : "legacy"'), "should log retrieval mode in telemetry");
+    assert.ok(src.includes('retrievalMode: semanticEnabled ? "hybrid" : "lexical"'), "should log the truthful retrieval mode");
   });
 
   it("overlay-reader.ts exports hybrid search function", () => {
@@ -273,8 +219,8 @@ describe("hybrid retrieval regression — non-legacy evidence", () => {
     path.join(repoRoot, "src/retrieval/orchestrator.ts"),
     "utf8",
   );
-  const fallbackSrc = fs.readFileSync(
-    path.join(repoRoot, "src/retrieval/fallback.ts"),
+  const healthSrc = fs.readFileSync(
+    path.join(repoRoot, "src/retrieval/health.ts"),
     "utf8",
   );
   const typesSrc = fs.readFileSync(
@@ -312,10 +258,10 @@ describe("hybrid retrieval regression — non-legacy evidence", () => {
     );
   });
 
-  it("fallback includes degradation reasons in return value", () => {
+  it("health includes degradation reasons in its return value", () => {
     assert.ok(
-      fallbackSrc.includes("buildDegradationReasons"),
-      "Fallback should build degradation reasons",
+      healthSrc.includes("buildDegradationReasons"),
+      "Health should build degradation reasons",
     );
   });
 

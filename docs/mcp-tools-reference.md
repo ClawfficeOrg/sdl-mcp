@@ -423,12 +423,9 @@ Search symbols by name or summary text.
 
 When `chatMentions` is non-empty, results are re-ranked via Personalized PageRank seeded at those mentions — see [semantic-engine.md → Chat-Aware PageRank Boost](feature-deep-dives/semantic-engine.md#chat-aware-personalized-pagerank-boost-v0109). When `chatMentions` is **omitted** (`undefined`), the server auto-extracts identifier-like tokens from the query as seeds. Pass an explicit empty array `[]` to disable PPR entirely. PPR diagnostics surface in `response.pprBoosts` when `includeRetrievalEvidence: true`.
 
-When semantic mode is enabled, the retrieval path depends on `semantic.retrieval.mode`:
-
-- `"hybrid"` uses FTS + vector search with RRF fusion.
-- `"legacy"` uses alpha-blended lexical + embedding reranking.
-
-SDL-MCP falls back to legacy automatically if hybrid indexes are unavailable.
+When semantic retrieval is enabled, SDL-MCP runs one coverage-aware pipeline.
+It fuses available FTS, vector, lexical, and graph lanes and reports degraded
+coverage in retrieval evidence when a lane is unavailable.
 
 **Response:** `{ results: [{ symbolId, name, file, kind }], retrievalMode?, retrievalEvidence?, truncation? }`
 
@@ -940,14 +937,16 @@ Update policy configuration for a repository. Accepts a partial patch — only s
 
 ### `sdl.context`
 
-Retrieve task-shaped code context with rung path selection and evidence capture. The engine uses path inference, bounded lexical seeding, feedback priors, evidence-aware ranking, and confidence-driven rung planning to select an optimal path through the context ladder (card -> skeleton -> hotPath -> raw). Broad mode uses bounded multi-entity hybrid seeding (FTS + vector via RRF) by default. Precise mode keeps the lexical fast path unless `options.semantic: true` forces hybrid retrieval.
+Retrieve deterministic, task-shaped code evidence through the shared retrieval
+and graph-expansion pipeline. The engine resolves priority seeds, fuses the
+available retrieval lanes, expands connected symbols, and selects card,
+skeleton, and hot-path bundles within the requested token budget.
 
 `sdl.context` is part of the Code Mode surface. In regular flat or gateway mode, use the manual ladder directly or enable Code Mode for task-shaped retrieval.
 
-**Context modes:**
-
-- **`"precise"`** — Returns minimal, chain-efficient context with tight cluster expansion (max 4 symbols) and a stripped response envelope. Focused explain requests add a hot path when explicit scope or chat mentions identify an implementation target.
-- **`"broad"`** (default) — Returns richer surrounding context with graph-guided cluster expansion (max 10 symbols, diversity-scored). Exact named handlers and focused evidence stay on the first page ahead of unrelated lexical or semantic cards. Successful responses always preserve `answer`.
+Task profiles derive expansion direction, depth, preferred evidence rungs, and
+the default test policy from `taskType`. Callers provide focus fields directly;
+there is no mode selector or nested options object.
 
 **Parameters:**
 
@@ -956,62 +955,44 @@ Retrieve task-shaped code context with rung path selection and evidence capture.
 | `repoId`             | `string`                                          | Yes      | Repository identifier                        |
 | `taskType`           | `"debug" \| "review" \| "implement" \| "explain"` | Yes      | Type of task                                 |
 | `taskText`           | `string`                                          | Yes      | Task description or prompt                   |
-| `budget`             | `object`                                          | No       | Budget constraints                           |
-| `options`            | `object`                                          | No       | Task-specific options                        |
+| `budget`             | `{ maxTokens: number }`                           | Yes      | Complete canonical-payload token budget      |
+| `focusSymbols`       | `string[]`                                        | No       | Symbol IDs or names to prioritize            |
+| `focusPaths`         | `string[]`                                        | No       | Repository-relative paths to prioritize      |
+| `chatMentions`       | `string[]`                                        | No       | Explicit identifiers to seed                 |
+| `includeTests`       | `boolean`                                         | No       | Override the task profile's test preference  |
 | `wireFormat`         | `"json" \| "packed" \| "auto"`                  | No       | Response wire format; default `"auto"`       |
 | `refsMode`           | `"auto" \| "off"`                               | No       | Reference deduplication mode; default `"auto"` |
 | `responseMode`       | `"inline" \| "auto" \| "handle"`                 | No       | Large-response handling                      |
 | `ifNoneMatch`        | `string`                                          | No       | Return an unchanged reference when the ETag matches |
-| `includeDiagnostics` | `boolean`                                         | No       | Include coarse phase timings in the response |
 
-`budget` fields (all optional):
+`budget` is strict:
 
-| Field               | Type     | Description                                      |
-| ------------------- | -------- | ------------------------------------------------ |
-| `maxTokens`         | `number` | Maximum tokens to consume                        |
-| `maxEstimatedTokens` | `number` | Alias for `maxTokens`, compatible with slice budgets |
-| `maxActions`        | `number` | Maximum number of actions to execute             |
-| `maxDurationMs`     | `number` | Maximum duration in milliseconds                 |
+| Field       | Type     | Required | Description                                       |
+| ----------- | -------- | -------- | ------------------------------------------------- |
+| `maxTokens` | `number` | Yes      | Maximum tokens for the complete canonical payload |
 
-Context budgets reject unknown fields. `maxCards` returns guidance to call `slice.build` for card-count budgets.
+Unknown root keys and unknown budget keys are rejected.
 
-`options` fields (all optional):
-
-| Field                      | Type                                          | Description                                                                                                                                                                                                                                                                                                                                                                          |
-| -------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `contextMode`              | `"precise" \| "broad"`                        | Context breadth. `"precise"` returns minimal context; `"broad"` (default) returns richer surrounding context                                                                                                                                                                                                                                                                         |
-| `focusSymbols`             | `string[]`                                    | Symbol IDs to focus on                                                                                                                                                                                                                                                                                                                                                               |
-| `focusPaths`               | `string[]`                                    | File paths to focus on                                                                                                                                                                                                                                                                                                                                                               |
-| `includeTests`             | `boolean`                                     | Include test files in analysis                                                                                                                                                                                                                                                                                                                                                       |
-| `requireDiagnostics`       | `boolean`                                     | Include diagnostic info (may add a raw rung)                                                                                                                                                                                                                                                                                                                                         |
-| `semantic`                 | `boolean`                                     | Control context seeding. Leave unset for default hybrid broad retrieval and lexical precise retrieval; set `true` to force bounded hybrid plus lexical coverage in either mode; set `false` for lexical-only retrieval.                                                                                                                                                                  |
-| `includeRetrievalEvidence` | `boolean`                                     | Attach hybrid `retrievalEvidence` to the response (sources, candidate counts, top ranks per source, fusion latency, lane availability). Default `true`                                                                                                                                                                                                                               |
-| `evidenceOptimization`     | `"off" \| "dedupe" \| "budgeted" \| "global"` | Enable opt-in evidence optimization for `sdl.context`. `dedupe` removes duplicate/subsumed evidence; `budgeted` greedily selects finalEvidence by value per token under `budget.maxTokens`; `global` also optimizes broad-mode `summary`, `answer`, and `finalEvidence` together under the response budget while preserving supporting cards for selected hot paths. Default `"off"` |
-| `chatMentions`             | `string[]`                                    | Up to 20 identifiers / symbol names / IDs the user just mentioned in chat. Seeds Personalized PageRank for chat-aware re-ranking. See [semantic-engine.md → Chat-Aware PageRank](feature-deep-dives/semantic-engine.md#chat-aware-personalized-pagerank-boost-v0109)                                                                                                                 |
-| `chatMentionWeights`       | `Record<string, number>`                      | Per-mention weight overrides; missing entries default to uniform 1.0                                                                                                                                                                                                                                                                                                                 |
-| `pprDirection`             | `"out" \| "in" \| "both"`                     | Walk direction across the dependency graph for chat-aware re-ranking. Default `"both"`                                                                                                                                                                                                                                                                                               |
-| `pprWeight`                | `number`                                      | PPR coefficient: final multiplier is `1 + pprWeight × pprScore`, capped per call at 2× and across stacked boosts at 4× the original RRF score. Default `2.0`, range `[0, 2]`                                                                                                                                                                                                         |
+Flat focus fields are authoritative seed priorities, not output boundaries.
 
 **Response:**
 
-In **broad** mode (default, compact): `taskId`, `taskType`, `success`, `summary`, `answer`, `finalEvidence`, `nextBestAction?`, `retrievalEvidence?`, `diagnostics?`, `error?` — the fields `actionsTaken`, `path`, and `metrics` are omitted from the model-visible response. `finalEvidence` is the primary evidence surface. `retrievalEvidence` carries `sources`, `candidateCountPerSource`, `topRanksPerSource`, `fusionLatencyMs`, `diagnosticTimings`, `ftsAvailable`, and `vectorAvailable` from hybrid seeding when available. `diagnostics` is returned only when `includeDiagnostics: true`. The `answer` field is always preserved on successful responses. When answer-first evidence is insufficient, the response preserves evidence and continuation while returning `success: false` and `status: "partial"`.
+The canonical response is evidence-first and contains no synthesized answer.
 
-In **precise** mode: `taskId`, `taskType`, `success`, `path`, `finalEvidence`, `metrics` — envelope fields stripped for token efficiency.
+A successful canonical payload contains `status`, `taskType`, `retrieval`,
+`evidence`, `edges`, `omitted`, `nextActions`, and `etag`. Retrieval level is
+`hybrid`, `hybrid-partial`, `lexical`, or `graph-only`. Evidence rungs are
+`card`, `skeleton`, and `hotPath`.
 
-In broad mode, a task that names exactly one high-signal identifier can use a narrower deterministic evidence projection when that name resolves uniquely by exact symbol name, carries named-concept retrieval provenance, and the caller supplied no explicit `focusSymbols` or `focusPaths`. The projection places all `symbolCard`, `skeleton`, and `hotPath` evidence for the exact subject first, then the same symbol-shaped evidence for up to two secondary subjects selected by a skeleton or non-zero-match hot path, then every non-symbol evidence item; relative order within each partition is preserved. A zero-match hot path cannot select a subject but remains when another rich item selected that subject. Generic text, multiple identifiers, explicit caller focus, ambiguous/fuzzy-only matches, and exact subjects without rich evidence keep the existing broad response.
+Tier-0 exact and focused candidates stay ahead of optional Tier-1 expansion.
 
-Planner token estimates: card ~50, skeleton ~200, hotPath ~500, raw ~2000. When over budget, the planner trims rungs based on confidence tier: high-confidence retrievals trim to cheapest rungs, low-confidence retrievals preserve diagnostic depth.
+`status` is `complete`, `budgetLimited`, or `empty`. A budget-limited response
+suppresses optional Tier-1 work and reports bounded recovery candidates in
+`omitted.highestRanked`. Insufficient retrieval is an error rather than a
+successful empty result.
 
-When Code Mode is enabled, `sdl.context` accepts the same task envelope and should be preferred over `sdl.workflow` for `debug`, `review`, `implement`, and `explain` retrieval.
-
-**Precise mode rung strategies:**
-
-| Task Type   | Precise Rungs                     | Broad Rungs               |
-| ----------- | --------------------------------- | ------------------------- |
-| `debug`     | card + hotPath                    | card + skeleton + hotPath |
-| `explain`   | card + skeleton + scoped hotPath | card + skeleton           |
-| `review`    | card                              | card + skeleton           |
-| `implement` | card + skeleton                   | card + skeleton + hotPath |
+The ETag is computed from the complete canonical payload before session refs,
+packed encoding, or generic response-artifact wrapping.
 
 **Examples:**
 
@@ -1021,10 +1002,8 @@ When Code Mode is enabled, `sdl.context` accepts the same task envelope and shou
   "taskType": "debug",
   "taskText": "check NaN handling in normalizeEdgeConfidence",
   "budget": { "maxTokens": 4000 },
-  "options": {
-    "contextMode": "precise",
-    "focusPaths": ["src/graph/slice/beam-search-engine.ts"]
-  }
+  "focusPaths": ["src/graph/slice/beam-search-engine.ts"],
+  "chatMentions": ["normalizeEdgeConfidence"]
 }
 ```
 
@@ -1033,8 +1012,9 @@ When Code Mode is enabled, `sdl.context` accepts the same task envelope and shou
   "repoId": "my-repo",
   "taskType": "debug",
   "taskText": "investigate auth timeout across the pipeline",
-  "budget": { "maxTokens": 4000, "maxActions": 12 },
-  "options": { "includeTests": true, "focusPaths": ["src/auth/"] }
+  "budget": { "maxTokens": 4000 },
+  "includeTests": true,
+  "focusPaths": ["src/auth/"]
 }
 ```
 
@@ -1410,9 +1390,15 @@ Get cumulative token usage statistics and savings metrics for the current sessio
 
 Retrieve task-shaped context inside Code Mode.
 
-Use `sdl.context` first for `debug`, `review`, `implement`, and `explain` requests when you are already operating through the Code Mode surfaces. Its public schema exposes the complete nested `budget` and `options` contracts plus `refsMode`, `wireFormat`, and `ifNoneMatch`.
+Use `sdl.context` first for `debug`, `review`, `implement`, and `explain`
+requests when you are already operating through Code Mode. Its strict public
+schema keeps focus fields at the root and requires `budget.maxTokens`.
 
-`budget.maxTokens` and its `maxEstimatedTokens` alias have a minimum request value of `512` and cap the complete serialized response, not only individual actions or evidence. When a response is truncated, use `workflowContinuationGet` with `truncation.continuationHandle` to retrieve the complete context. For precise context, an explicit request for an implementation or handler resolves implementation-oriented handler aliases so the returned actions and evidence match the requested implementation intent.
+`budget.maxTokens` has a minimum request value of `512` and caps the complete
+canonical payload. A budget-limited result reports omissions and recovery
+actions without creating a context continuation. `responseMode: "auto"` or
+`"handle"` may wrap that same complete payload in a generic `response.get`
+artifact.
 
 For byte-stability checks, use `responseMode: "inline"` with `refsMode: "off"`. Response-artifact handles and session refs are intentionally session-scoped and may vary between calls. If `response.get` rejects a JSON path, its error lists the valid keys in sorted order and supplies a retry call that reuses the same handle.
 

@@ -449,6 +449,76 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       }
     });
 
+    it("rejects a successful callback when its exclusive connection fails to close", async () => {
+      const testPath = getTestDbPath("exclusive-read-close-failure");
+      cleanupTestDb("exclusive-read-close-failure");
+      await initLadybugDb(testPath);
+
+      const closeFailure = new Error("exclusive close failed");
+      const kuzu = await import("kuzu");
+      const prototype = kuzu.Connection.prototype;
+      const originalClose = prototype.close;
+      prototype.close = async function () {
+        throw closeFailure;
+      };
+
+      try {
+        await assert.rejects(
+          withExclusiveReadConnection(async () => "complete"),
+          (error) => error === closeFailure,
+        );
+      } finally {
+        prototype.close = originalClose;
+        await closeLadybugDb();
+        cleanupTestDb("exclusive-read-close-failure");
+      }
+    });
+
+    it("preserves callback failure and blocks publication on strict close", async () => {
+      const testPath = getTestDbPath("exclusive-read-dual-failure");
+      cleanupTestDb("exclusive-read-dual-failure");
+      await initLadybugDb(testPath);
+
+      const callbackFailure = new Error("context read failed");
+      const closeFailure = new Error("exclusive close failed");
+      const kuzu = await import("kuzu");
+      const prototype = kuzu.Connection.prototype;
+      const originalClose = prototype.close;
+      let leased: Connection | undefined;
+      prototype.close = async function () {
+        if (this === leased) throw closeFailure;
+        await originalClose.call(this);
+      };
+
+      try {
+        await assert.rejects(
+          withExclusiveReadConnection(async (conn) => {
+            leased = conn;
+            throw callbackFailure;
+          }),
+          (error) => error === callbackFailure,
+        );
+        prototype.close = originalClose;
+
+        let artifactPublished = false;
+        await assert.rejects(
+          closeLadybugDb({ strict: true }).then(() => {
+            artifactPublished = true;
+          }),
+          (error) => {
+            assert.ok(error instanceof AggregateError);
+            assert.ok(error.errors.includes(closeFailure));
+            return true;
+          },
+        );
+        assert.strictEqual(artifactPublished, false);
+      } finally {
+        prototype.close = originalClose;
+        await closeLadybugDb();
+        cleanupTestDb("exclusive-read-dual-failure");
+      }
+    });
+
     it("closes a constructed connection when thread setup fails", async () => {
       const testPath = getTestDbPath("exclusive-read-thread-setup-failure");
       cleanupTestDb("exclusive-read-thread-setup-failure");

@@ -91,7 +91,7 @@ For code understanding:
 1. `sdl.repo.status`
 2. `sdl.action.search` (when the correct SDL action is unclear)
 3. `sdl.manual(query|actions|format)` for focused reference
-4. `sdl.context` with `contextMode: "precise"` for targeted lookups or `"broad"` for exploration
+4. `sdl.context` with flat focus fields and a required token budget for task-shaped retrieval
 5. `symbolSearch`/`symbolGetCard` for exact symbols, or `slice.build` when Claude needs a graph/file frontier before editing
 6. Provide `focusSymbols` and/or `focusPaths` to scope retrieval; always set a budget
 

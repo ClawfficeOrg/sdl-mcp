@@ -345,7 +345,7 @@ export function _resetNativeBindingCache(): void {
 }
 
 // ---------------------------------------------------------------------------
-// LRU cache (per repoId/snapshotCreatedAt/seedHash/alpha/direction)
+// LRU cache (per repoId/graphVersionId/snapshotCreatedAt/seedHash/alpha/direction)
 // ---------------------------------------------------------------------------
 
 const PPR_CACHE_CAP = 64;
@@ -360,6 +360,7 @@ const cache = new Map<string, CacheEntry>();
 
 function cacheKey(parts: {
   repoId: string;
+  graphVersionId?: string;
   snapshotCreatedAt: number;
   seedHash: string;
   alpha: number;
@@ -367,6 +368,7 @@ function cacheKey(parts: {
 }): string {
   return [
     parts.repoId,
+    parts.graphVersionId ?? "",
     parts.snapshotCreatedAt,
     parts.seedHash,
     parts.alpha.toFixed(4),
@@ -416,7 +418,9 @@ export function _clearPprCache(): void {
 
 export interface ComputePprInput {
   graph: Graph;
-  /** Snapshot creation timestamp (used as cache invalidation key). */
+  /** Graph version for cache scoping when available. */
+  graphVersionId?: string;
+  /** Snapshot creation timestamp used with graphVersionId for cache identity. */
   snapshotCreatedAt: number;
   /** repoId for cache scoping. */
   repoId: string;
@@ -430,7 +434,7 @@ export interface ComputePprInput {
  * or no seed maps to a node in the graph.
  */
 export async function computePpr(input: ComputePprInput): Promise<PprResult> {
-  const { graph, snapshotCreatedAt, repoId, options } = input;
+  const { graph, graphVersionId, snapshotCreatedAt, repoId, options } = input;
   const direction: PprDirection = options.direction ?? "both";
   const alpha = options.alpha ?? DEFAULT_ALPHA;
   const epsilon = options.epsilon ?? DEFAULT_EPSILON;
@@ -447,6 +451,7 @@ export async function computePpr(input: ComputePprInput): Promise<PprResult> {
 
   const key = cacheKey({
     repoId,
+    graphVersionId,
     snapshotCreatedAt,
     seedHash: seedHash(options.seeds),
     alpha,

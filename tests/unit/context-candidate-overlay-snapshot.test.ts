@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 
 import type { Connection } from "kuzu";
+import type { ContextCandidateFusionItem } from "../../src/retrieval/fusion.js";
 
 it("logs and keeps unboosted candidates when context PPR fails", async (t) => {
   const seedResolver = await import("../../dist/retrieval/seed-resolver.js");
@@ -52,6 +53,94 @@ it("logs and keeps unboosted candidates when context PPR fails", async (t) => {
   } finally {
     logger.debug = originalDebug;
   }
+});
+
+it("keeps fused ordering when cached graph provenance differs from Context", async (t) => {
+  const seedResolver = await import("../../dist/retrieval/seed-resolver.js");
+  const graphSnapshots = await import(
+    "../../dist/graph/graphSnapshotCache.js"
+  );
+  const ppr = await import("../../dist/retrieval/ppr.js");
+  const requestedVersions: Array<string | undefined> = [];
+  const loadedVersions: Array<string | undefined> = [];
+
+  t.mock.module("../../dist/retrieval/seed-resolver.js", {
+    namedExports: {
+      ...seedResolver,
+      resolveSeedSymbols: async () => ({
+        seeds: new Map([["seed", 1]]),
+        evidence: { resolved: ["seed"], unresolved: [], ambiguous: [] },
+      }),
+    },
+  });
+  t.mock.module("../../dist/graph/graphSnapshotCache.js", {
+    namedExports: {
+      ...graphSnapshots,
+      getGraphSnapshot: (_repoId: string, graphVersionId?: string) => {
+        requestedVersions.push(graphVersionId);
+        return graphVersionId === "v2" ? null : {};
+      },
+      loadAndCacheGraphSnapshot: async (
+        _conn: Connection,
+        _repoId: string,
+        graphVersionId?: string,
+      ) => {
+        loadedVersions.push(graphVersionId);
+        return null;
+      },
+      getGraphSnapshotCreatedAt: () => 1,
+    },
+  });
+  t.mock.module("../../dist/retrieval/ppr.js", {
+    namedExports: {
+      ...ppr,
+      computePpr: async () => ({ scores: new Map<string, number>() }),
+      applyPprBoost: (
+        items: Array<{ symbolId: string; score: number }>,
+      ) => ({
+        items: [...items].reverse(),
+      }),
+    },
+  });
+
+  const { applyContextPpr } = await import(
+    "../../dist/retrieval/context-candidate-search.js?ppr-version-provenance"
+  );
+  const candidates: ContextCandidateFusionItem[] = [
+    {
+      symbolId: "first",
+      score: 2,
+      source: "fts",
+      sourceRanks: { fts: 1 },
+      provenance: { symbol: { fts: 1 } },
+    },
+    {
+      symbolId: "second",
+      score: 1,
+      source: "fts",
+      sourceRanks: { fts: 2 },
+      provenance: { symbol: { fts: 2 } },
+    },
+  ];
+
+  const result = await applyContextPpr(
+    {} as Connection,
+    {
+      repoId: "repo",
+      graphVersionId: "v2",
+      query: "query",
+      limit: 2,
+      includeFileSummary: false,
+      includeTests: true,
+      symbolsPerFileSummary: 1,
+      chatMentions: ["Seed"],
+    },
+    candidates,
+  );
+
+  assert.deepStrictEqual(result, candidates);
+  assert.deepStrictEqual(requestedVersions, ["v2"]);
+  assert.deepStrictEqual(loadedVersions, ["v2"]);
 });
 
 it("keeps an overlay-only exact focus symbol pinned at Tier 0", async (t) => {
@@ -113,7 +202,6 @@ it("keeps an overlay-only exact focus symbol pinned at Tier 0", async (t) => {
             weights: {
               fts: 1,
               vector: 1,
-              legacyFallback: 1,
               overlay: 1,
             },
           },
@@ -265,7 +353,6 @@ it("bounds FileSummary symbol materialization before candidate mapping", async (
             weights: {
               fts: 1,
               vector: 1,
-              legacyFallback: 1,
               overlay: 1,
             },
           },

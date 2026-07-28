@@ -1,10 +1,12 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert";
+import type { Connection } from "kuzu";
 import {
   configureGraphSnapshotCache,
   getGraphSnapshot,
   hasGraphSnapshot,
   setGraphSnapshot,
+  loadAndCacheGraphSnapshot,
   invalidateGraphSnapshot,
   clearGraphSnapshots,
   getGraphSnapshotStats,
@@ -19,6 +21,14 @@ function makeFakeGraph(repoId: string) {
     adjacencyIn: new Map(),
     clusters: new Map(),
   } as any;
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("graphSnapshotCache", () => {
@@ -36,6 +46,60 @@ describe("graphSnapshotCache", () => {
     setGraphSnapshot("repo1", graph);
     const result = getGraphSnapshot("repo1");
     assert.strictEqual(result, graph);
+  });
+
+  it("returns only a snapshot with the requested graph version", () => {
+    const graph = makeFakeGraph("repo1");
+    setGraphSnapshot("repo1", graph, undefined, "v1");
+
+    assert.strictEqual(getGraphSnapshot("repo1", "v2"), null);
+    assert.strictEqual(getGraphSnapshot("repo1", "v1"), graph);
+  });
+
+  it("does not await an in-flight snapshot from another graph version", async () => {
+    const repoId = "repo-version-race";
+    const v1Graph = makeFakeGraph(repoId);
+    const v2Graph = makeFakeGraph(repoId);
+    const v1Started = deferred();
+    const releaseV1 = deferred();
+    let v2Started = false;
+
+    const v1Load = loadAndCacheGraphSnapshot(
+      {} as Connection,
+      repoId,
+      "v1",
+      async (_conn, _repoId, repoEpoch, graphVersionId) => {
+        v1Started.resolve();
+        await releaseV1.promise;
+        setGraphSnapshot(repoId, v1Graph, repoEpoch, graphVersionId);
+        return v1Graph;
+      },
+    );
+    await v1Started.promise;
+    invalidateGraphSnapshot(repoId);
+
+    const v2Load = loadAndCacheGraphSnapshot(
+      {} as Connection,
+      repoId,
+      "v2",
+      async (_conn, _repoId, repoEpoch, graphVersionId) => {
+        v2Started = true;
+        setGraphSnapshot(repoId, v2Graph, repoEpoch, graphVersionId);
+        return v2Graph;
+      },
+    );
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.strictEqual(v2Started, true);
+      assert.strictEqual(await v2Load, v2Graph);
+    } finally {
+      releaseV1.resolve();
+      await v1Load;
+    }
+
+    assert.strictEqual(getGraphSnapshot(repoId, "v2"), null);
+    assert.strictEqual(getGraphSnapshot(repoId, "v1"), v1Graph);
   });
 
   it("hasGraphSnapshot returns true when cached", () => {

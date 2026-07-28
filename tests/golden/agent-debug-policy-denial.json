@@ -1,26 +1,24 @@
 {
   "name": "agent-debug-policy-denial",
-  "description": "Debug task that attempts raw code access but is denied by policy",
+  "description": "Debug task focused on the failing login function",
   "tool": "sdl.context",
   "request": {
     "repoId": "test-repo",
     "taskType": "debug",
     "taskText": "Debug the failing login function",
     "budget": {
-      "maxActions": 10
+      "maxTokens": 2000
     },
-    "options": {
-      "requireDiagnostics": true,
-      "focusSymbols": ["auth:loginUser"]
-    }
+    "focusSymbols": ["auth:loginUser"]
   },
   "expectedResponse": {
-    "taskId": "string",
+    "status": "string",
     "taskType": "debug",
-    "finalEvidence": "array",
-    "summary": "string",
-    "success": "boolean",
-    "answer": "string",
-    "nextBestAction": "string"
+    "retrieval": "object",
+    "evidence": "array",
+    "edges": "array",
+    "omitted": "object",
+    "nextActions": "array",
+    "etag": "string"
   }
 }

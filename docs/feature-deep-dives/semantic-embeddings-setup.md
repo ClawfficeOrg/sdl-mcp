@@ -457,20 +457,24 @@ flowchart TD
     class e1,e2,e3,e4,e5,e6,e7 animate;
 ```
 
-Hybrid retrieval is the recommended default. The legacy path remains available through `semantic.retrieval.mode: "legacy"`, but the current recommended configuration surface is the hybrid pipeline under `semantic.retrieval.*`.
+SDL-MCP uses one coverage-aware retrieval pipeline. Configure its available
+semantic lanes under `semantic.retrieval.*`; there is no mode selector.
 
 ## Hybrid Retrieval Setup
 
-Hybrid retrieval replaces the legacy alpha-blending search with native Ladybug FTS + vector indexes fused via Reciprocal Rank Fusion (RRF). It is controlled by `semantic.retrieval.mode`.
+The pipeline fuses native Ladybug FTS and vector indexes via Reciprocal Rank
+Fusion (RRF), then renormalizes weights around unavailable lanes.
 
-### Enabling Hybrid Retrieval
+### Configuring Retrieval Lanes
+
+SDL-MCP selects hybrid retrieval automatically from the healthy enabled lanes.
+Configure each lane directly; there is no legacy mode switch.
 
 ```jsonc
 {
   "semantic": {
     "enabled": true,
     "retrieval": {
-      "mode": "hybrid", // "hybrid" (default) or "legacy"
       "fts": {
         "enabled": true, // Full-text search on Symbol.searchText
         "indexName": "symbol_search_text_v1",
@@ -497,11 +501,14 @@ Hybrid retrieval replaces the legacy alpha-blending search with native Ladybug F
 1. **FTS and vector indexes are created automatically** on DB init when `semantic.enabled: true`. The FTS extension indexes `Symbol.searchText`; vector indexes cover `Symbol.embeddingJinaCode` and `Symbol.embeddingNomic`.
 2. **At query time**, FTS and vector searches run in parallel. Each source produces a ranked candidate list.
 3. **RRF fuses** the rank lists: `score(d) = S 1/(k + rank_i(d))` � symbols ranked highly by multiple sources rise to the top.
-4. **If extensions are unavailable** (e.g., `fts` or `vector` not loaded), the system automatically falls back to the legacy alpha-blending path and records the fallback reason in telemetry.
+4. **If an extension is unavailable** (for example, `fts` or `vector` is not loaded), the system omits that lane, renormalizes the remaining weights, and records the reduced coverage in telemetry.
 
 ### Extension Requirements
 
-Hybrid retrieval requires the Ladybug `fts` and `vector` extensions. These are loaded best-effort on DB connection � if they're unavailable, hybrid search falls back to legacy automatically. Run `sdl-mcp doctor` to check extension status:
+Full hybrid coverage requires the Ladybug `fts` and `vector` extensions. They
+load best-effort on database connection; unavailable extensions reduce
+coverage without switching retrieval engines. Run `sdl-mcp doctor` to check
+extension status:
 
 ```
 Retrieval extensions ...................... PASS
@@ -811,7 +818,6 @@ Or add `"summaryApiKey": "sk-ant-..."` to the `semantic` config block.
 
     // -- Retrieval -----------------------------------------------
     "retrieval": {
-      "mode": "hybrid",
       "extensionsOptional": true,
       "fts": {
         "enabled": true,

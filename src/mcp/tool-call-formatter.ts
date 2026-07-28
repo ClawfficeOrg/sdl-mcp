@@ -422,14 +422,19 @@ function fmtAgentContext(
   }
 
   const lines = ["Sdl context"];
+  const status = str(result.status);
+  if (status) {
+    lines.push("", `status: ${status}`);
+  }
   const taskType = str(result.taskType);
   if (taskType) {
-    lines.push("", `taskType: ${taskType}`);
+    if (!status) lines.push("");
+    lines.push(`taskType: ${taskType}`);
   }
 
-  const evidenceCount = records(result.finalEvidence).length;
+  const evidenceCount = records(result.evidence).length;
   if (evidenceCount > 0) {
-    lines.push(`finalEvidence: ${evidenceCount} ${plural(evidenceCount, "item")}`);
+    lines.push(`evidence: ${evidenceCount} ${plural(evidenceCount, "item")}`);
   }
 
   return lines.join("\n");
@@ -907,7 +912,7 @@ function fmtGeneric(
     appended = appendGenericField(lines, result, key) || appended;
   }
 
-  const evidence = records(result.finalEvidence).slice(0, 8);
+  const evidence = records(result.evidence).slice(0, 8);
   for (const item of evidence) {
     const reference = str(item.reference);
     const summary = str(item.summary);

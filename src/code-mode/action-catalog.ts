@@ -845,7 +845,7 @@ const EXAMPLE_REGISTRY: Record<string, Record<string, unknown>> = {
   },
   "response.get": {
     handle: "response-myrepo-1770000000000-0123456789abcdef",
-    jsonPath: "finalEvidence[0]",
+    jsonPath: "evidence[0]",
     maxBytes: 8192,
   },
   "memory.store": {
@@ -1059,7 +1059,8 @@ const META_TOOL_EXAMPLES: Record<string, Record<string, unknown>> = {
     repoId: "<repoId>",
     taskType: "debug",
     taskText: "explain the auth failure path",
-    options: { contextMode: "precise", focusPaths: ["src/auth.ts"] },
+    budget: { maxTokens: 1200 },
+    focusPaths: ["src/auth.ts"],
   },
   file: {
     op: "previewWindow",

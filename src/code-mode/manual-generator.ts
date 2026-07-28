@@ -56,8 +56,8 @@ const MANUAL_TEMPLATE = `// SDL-MCP API: sdl.context for context; sdl.workflow f
 // Reference steps as ${"$"}N, e.g. ${"$"}0.results[0].symbolId. Wildcard [*] projects arrays: ${"$"}0.results[*].symbolId -> string[].
 // Limits: sdl.action.search limit <= 50; workflowContinuationGet limit <= 1000; runtimeExecute maxResponseLines 5..1000; shell runtime requires code.
 // Release-static medians: card50 search150 skeleton200 hotPath500 runtimeDigest120 context800/2000 window<=1400 slice1500.
-// Economy: answerFirst explain/debug; nearMisses; refsMode:"off" expands refs; digest build/test/lint.
-// sdl.context budgets accept maxTokens/maxEstimatedTokens, not maxCards.
+// Economy: bounded context evidence; nearMisses; refsMode:"off" expands refs; digest build/test/lint.
+// sdl.context requires budget.maxTokens; aliases and action/duration budgets are rejected.
 // Use wireFormat:"json" for symbol.search/sliceBuild when ${"$"}N refs need fields.
 // Continuation recipe: symbolSearch -> workflowContinuationGet(handle,path,offset,limit) -> dataMap/dataTemplate.
 

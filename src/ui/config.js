@@ -236,7 +236,6 @@ const FIELD_EFFECTS = Object.freeze({
   "/semantic/generateSummaries": "Turns LLM summary generation on or off during semantic indexing.",
   "/semantic/embeddingConcurrency": "Sets how many embedding batches can run in parallel during semantic refresh.",
   "/semantic/embeddingBatchSize": "Sets how many symbols are embedded in each embedding inference batch.",
-  "/semantic/retrieval/mode": "Chooses between legacy semantic reranking and the hybrid FTS plus vector retrieval pipeline.",
   "/semantic/retrieval/candidateLimit": "Caps how many retrieval candidates are fused and reranked before returning context.",
   "/runtime/maxDurationMs": "Sets the maximum runtime command duration before SDL-MCP stops the process.",
   "/runtime/maxConcurrentJobs": "Caps how many runtime executions can run at the same time.",

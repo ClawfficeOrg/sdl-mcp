@@ -24,7 +24,7 @@ describe("SemanticRetrievalConfigSchema", () => {
   it("default config parses correctly with all retrieval defaults", () => {
     const result = SemanticRetrievalConfigSchema.parse({});
 
-    assert.strictEqual(result.mode, "hybrid");
+    assert.equal("mode" in result, false);
     assert.strictEqual(result.extensionsOptional, true);
     assert.strictEqual(result.candidateLimit, 100);
     assert.ok(result.fts !== undefined, "fts sub-config should be present");
@@ -32,14 +32,13 @@ describe("SemanticRetrievalConfigSchema", () => {
     assert.ok(result.fusion !== undefined, "fusion sub-config should be present");
   });
 
-  it("mode='hybrid' parses correctly", () => {
-    const result = SemanticRetrievalConfigSchema.parse({ mode: "hybrid" });
-    assert.strictEqual(result.mode, "hybrid");
+  it("removes the retired mode field from parsed configuration", () => {
+    const result = SemanticRetrievalConfigSchema.parse({ mode: "legacy" });
+    assert.equal("mode" in result, false);
   });
 
   it("full retrieval block parses with all fields explicitly set", () => {
     const result = SemanticRetrievalConfigSchema.parse({
-      mode: "hybrid",
       extensionsOptional: false,
       candidateLimit: 50,
       fts: {
@@ -63,7 +62,6 @@ describe("SemanticRetrievalConfigSchema", () => {
       },
     });
 
-    assert.strictEqual(result.mode, "hybrid");
     assert.strictEqual(result.extensionsOptional, false);
     assert.strictEqual(result.candidateLimit, 50);
     assert.strictEqual(result.fts?.indexName, "my_fts_idx");
@@ -104,12 +102,6 @@ describe("SemanticRetrievalConfigSchema", () => {
     assert.strictEqual(fusion.rrfK, 60);
   });
 
-  it("rejects unknown mode values", () => {
-    assert.throws(
-      () => SemanticRetrievalConfigSchema.parse({ mode: "turbo" }),
-      /invalid_enum_value|invalid_value|Invalid enum value|Invalid option/i,
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -140,11 +132,11 @@ describe("SemanticConfigSchema with retrieval field", () => {
     assert.strictEqual(result.model, "jina-embeddings-v2-base-code");
   });
 
-  it("config with semantic.retrieval.mode='hybrid' parses correctly", () => {
+  it("ignores retired semantic.retrieval.mode values", () => {
     const result = SemanticConfigSchema.parse({
-      retrieval: { mode: "hybrid" },
+      retrieval: { mode: "legacy" },
     });
-    assert.strictEqual(result.retrieval?.mode, "hybrid");
+    assert.equal("mode" in (result.retrieval ?? {}), false);
   });
 
   it("config with full retrieval block parses correctly", () => {
@@ -152,7 +144,6 @@ describe("SemanticConfigSchema with retrieval field", () => {
       enabled: true,
       model: "nomic-embed-text-v1.5",
       retrieval: {
-        mode: "hybrid",
         extensionsOptional: false,
         candidateLimit: 200,
         fts: { enabled: true, topK: 50 },
@@ -162,7 +153,6 @@ describe("SemanticConfigSchema with retrieval field", () => {
     });
 
     assert.strictEqual(result.model, "nomic-embed-text-v1.5");
-    assert.strictEqual(result.retrieval?.mode, "hybrid");
     assert.strictEqual(result.retrieval?.candidateLimit, 200);
     assert.strictEqual(result.retrieval?.fts?.topK, 50);
     assert.strictEqual(result.retrieval?.vector?.efs, 400);
@@ -173,13 +163,12 @@ describe("SemanticConfigSchema with retrieval field", () => {
     const result = SemanticConfigSchema.parse({
       alpha: 0.7,
       ann: { enabled: true, m: 16, efConstruction: 128, efSearch: 64 },
-      retrieval: { mode: "legacy" },
+      retrieval: {},
     });
 
     assert.strictEqual(result.alpha, 0.7);
     assert.ok(result.ann !== undefined, "ann should be present");
     assert.strictEqual(result.ann?.enabled, true);
-    assert.strictEqual(result.retrieval?.mode, "legacy");
   });
 
   it("alpha defaults to 0.6", () => {

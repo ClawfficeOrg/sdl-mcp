@@ -213,14 +213,14 @@ function stripWindowsExtendedPathPrefix(filePath) {
 async function runRealPatch() {
   const repoId = "windows-fts-fixed-regression";
   const repoDir = join(home, "fixture-repo");
-  const sourceDir = join(repoDir, "src", "agent");
+  const sourceDir = join(repoDir, "src", "context");
   const dbPath = join(home, "fixed-patch.lbug");
   mkdirSync(sourceDir, { recursive: true });
-  const original = readFileSync("src/agent/planner.ts", "utf8");
+  const original = readFileSync("src/context/profiles.ts", "utf8");
   const patched =
     original +
     "\nexport function legacyFtsPatchProbe(value: number): number { return value + 1; }\n";
-  const filePath = join(sourceDir, "planner.ts");
+  const filePath = join(sourceDir, "profiles.ts");
   writeFileSync(filePath, original, "utf8");
   process.env.SDL_GRAPH_DB_PATH = dbPath;
 

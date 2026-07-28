@@ -3,7 +3,7 @@ export const SDL_MCP_SERVER_INSTRUCTIONS = [
   "",
   "Required SDL-MCP workflow:",
   "1. Confirm repository state with `repo.status`.",
-  '2. Gather task context via `sdl.context`; use `sdl.retrieve` for single-step `symbolSearch`, `symbolGetCard`, `slice.build`, `codeSkeleton`, `codeHotPath`, or bounded `codeNeedWindow` retrieval.',
+  '2. Gather task evidence via `sdl.context` with `budget.maxTokens` and flat focus fields; use `sdl.retrieve` for single-step `symbolSearch`, `symbolGetCard`, `slice.build`, `codeSkeleton`, `codeHotPath`, or bounded `codeNeedWindow` retrieval.',
   '3. Use `responseMode: "auto"` for large responses and retrieve needed excerpts with `response.get`.',
   '4. Reuse `{ ref, unchanged: true }` responses and session short ids (`sN`); pass `refsMode: "off"` only when full content is required.',
   "5. Use `sdl.workflow` for multi-step pipelines, runtime execution, data transforms, batch operations, mutations, or result piping between steps.",

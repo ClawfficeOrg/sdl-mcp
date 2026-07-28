@@ -18,19 +18,24 @@ The `verifying` and `failed` states can remain graph-readable when the current V
 
 ## Symbol search misses
 
-`sdl.symbol.search` searches symbol names; it does not add file-path matches to symbol ranking. When a search has no useful result and its query is clearly path-like (a slash or backslash, a known source extension, or an exact indexed repository-relative path), the response includes one structured `nextBestAction`. Call `sdl.context` with the supplied arguments to retry using `options.focusPaths: [query]`. Ordinary symbol-name misses do not receive this path-specific hint.
+`sdl.symbol.search` searches symbol names; it does not add file-path matches to symbol ranking. When a search has no useful result and its query is clearly path-like (a slash or backslash, a known source extension, or an exact indexed repository-relative path), the response includes one structured `nextBestAction`. Call `sdl.context` with the supplied flat `focusPaths: [query]`. Ordinary symbol-name misses do not receive this path-specific hint.
 
-## Context retrieval modes
+## Context retrieval profiles
 
-Broad `sdl.context` retrieval uses bounded hybrid search by default; precise
-retrieval stays lexical unless `options.semantic: true` is explicit. Forced
-semantic precise calls retain resolved named concepts and catalog actions inside
-strict explicit paths, including partial concept matches and symbols already
-found by the semantic lane. Card and skeleton evidence remains bounded per file
-and per response. See [Context Modes](./feature-deep-dives/context-modes.md) for
-the detailed selection and budget contracts.
+`sdl.context` uses the flat strict request defined by its tool schema. The
+required `budget.maxTokens` bounds the complete canonical payload. Optional
+`focusPaths`, `focusSymbols`, and `chatMentions` prioritize resolved seeds but do
+not create a hard output boundary.
 
-The Code Mode `sdl.context` schema publishes complete nested `budget` and `options` fields, and the `sdl.retrieve` schema publishes operation-specific `args` variants. Context and slice budgets reject unknown fields at their respective validation boundaries.
+The `taskType` selects a deterministic retrieval profile. SDL-MCP chooses the
+available lexical, vector, graph, overlay, feedback, and memory lanes, then
+returns `evidence`, selected-symbol `edges`, bounded `omitted` details, and
+logical `nextActions`. See [Context Profiles](./feature-deep-dives/context-modes.md)
+for the selection and budget contracts.
+
+The Code Mode `sdl.context` schema rejects unknown root keys and unknown
+`budget` keys. The `sdl.retrieve` schema publishes operation-specific `args`
+variants with their own validation boundaries.
 
 ## Response artifact retrieval
 

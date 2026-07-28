@@ -1142,7 +1142,6 @@ function mapRetrievalSource(
 ): "fts" | "vector" | "hybrid" | "legacy" {
   if (source === "fts") return "fts";
   if (source.startsWith("vector:")) return "vector";
-  if (source === "legacyFallback") return "legacy";
   // overlay or unknown → hybrid
   return "hybrid";
 }

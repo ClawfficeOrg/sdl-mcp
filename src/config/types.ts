@@ -511,14 +511,12 @@ export const SemanticRetrievalFusionConfigSchema = z
       .object({
         fts: z.number().finite().nonnegative(),
         vector: z.number().finite().nonnegative(),
-        legacyFallback: z.number().finite().nonnegative(),
         overlay: z.number().finite().nonnegative(),
       })
       .strict()
       .default({
         fts: 1,
         vector: 1,
-        legacyFallback: 1,
         overlay: 1,
       }),
     partialCoverageThresholdPermille: z
@@ -531,8 +529,6 @@ export const SemanticRetrievalFusionConfigSchema = z
   .strict();
 
 export const SemanticRetrievalConfigSchema = z.object({
-  /** "legacy" = original semantic-only re-rank path; "hybrid" = FTS + vector fusion. */
-  mode: z.enum(["legacy", "hybrid"]).default("hybrid"),
   /** When true, file-extension filtering is optional (not enforced during retrieval). */
   extensionsOptional: z.boolean().default(true),
   fts: SemanticRetrievalFtsConfigSchema.optional().default(() =>
@@ -565,8 +561,8 @@ export const SemanticConfigSchema = z.object({
   enabled: z.boolean().default(true),
   /**
    * @deprecated Use `retrieval.fusion.rrfK` and the hybrid pipeline instead.
-   * Legacy blend weight (0â€“1) for semantic vs. keyword score. Still honoured in
-   * "legacy" mode; ignored when `retrieval.mode` is "hybrid".
+   * Accepted for config compatibility; unified retrieval ignores this legacy
+   * semantic/keyword blend weight.
    */
   alpha: z.number().min(0).max(1).default(0.6),
   provider: z.enum(["api", "local", "mock"]).default("local"),
@@ -739,8 +735,8 @@ export const SemanticConfigSchema = z.object({
     .optional(),
   /**
    * @deprecated Use `retrieval.vector` for HNSW index configuration instead.
-   * Legacy HNSW ANN index settings. Still honoured when `retrieval.mode` is
-   * "legacy"; ignored when "hybrid" retrieval is active.
+   * Accepted for config compatibility and diagnostics; unified retrieval uses
+   * `retrieval.vector`.
    */
   ann: AnnConfigSchema.optional(),
   /** Hybrid retrieval pipeline configuration (FTS + vector fusion). */

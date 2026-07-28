@@ -277,22 +277,28 @@ describe("formatToolCallForUser", () => {
 
   // --- context ---
 
-  it("summarizes sdl.context final evidence without replaying summaries", () => {
+  it("summarizes canonical sdl.context evidence without replaying cards", () => {
     const result = formatToolCallForUser("sdl.context", {}, {
+      status: "complete",
       taskType: "debug",
-      finalEvidence: [
+      evidence: [
         {
-          reference: "src/a.ts:10",
-          summary: "This detailed evidence summary belongs in structured content.",
+          symbolId: "symbol:a",
+          rung: "card",
+          card: { file: "src/a.ts" },
         },
         {
-          reference: "src/b.ts:20",
-          summary: "This second detailed summary also stays out of display text.",
+          symbolId: "symbol:b",
+          rung: "card",
+          card: { file: "src/b.ts" },
         },
       ],
     });
 
-    assert.strictEqual(result, "Sdl context\n\ntaskType: debug\nfinalEvidence: 2 items");
+    assert.strictEqual(
+      result,
+      "Sdl context\n\nstatus: complete\ntaskType: debug\nevidence: 2 items",
+    );
   });
 
   // --- workflow ---

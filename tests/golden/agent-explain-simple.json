@@ -9,17 +9,17 @@
     "budget": {
       "maxTokens": 1000
     },
-    "options": {
-      "focusSymbols": ["auth:authenticateUser"],
-      "includeTests": false
-    }
+    "focusSymbols": ["auth:authenticateUser"],
+    "includeTests": false
   },
   "expectedResponse": {
-    "taskId": "string",
+    "status": "string",
     "taskType": "explain",
-    "finalEvidence": "array",
-    "summary": "string",
-    "success": "boolean",
-    "answer": "string"
+    "retrieval": "object",
+    "evidence": "array",
+    "edges": "array",
+    "omitted": "object",
+    "nextActions": "array",
+    "etag": "string"
   }
 }

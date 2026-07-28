@@ -175,7 +175,6 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
           provider: "mock",
           alpha: 0.6,
           retrieval: {
-            mode: "hybrid",
             extensionsOptional: true,
             candidateLimit: 100,
             fts: {

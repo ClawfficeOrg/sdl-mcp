@@ -629,7 +629,7 @@ test("temporary SDL benchmark server disables HTTP auth for Codex MCP access", (
   assert.equal(config.indexing.engine, "rust");
   assert.equal(config.indexing.providerFirst.lsp.mode, "primaryWithCaps");
   assert.equal(config.semantic.enabled, true);
-  assert.equal(config.semantic.retrieval.mode, "hybrid");
+  assert.equal("mode" in config.semantic.retrieval, false);
   assert.equal(config.semanticEnrichment.enabled, true);
   assert.equal(config.scip.enabled, true);
   assert.equal(config.scip.generator.enabled, true);

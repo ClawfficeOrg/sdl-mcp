@@ -119,7 +119,7 @@ Copy this block into `AGENTS.md` for token-efficient SDL-MCP usage on the curren
 
 Use this order unless task constraints force escalation:
 
-1. `sdl.context` for explain/debug/review/implement/understand/investigate prompts. Set `responseMode: "auto"`, use `contextMode: "precise"` for named symbols or focused paths, `"broad"` for unfamiliar subsystems, and always provide a budget.
+1. `sdl.context` for explain/debug/review/implement/understand/investigate prompts. Set `responseMode: "auto"`, always provide `budget.maxTokens`, and add flat focus fields when the task names exact targets.
 2. `sdl.symbol.search` + `sdl.symbol.getCard` for exact symbol names, APIs, or focused edit targets.
    - Keep `limit` low (`5-20`) to start; default is `50`, max is `1000`.
    - Use `symbolRef` when you know a symbol name and optional file or kind hints but do not yet have the canonical ID.
@@ -151,7 +151,7 @@ Use this order unless task constraints force escalation:
 
 ### 2) Task-specific workflows
 
-- **Debug**: `sdl.context` first with `contextMode: "precise"` and focused `taskText`; follow with exact `symbol.search`/`symbol.getCard`, `codeHotPath`, or `codeNeedWindow` only if still ambiguous.
+- **Debug**: call `sdl.context` first with focused `taskText`, `budget.maxTokens`, and any known `focusPaths`, `focusSymbols`, or `chatMentions`; follow with exact `symbol.search`/`symbol.getCard`, `codeHotPath`, or `codeNeedWindow` only if still ambiguous.
 - **Debug (auto-discovery)**: `slice.build` with `taskText` describing the bug + `stackTrace` and/or `failingTestPath` if available → SDL-MCP finds symbols automatically. Pass the same context via `sliceContext` to `code.needWindow` if raw code is needed.
 - **Feature implementation**: use `sdl.context` when you need task-shaped understanding, `symbol.search -> symbol.getCard` for exact targets, and `slice.build` when you need likely files or a dependency frontier before editing. Use `symbol.edit` for one-symbol changes and `search.edit` for bounded batch edits.
 - **PR review**: `delta.get -> pr.risk.analyze -> card/hotPath for high-risk symbols`.
@@ -219,22 +219,14 @@ Stale buffer pushes (version ≤ current) are rejected automatically.
 
 ### 5) Task Context (`sdl.context`) guidance
 
-- Always provide a budget (`maxTokens`, `maxActions`, optionally `maxDurationMs`).
-- Scope with `focusSymbols` and/or `focusPaths` when you have them. Exact and focused implementation evidence stays on the first page ahead of unrelated lexical or semantic cards. Precise explain tasks add a hot path when explicit scope or chat mentions identify an implementation target. If broad mode is noisy or precise mode under-covers a subsystem, use `sdl.symbol.search`/`symbolSearch` for exact symbols before escalating further.
-- Broad mode (the default) enables semantic seeding and path-aware selection unless `options.semantic: false`. Inferred paths are soft ranking hints, while explicit `focusPaths` constrain the scope strictly. Set `options.semantic: true` to force hybrid retrieval, and set `options.semantic: false` for lexical-only debugging or tests.
-- Use `contextMode: "precise"` for targeted lookups (max 4 cluster-expanded symbols, minimal tokens — beats manual workflow assembly). Use `"broad"` (default) for investigation tasks needing surrounding context (max 10 cluster-expanded symbols with diversity scoring).
-- Avoid `requireDiagnostics` unless needed; it can add a raw rung.
-- Task types: `"debug"`, `"review"`, `"implement"`, `"explain"`.
-- Precise mode plans fewer rungs per task type: debug = card + hotPath, explain = card + skeleton (plus hotPath for explicit scope or chat mentions), review = card + skeleton + hotPath, implement = card + skeleton.
-- Planner token estimates are approximately:
-  - `card`: `50`
-  - `skeleton`: `200`
-  - `hotPath`: `500`
-  - `raw`: `2000`
-- When over budget, planner trims rungs based on confidence tier: high-confidence retrievals trim to cheapest rungs, low-confidence retrievals preserve diagnostic depth. At least one rung is always kept.
-- Broad mode returns a compact response by default: `taskId`, `taskType`, `success`, `summary`, `answer`, `finalEvidence`, and `nextBestAction` (when relevant). The fields `actionsTaken`, `path`, `metrics`, and `retrievalEvidence` are not part of the model-visible broad response. `finalEvidence` and `answer` are the primary model-visible fields. The `answer` field is always preserved on successful responses.
-- When answer-first evidence is insufficient, the response preserves its evidence and continuation but returns `success: false` and `status: "partial"`. Follow `nextBestAction` instead of treating the fallback as a complete answer.
-- Precise mode strips the response further. Only `taskId`, `taskType`, `success`, `path`, `finalEvidence`, and `metrics` are returned.
+- Always provide `budget.maxTokens`; it limits the complete canonical payload.
+- Pass `focusSymbols`, `focusPaths`, and `chatMentions` as flat fields when known. They are authoritative seed priorities, not output boundaries.
+- Use one of the task profiles: `"debug"`, `"review"`, `"implement"`, or `"explain"`. The profile selects expansion direction, depth, test defaults, and preferred evidence rungs.
+- SDL-MCP selects available retrieval lanes automatically and reports `retrieval.level` plus ordered lane availability. Callers do not choose semantic or context modes.
+- Successful responses contain `status`, `taskType`, `retrieval`, `evidence`, `edges`, `omitted`, and `nextActions`. Evidence rungs are `card`, `skeleton`, and `hotPath`; raw windows remain behind `codeNeedWindow`.
+- `status: "budgetLimited"` means resolved priority work exceeded the budget. Inspect `omitted.highestRanked` and follow its logical actions instead of widening the same request blindly.
+- `status: "empty"` means healthy available lanes found no candidates. Insufficient retrieval returns a structured error with recovery actions.
+- The engine never creates a context continuation. `responseMode: "auto"` or `"handle"` may still wrap the complete payload in a generic `response.get` artifact.
 
 ### 6) Runtime execution (`sdl.runtime.execute` + `sdl.runtime.queryOutput`)
 

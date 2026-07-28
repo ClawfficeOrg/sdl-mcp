@@ -16,9 +16,10 @@ export const WORKFLOW_DESCRIPTION =
 
 export const CONTEXT_DESCRIPTION =
   "Retrieve task-shaped code context for explain, debug, review, or implement " +
-  "work. Use options.answerFirst for compact explain/debug answers before " +
-  "expanding evidence ids. This is the Code Mode equivalent of sdl.context " +
-  "and should be preferred over sdl.workflow for context retrieval.";
+  "work within an explicit token budget. Returns deterministic evidence, " +
+  "selected edges, bounded omissions, and next actions. This is the Code Mode " +
+  "equivalent of sdl.context and should be preferred over sdl.workflow for " +
+  "context retrieval.";
 
 export const RETRIEVE_DESCRIPTION =
   "Retrieve compact SDL graph/code context in one step. Use for " +

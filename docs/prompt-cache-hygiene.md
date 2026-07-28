@@ -18,11 +18,20 @@ There is no error signal when hygiene breaks. A timestamp accidentally added to 
 
 **Deterministic tool outputs.** Identical tool calls against an unchanged index return byte-identical results when the tool's contract is content-shaped rather than session-scoped — within a process, across fresh processes, and across a from-scratch re-index of unchanged source. For `sdl.context`, this guarantee requires `responseMode: "inline"` with `refsMode: "off"`. Default/auto response-artifact handles and session refs are deliberately session-scoped: handles may vary, and repeated evidence may become `{ ref, unchanged: true }`. Every LadybugDB query carries an explicit `ORDER BY` with a deterministic tiebreaker (file path, then symbol name, then byte offset), because columnar engines with parallel scans do not guarantee row order otherwise. Result serialization uses a locked key order.
 
+`sdl.context` computes its ETag from the complete canonical v2 payload before
+session refs, packed encoding, or generic response-artifact wrapping. The
+canonical payload therefore has one content identity across supported wrappers.
+
 **No volatile content in deterministic projections.** Content-shaped model-facing tool responses contain no wall-clock timestamps, query durations, session identifiers, or machine-specific absolute paths. Opaque response-artifact handles and session refs are exempt as described above; the content they reference still follows the same projection rules. Paths are otherwise reported relative to the indexed repository root. Telemetry-off `repo.status` omits machine-specific root paths and timestamps at every detail level; callers set `includeTelemetry: true` to opt into operational and volatile fields.
 
 For `sdl.info({ redactPaths: true })`, a configured log-file path is projected as the literal `"<redacted>"` and disabled file logging remains `null`; no per-process log filename survives, including in the matching fallback warning. The call is covered by the fresh-process determinism fixture.
 
-The same boundary applies to the six public gateways. `sdl.context` response content strips action durations and evidence timestamps before inline serialization or artifact storage; timing remains available only through `includeDiagnostics`, while opaque artifact handles remain session-scoped. Manual and response-artifact projections expose stable capability/content metadata, not process start times, runtime versions, expiry times, or session-key hashes. Error responses follow the same rule so a repeated invalid call is as cache-stable as a successful one.
+The same boundary applies to the six public gateways. `sdl.context` canonical
+evidence contains no action durations or evidence timestamps. Opaque artifact
+handles remain session-scoped, while manual and response-artifact projections
+expose stable capability or content metadata rather than process start times,
+runtime versions, expiry times, or session-key hashes. Error responses follow
+the same rule so a repeated invalid call is as cache-stable as a successful one.
 
 Workflow continuation data receives the same deterministic model projection as the first page. Zero-identifier-match hot-path fallbacks are omitted because adjacent source text does not prove identifier relevance. Internal `$N` result piping continues to use raw step data, so response shaping never changes workflow semantics. Persisted runtime artifacts remain byte-faithful after configured redaction; only default model-facing excerpts remove leading command-prompt echoes and recognized Node test-duration suffixes.
 

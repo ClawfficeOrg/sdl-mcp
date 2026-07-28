@@ -20,7 +20,7 @@ Follow the same workflow as the user-global Codex skill at `C:\\Users\\glitt\\.c
    - Use `sdl.context` for task-shaped explain/debug/review/implement context.
    - Use `symbolSearch` / `sdl.symbol.search` plus `symbolGetCard` / `sdl.symbol.getCard` for exact symbols, APIs, and focused edit targets.
    - Use `sliceBuild` / `sdl.slice.build` when you need likely files, a dependency frontier, blast radius, or an edit-planning set.
-   - For `sdl.context`, set `contextMode: "precise"` for named symbols, exact paths, narrow bugs, and focused reviews; use `contextMode: "broad"` for unfamiliar subsystems.
+   - For `sdl.context`, provide `budget.maxTokens` and use flat focus fields for named symbols or paths. Inspect `evidence`, `edges`, `omitted`, and `nextActions`.
    - Set `responseMode: "auto"` for potentially large responses and use `response.get` only for needed excerpts.
    - Keep budgets tight; use slice budgets when file/card counts matter.
 6. **Use `sdl.workflow`** for multi-step follow-ups, runtime execution, data transforms, and batch operations after the first SDL discovery surface. Do not wrap a single `sdl.context` call just to retrieve context.

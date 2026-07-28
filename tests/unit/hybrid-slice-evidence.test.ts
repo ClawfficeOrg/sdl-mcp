@@ -31,7 +31,6 @@ function mapRetrievalSource(
 ): "fts" | "vector" | "hybrid" | "legacy" {
   if (source === "fts") return "fts";
   if (source.startsWith("vector:")) return "vector";
-  if (source === "legacyFallback") return "legacy";
   // overlay or unknown -> hybrid
   return "hybrid";
 }
@@ -53,10 +52,6 @@ describe("mapRetrievalSource — logic", () => {
     assert.strictEqual(mapRetrievalSource("vector:nomic"), "vector");
   });
 
-  it('maps "legacyFallback" to "legacy"', () => {
-    assert.strictEqual(mapRetrievalSource("legacyFallback"), "legacy");
-  });
-
   it('maps "overlay" to "hybrid"', () => {
     assert.strictEqual(mapRetrievalSource("overlay"), "hybrid");
   });
@@ -67,8 +62,6 @@ describe("mapRetrievalSource — logic", () => {
       "fts",
       "vector:jinacode",
       "vector:nomic",
-  "vector:jinacode",
-  "legacyFallback",
       "overlay",
     ];
     for (const source of allSources) {
@@ -158,7 +151,7 @@ describe("mapRetrievalSource — source verification", () => {
     );
   });
 
-  it('mapRetrievalSource returns union of "fts" | "vector" | "hybrid" | "legacy"', () => {
+  it("mapRetrievalSource preserves the public wire-format union", () => {
     assert.ok(
       src.includes('"fts" | "vector" | "hybrid" | "legacy"'),
       "mapRetrievalSource return type should be the 4-value wire-format union",
@@ -172,12 +165,6 @@ describe("mapRetrievalSource — source verification", () => {
     );
   });
 
-  it('handles legacyFallback mapping to "legacy"', () => {
-    assert.ok(
-      src.includes('"legacyFallback"') && src.includes('"legacy"'),
-      "should map legacyFallback to legacy",
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -295,7 +282,7 @@ describe("RetrievalEvidenceItem schema — source verification", () => {
   it("schema has optional retrievalSource enum field", () => {
     assert.ok(
       src.includes('z.enum(["fts", "vector", "hybrid", "legacy"])'),
-      'RetrievalEvidenceItemSchema should have retrievalSource enum with fts/vector/hybrid/legacy',
+      "RetrievalEvidenceItemSchema should preserve the established public source values",
     );
   });
 

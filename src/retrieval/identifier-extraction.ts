@@ -1,5 +1,5 @@
 // =============================================================================
-// agent/identifier-extraction.ts — Pure identifier-extraction helpers.
+// retrieval/identifier-extraction.ts — Pure identifier-extraction helpers.
 //
 // Public exports:
 //   - BEHAVIORAL_KINDS, MAX_IDENTIFIERS, IDENTIFIER_STOP_WORDS
@@ -7,7 +7,6 @@
 //   - generateCompoundIdentifiers(text)
 //   - extractIdentifiersFromText(text, queryContext?)
 //
-// Extracted from agent/executor.ts to lower per-file LLM cognitive load.
 // All helpers are pure (no I/O, no class deps).
 // =============================================================================
 /** Injectable gate evaluator for testability. */

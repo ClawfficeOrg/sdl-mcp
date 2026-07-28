@@ -77,7 +77,7 @@ describe("code-mode manual generator", () => {
     assert.match(manual, /Release-static medians/);
     assert.match(manual, /search150/);
     assert.match(manual, /runtimeDigest120/);
-    assert.match(manual, /answerFirst/);
+    assert.match(manual, /bounded context evidence/);
     assert.match(manual, /nearMisses/);
   });
 
@@ -128,7 +128,10 @@ describe("code-mode manual generator", () => {
     assert.match(manual, /runtimeExecute maxResponseLines 5\.\.1000/);
     assert.match(manual, /shell runtime requires code/);
     assert.match(manual, /Continuation recipe: symbolSearch/);
-    assert.match(manual, /not maxCards/);
+    assert.match(
+      manual,
+      /sdl\.context requires budget\.maxTokens; aliases and action\/duration budgets are rejected/,
+    );
     assert.match(manual, /wireFormat:\"json\"/);
     assert.match(manual, /sliceHandle: string/);
     const sliceBuildLine = manual

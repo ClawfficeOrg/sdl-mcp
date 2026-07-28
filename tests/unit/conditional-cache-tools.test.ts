@@ -14,7 +14,9 @@ import {
   getLadybugConn,
   initLadybugDb,
 } from "../../dist/db/ladybug.js";
+import { ContextEngineV2 } from "../../dist/context/engine.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
+import { handleAgentContext } from "../../dist/mcp/tools/context.js";
 
 const REPO_ID = "conditional-cache-tools-repo";
 const graphDbPath = join(tmpdir(), `.lbug-${REPO_ID}-${process.pid}`);
@@ -137,6 +139,68 @@ describe("conditional cache-aware tool handlers", () => {
       notModified: true,
       etag: first.etag,
     });
+  });
+
+  it("context returns notModified only for the same canonical payload", async () => {
+    const buildContext = mock.method(
+      ContextEngineV2.prototype,
+      "buildContext",
+      async (request) => ({
+        status: "complete" as const,
+        taskType: request.taskType,
+        retrieval: { level: "lexical" as const, lanes: [] },
+        evidence: [
+          {
+            rung: "card" as const,
+            symbolId,
+            path: relPath,
+            rank: 1,
+            tier: 0 as const,
+            lanes: ["exactIdentifier" as const],
+            content: {
+              name: request.taskText.includes("changed") ? "changed" : "greet",
+            },
+          },
+        ],
+        edges: [],
+        omitted: { total: 0, byReason: { budget: 0 }, highestRanked: [] },
+        nextActions: [],
+      }),
+    );
+    const args = {
+      repoId: REPO_ID,
+      taskType: "explain" as const,
+      taskText: "Explain greet",
+      budget: { maxTokens: 1_024 },
+      refsMode: "off" as const,
+      responseMode: "inline" as const,
+      wireFormat: "json" as const,
+    };
+
+    try {
+      const first = await handleAgentContext(args);
+      assert.ok("etag" in first);
+
+      const unchanged = await handleAgentContext({
+        ...args,
+        ifNoneMatch: first.etag,
+      });
+      assert.deepStrictEqual(unchanged, {
+        notModified: true,
+        etag: first.etag,
+      });
+
+      const changed = await handleAgentContext({
+        ...args,
+        taskText: "Explain changed greet",
+        ifNoneMatch: first.etag,
+      });
+      assert.ok("etag" in changed);
+      assert.notEqual(changed.etag, first.etag);
+      assert.equal("notModified" in changed, false);
+    } finally {
+      buildContext.mock.restore();
+    }
   });
 
 

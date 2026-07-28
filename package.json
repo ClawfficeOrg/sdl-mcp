@@ -21,6 +21,7 @@
     "templates/*.json",
     "templates/*.md",
     "templates/*.template",
+    "templates/sdl-mcp-agent-workflow",
     "scripts/postinstall.mjs",
     "scripts/postinstall-watchman.mjs",
     "scripts/postinstall-tree-sitter.mjs",

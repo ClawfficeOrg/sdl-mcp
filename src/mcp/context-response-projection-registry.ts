@@ -17,7 +17,6 @@ export type ResponseProjectionAction =
 
 export type ResponseProjector =
   | "actionSearch"
-  | "context"
   | "generic"
   | "repoStatus"
   | "usage"
@@ -77,7 +76,7 @@ export const RESPONSE_PROJECTION_RULES = createResponseProjectionRegistry([
       keepNestedWhyApproved: true,
     },
   ],
-  ["context", { projector: "context" }],
+  ["context", { projector: "generic" }],
   ["delta.get", { projector: "generic", showRepoId: true }],
   ["repo.overview", { projector: "generic", showRepoId: true }],
   ["repo.status", { projector: "repoStatus", showRepoId: true }],

@@ -7,23 +7,19 @@
     "taskType": "debug",
     "taskText": "Investigate performance issue in data processing pipeline",
     "budget": {
-      "maxTokens": 5000,
-      "maxActions": 20,
-      "maxDurationMs": 5000
+      "maxTokens": 5000
     },
-    "options": {
-      "requireDiagnostics": true,
-      "focusSymbols": ["pipeline:processData"],
-      "includeTests": true
-    }
+    "focusSymbols": ["pipeline:processData"],
+    "includeTests": true
   },
   "expectedResponse": {
-    "taskId": "string",
+    "status": "string",
     "taskType": "debug",
-    "finalEvidence": "array",
-    "summary": "string",
-    "success": "boolean",
-    "answer": "string",
-    "nextBestAction": "string"
+    "retrieval": "object",
+    "evidence": "array",
+    "edges": "array",
+    "omitted": "object",
+    "nextActions": "array",
+    "etag": "string"
   }
 }

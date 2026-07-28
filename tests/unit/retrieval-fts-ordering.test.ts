@@ -17,7 +17,6 @@ it("stabilizes equal-score FTS rows for symbols and file summaries", async (t) =
     embeddingProfile: "specialized",
     symbolEmbeddingModels: ["jina-embeddings-v2-base-code"],
     fileSummaryEmbeddingModels: ["nomic-embed-text-v1.5"],
-    retrieval: { mode: "hybrid" },
   });
   const caps = {
     fts: true,

@@ -56,7 +56,7 @@ Most SDL-MCP tools attach a direct raw baseline: either explicit raw output toke
 
 For `sdl.context`, the raw-equivalent estimate is derived from the evidence returned to the caller:
 
-- collect model-visible returned evidence from `finalEvidence`
+- collect model-visible returned evidence from `evidence`
 - resolve `symbol:`, `hotpath:`, and `file:` references back to indexed source files
 - sum each unique source file's indexed `byteSize / 4` once, because a caller without SDL-MCP would normally need to inspect those raw files to recover the same facts
 - add the per-result floor only for returned evidence that cannot be mapped back to a source file

@@ -8,35 +8,12 @@
  * 4. PolicyEngine receives defaultDenyRaw from code.needWindow
  * 5. code.needWindow break-glass honors policy (same root cause as #4)
  * 6. memory.store upsert with explicit memoryId
- * 7. agent.context precise mode caps at 5 symbols, not 1
+ * The retired v1 context selector is covered by the v2 public contract suites.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
 
 // ── #7: Precise mode effectiveMax ────────────────────────────────────
-
-describe("Executor selectTopSymbols precise mode cap", () => {
-  it("precise mode effectiveMax should be min(5, maxCount), not 1", async () => {
-    // The ranking logic moved from executor.ts to context-ranking.ts in the
-    // evidence-aware ranking refactor. Verify the fix is in the new location.
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync("src/agent/context-ranking.ts", "utf8");
-    assert.ok(
-      src.includes("Math.min(5, maxCount)"),
-      "effectiveMax for precise mode should be Math.min(5, maxCount) in context-ranking.ts",
-    );
-    // Also verify executor delegates to ranking module
-    const executorSrc = readFileSync("src/agent/executor.ts", "utf8");
-    assert.ok(
-      executorSrc.includes("selectFinalSymbols"),
-      "executor.ts should delegate to the sole final selector in context-ranking",
-    );
-    assert.ok(
-      !executorSrc.includes("isPrecise ? 1 : maxCount"),
-      "Old hardcoded effectiveMax of 1 should be gone",
-    );
-  });
-});
 
 // ── #6: memory.store upsert semantics ────────────────────────────────
 

@@ -38,7 +38,7 @@ describe("extractDeliveredSymbolIdsFromToolResult", () => {
 
   it("parses packed context payloads from _packedPayload", () => {
     const result = {
-      finalEvidence: [],
+      evidence: [],
       _packedPayload: packedSearchPayload(`@ids=s4:${FULL_ID_A}`),
     };
     assert.deepEqual(extractDeliveredSymbolIdsFromToolResult(result), [

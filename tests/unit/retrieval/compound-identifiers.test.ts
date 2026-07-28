@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import {
   generateCompoundIdentifiers,
   extractIdentifiersFromText,
-} from "../../../dist/agent/executor.js";
+} from "../../../dist/retrieval/identifier-extraction.js";
 
 describe("generateCompoundIdentifiers", () => {
   it("generates camelCase pairs from adjacent words", () => {

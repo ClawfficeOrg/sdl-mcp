@@ -392,7 +392,7 @@ function lanesFromSourceRanks(
   ) as ContextCandidateSource[]) {
     if (source === "exactIdentifier") {
       lanes.add("exactIdentifier");
-    } else if (source === "fts" || source === "legacyFallback") {
+    } else if (source === "fts") {
       lanes.add(entity === "symbol" ? "symbolFts" : "fileSummaryFts");
     } else if (source.startsWith("vector:")) {
       lanes.add(entity === "symbol" ? "symbolVec" : "fileSummaryVec");
@@ -624,10 +624,6 @@ export function buildRetrievalState(
   level: ContextRetrievalLevel;
   lanes: ContextRetrievalLane[];
 } {
-  const hasLegacyLexical = candidates.some(
-    (candidate) =>
-      candidate.sourceRanks?.legacyFallback !== undefined,
-  );
   const hasOverlay = candidates.some((candidate) =>
     candidate.lanes.includes("overlay"),
   );
@@ -699,7 +695,6 @@ export function buildRetrievalState(
   if (
     allAttemptedFailed &&
     !hasOverlay &&
-    !hasLegacyLexical &&
     !exactOrGraphCandidate
   ) {
     return { level: "insufficient", lanes };
@@ -715,8 +710,8 @@ export function buildRetrievalState(
   );
   const hasObservedOutcomes = outcomes.length > 0;
   const hasLexical = hasObservedOutcomes
-    ? lexicalSucceeded || hasLegacyLexical || hasOverlay
-    : symbolFts || fileSummaryFts || hasLegacyLexical || hasOverlay;
+    ? lexicalSucceeded || hasOverlay
+    : symbolFts || fileSummaryFts || hasOverlay;
   const hasVector = hasObservedOutcomes
     ? vectorSucceeded
     : symbolVector || fileSummaryVector;
@@ -877,6 +872,7 @@ async function defaultRetrieve(
     conn,
     {
       repoId: request.repoId,
+      graphVersionId: version.versionId,
       query: request.taskText,
       limit: CANDIDATE_LIMIT,
       includeFileSummary: profileUsesAuxiliaryLane(

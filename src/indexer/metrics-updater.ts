@@ -275,7 +275,6 @@ export async function finalizeIndexing({
      * index time. Per-lane arrays override either profile. */
     const retrievalConfig = semanticConfig.retrieval;
     const shouldRunFileSummaryEmbeddings =
-      (retrievalConfig?.mode ?? "hybrid") === "hybrid" &&
       retrievalConfig?.vector?.enabled !== false;
 
     if (shouldRunFileSummaryEmbeddings) {

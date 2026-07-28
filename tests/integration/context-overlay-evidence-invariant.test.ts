@@ -246,44 +246,37 @@ describe("context overlay evidence invariant", () => {
         repoId: REPO_ID,
         taskType: "explain",
         taskText: "Explain the modified and added functions",
-        budget: { maxActions: 3, maxTokens: 10_000 },
-        options: {
-          contextMode: "broad",
-          semantic: false,
-          focusSymbols: [
-            durableRemoved.symbolId,
-            durableModified.symbolId,
-            overlayAdded.symbolId,
-          ],
-          cardDetail: "full",
-        },
+        budget: { maxTokens: 10_000 },
+        focusSymbols: [
+          durableRemoved.symbolId,
+          durableModified.symbolId,
+          overlayAdded.symbolId,
+        ],
         responseMode: "inline",
         wireFormat: "json",
         refsMode: "off",
       },
       session,
     );
-    assert.ok("finalEvidence" in context);
-    const symbolEvidence = context.finalEvidence.filter((evidence) =>
-      evidence.reference.startsWith("symbol:"),
+    assert.ok("evidence" in context);
+    const symbolEvidence = context.evidence.filter(
+      (evidence) => evidence.rung === "card",
     );
-    const skeletonEvidence = context.finalEvidence.filter(
-      (evidence) => evidence.type === "skeleton",
+    const skeletonEvidence = context.evidence.filter(
+      (evidence) => evidence.rung === "skeleton",
     );
     assert.ok(skeletonEvidence.length > 0);
     for (const evidence of skeletonEvidence) {
-      assert.ok(evidence.reference.startsWith("symbol:"));
+      assert.equal(typeof evidence.symbolId, "string");
     }
-    const evidenceIds = symbolEvidence.map((evidence) =>
-      evidence.reference.slice("symbol:".length),
-    );
+    const evidenceIds = symbolEvidence.map((evidence) => evidence.symbolId);
     assert.ok(!evidenceIds.includes(durableRemoved.symbolId));
     assert.ok(evidenceIds.includes(durableModified.symbolId));
     assert.ok(evidenceIds.includes(overlayAdded.symbolId));
-    for (const evidence of context.finalEvidence) {
+    for (const evidence of context.evidence) {
       assert.ok(
-        !evidence.reference.endsWith(durableRemoved.symbolId),
-        `Removed durable symbol leaked through ${evidence.type} evidence`,
+        evidence.symbolId !== durableRemoved.symbolId,
+        `Removed durable symbol leaked through ${evidence.rung} evidence`,
       );
     }
 
@@ -292,16 +285,15 @@ describe("context overlay evidence invariant", () => {
       [overlayAdded.symbolId, overlayAdded],
     ]);
     for (const evidence of symbolEvidence) {
-      const symbolId = evidence.reference.slice("symbol:".length);
+      const symbolId = evidence.symbolId;
       const expected = expectedById.get(symbolId);
       assert.ok(expected, `Unexpected context evidence ${symbolId}`);
       const expectedFile = snapshot.filesById.get(expected.fileId);
       assert.ok(expectedFile);
       const expectedSignature = signatureValue(expected);
-      assert.match(evidence.summary, new RegExp(expectedFile.relPath));
-      if (typeof expectedSignature.text === "string") {
-        assert.ok(evidence.summary.includes(`sig: ${expectedSignature.text}`));
-      }
+      assert.equal(evidence.path, expectedFile.relPath);
+      const content = evidence.content as Record<string, unknown>;
+      assert.deepEqual(content.signature, expectedSignature);
 
       const cardResponse = await handleSymbolGetCard(
         { repoId: REPO_ID, symbolId, refsMode: "off" },

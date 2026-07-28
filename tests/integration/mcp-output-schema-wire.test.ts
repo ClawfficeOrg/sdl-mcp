@@ -22,6 +22,7 @@ import {
 } from "../../dist/db/ladybug.js";
 import { resetSearchEditPlanStore } from "../../dist/mcp/tools/search-edit/plan-store.js";
 import {
+  AgentContextOutputSchema,
   BufferCheckpointResponseSchema,
   CodeNeedWindowResponseSchema,
   FileReadResponseSchema,
@@ -186,6 +187,15 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     await initLadybugDb(DB_PATH);
     server = await createMCPServer({
       gatewayConfig: { enabled: false, emitLegacyTools: true },
+      codeModeConfig: {
+        enabled: true,
+        exclusive: false,
+        maxWorkflowSteps: 20,
+        maxWorkflowTokens: 50_000,
+        maxWorkflowDurationMs: 60_000,
+        ladderValidation: "warn",
+        etagCaching: true,
+      },
     });
     client = await connect(server);
     await client.listTools();
@@ -259,6 +269,28 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
   });
 
   const cases: WireCase[] = [
+    {
+      name: "sdl.context",
+      schema: AgentContextOutputSchema,
+      successArgs: () => ({
+        repoId: REPO_ID,
+        taskType: "explain",
+        taskText: "Explain greet",
+        budget: { maxTokens: 2_048 },
+        focusSymbols: [symbolId],
+        responseMode: "inline",
+        refsMode: "off",
+        wireFormat: "json",
+      }),
+      errorArgs: () => ({
+        repoId: REPO_ID,
+        taskType: "explain",
+        taskText: "Explain greet",
+        budget: { maxTokens: 2_048 },
+        options: { answerFirst: true },
+      }),
+      errorTextPattern: /options/u,
+    },
     {
       name: "sdl.info",
       schema: InfoResponseSchema,

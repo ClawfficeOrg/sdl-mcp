@@ -28,11 +28,9 @@ describe("hybrid search config integration", async () => {
     configTypes = await import("../../dist/config/types.js");
   });
 
-  it("SemanticRetrievalConfigSchema parses hybrid mode with defaults", () => {
-    const result = configTypes.SemanticRetrievalConfigSchema.parse({
-      mode: "hybrid",
-    });
-    assert.equal(result.mode, "hybrid");
+  it("SemanticRetrievalConfigSchema parses unified retrieval defaults", () => {
+    const result = configTypes.SemanticRetrievalConfigSchema.parse({});
+    assert.equal("mode" in result, false);
     assert.equal(result.extensionsOptional, true);
     assert.equal(result.candidateLimit, 100);
     assert.ok(result.fts);
@@ -49,17 +47,19 @@ describe("hybrid search config integration", async () => {
     assert.equal(result.fusion.rrfK, 60);
   });
 
-  it("SemanticRetrievalConfigSchema defaults to hybrid mode", () => {
-    const result = configTypes.SemanticRetrievalConfigSchema.parse({});
-    assert.equal(result.mode, "hybrid");
+  it("SemanticRetrievalConfigSchema strips the retired mode field", () => {
+    const result = configTypes.SemanticRetrievalConfigSchema.parse({
+      mode: "legacy",
+    });
+    assert.equal("mode" in result, false);
   });
 
   it("SemanticConfigSchema accepts retrieval sub-config", () => {
     const result = configTypes.SemanticConfigSchema.parse({
-      retrieval: { mode: "hybrid" },
+      retrieval: {},
     });
     assert.ok(result.retrieval);
-    assert.equal(result.retrieval.mode, "hybrid");
+    assert.equal("mode" in result.retrieval, false);
   });
 
   it("SemanticConfigSchema preserves alpha for legacy", () => {
@@ -67,12 +67,6 @@ describe("hybrid search config integration", async () => {
       alpha: 0.8,
     });
     assert.equal(result.alpha, 0.8);
-  });
-
-  it("SemanticRetrievalConfigSchema rejects invalid mode", () => {
-    assert.throws(() => {
-      configTypes.SemanticRetrievalConfigSchema.parse({ mode: "invalid" });
-    });
   });
 
   it("SemanticRetrievalConfigSchema validates candidateLimit bounds", () => {
@@ -83,7 +77,6 @@ describe("hybrid search config integration", async () => {
 
   it("SemanticRetrievalConfigSchema parses custom vector index config", () => {
     const result = configTypes.SemanticRetrievalConfigSchema.parse({
-      mode: "hybrid",
       vector: {
         topK: 50,
         indexes: {
@@ -161,22 +154,20 @@ describe("Stage 1 wiring verification", () => {
   it("handleSymbolSearch imports hybrid overlay search", () => {
     const src = fs.readFileSync(path.join(repoRoot, "src/mcp/tools/symbol.ts"), "utf8");
     assert.ok(src.includes("searchSymbolsHybridWithOverlay"), "missing hybrid overlay import");
-    assert.ok(src.includes("checkRetrievalHealth"), "missing health check import");
-    assert.ok(src.includes("shouldFallbackToLegacy"), "missing fallback import");
+    assert.ok(!src.includes("shouldFallbackToLegacy"), "legacy fallback branch must be absent");
   });
 
-  it("handleSymbolSearch has hybrid vs legacy branching", () => {
+  it("handleSymbolSearch uses one semantic retrieval path", () => {
     const src = fs.readFileSync(path.join(repoRoot, "src/mcp/tools/symbol.ts"), "utf8");
-    assert.ok(src.includes("useHybrid"), "missing hybrid mode flag");
-    assert.ok(src.includes("retrievalConfig?.mode"), "missing mode check");
-    assert.ok(src.includes("HYBRID PATH"), "missing hybrid path comment");
-    assert.ok(src.includes("LEGACY PATH"), "missing legacy path comment");
+    assert.ok(src.includes("useUnifiedRetrieval"), "missing unified retrieval selection");
+    assert.ok(!src.includes("retrievalConfig?.mode"), "retired mode switch must be absent");
+    assert.ok(!src.includes("LEGACY PATH"), "legacy retrieval path must be absent");
   });
 
   it("handleSymbolSearch has hybrid-only search path", () => {
     const src = fs.readFileSync(path.join(repoRoot, "src/mcp/tools/symbol.ts"), "utf8");
     assert.ok(src.includes("searchSymbolsHybridWithOverlay"), "should import hybrid overlay search");
-    assert.ok(src.includes("useHybrid"), "should have hybrid mode flag");
+    assert.ok(src.includes("useUnifiedRetrieval"), "should have unified retrieval flag");
   });
 
   it("handleSymbolSearch populates retrievalEvidence", () => {

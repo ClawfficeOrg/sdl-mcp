@@ -1,169 +1,153 @@
 # Agent Context
 
-[Back to README](../../README.md)
-
----
-
-## Overview
-
-`sdl.context` is SDL-MCP's task-shaped context tool for Code Mode. You give it a task type, task text, and optional scope hints. The context engine then chooses the right Iris Gate rungs, gathers evidence, and returns a response sized to the task.
-
-Outside Code Mode, there is no separate flat `agent.context` tool. Use the manual ladder instead: `repo.overview` or `symbol.search` -> `symbol.getCard` -> `slice.build` -> `code.getSkeleton` -> `code.getHotPath` -> `code.needWindow`.
-
-For portable exports such as tickets or PR descriptions, use the CLI `sdl-mcp summary` command. That is a separate export surface, not a retrieval tool.
-
----
-
-## How It Works
-
-```mermaid
-%%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
-flowchart TD
-    Task["Task input<br/>taskType + taskText + scope hints"]
-    Planner["Planner<br/>choose ladder rungs"]
-    Selector["Context selector<br/>rank symbols and paths"]
-    Ladder["Iris Gate execution<br/>card -> skeleton -> hotPath -> raw"]
-    Evidence["Evidence collector"]
-    Response["Task-shaped response"]
-
-    Task e1@--> Planner
-    Planner e2@--> Selector
-    Selector e3@--> Ladder
-    Ladder e4@--> Evidence
-    Evidence e5@--> Response
-
-    classDef source fill:#E7F8F2,stroke:#0F766E,stroke-width:2px,color:#102A43;
-    classDef process fill:#E8F1FF,stroke:#2563EB,stroke-width:2px,color:#102A43;
-    classDef decision fill:#FFF4D6,stroke:#B45309,stroke-width:2px,color:#102A43;
-    classDef storage fill:#F2E8FF,stroke:#7C3AED,stroke-width:2px,color:#102A43;
-    classDef output fill:#FFE8EF,stroke:#BE123C,stroke-width:2px,color:#102A43;
-    classDef muted fill:#F8FAFC,stroke:#64748B,stroke-width:1px,color:#102A43;
-    classDef animate stroke:#0F766E,stroke-width:2px,stroke-dasharray:10\,5,stroke-dashoffset:900,animation:dash 22s linear infinite;
-    class e1,e2,e3,e4,e5 animate;
-```
-
-The context engine:
-
-1. Classifies the task as `debug`, `review`, `implement`, or `explain`.
-2. Seeds exact symbol mentions and exact explicit file paths first so known targets stay fast.
-3. Runs task-text retrieval within explicit path scope. Directory paths expand only when scoped seeding returns no candidates. Broad mode uses bounded hybrid entity search (FTS + vector with RRF) by default, while precise mode uses lexical retrieval by default.
-4. Treats `options.semantic` as an override: `true` forces hybrid entity search in either mode, `false` keeps either mode lexical-only, and omission uses the mode-based default.
-5. Carries seed evidence into executor ranking, including file-summary, cluster, and process candidates that expand into representative symbols.
-6. Plans only the rungs needed for the task and budget.
-7. Returns compact evidence plus an answer envelope when broad mode is used.
-
----
+`sdl.context` retrieves task-shaped code evidence from one shared retrieval and graph-expansion pipeline. It returns deterministic evidence instead of synthesized prose, so callers can inspect the selected cards, skeletons, hot paths, and relationships directly.
 
 ## When To Use It
 
-Use `sdl.context` first when the job is about understanding code:
+Use `sdl.context` for explain, debug, review, and implementation tasks that need more than one exact lookup. Use `sdl.retrieve` when one symbol card, slice, skeleton, hot path, or bounded code window is enough.
 
-- explain a symbol or module
-- debug a behavior
-- review a change
-- gather implementation context before editing
+Document-heavy planning should start with targeted `sdl.file` reads. Repository plans, ADRs, configuration, and templates are not indexed source evidence.
 
-When callers already know the target, provide `focusSymbols` or `focusPaths`. Scoped precise lookups stay on the low-latency path and are guarded by a benchmark target of `p95 <= 250ms`.
+## Request Contract
 
-Use `sdl.workflow` instead when the job is procedural:
+The input is flat and strict. Unknown root keys and unknown `budget` keys are rejected.
 
-- run tests or commands
-- transform data
-- chain multiple dependent operations
-- batch mutations
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `repoId` | yes | Registered repository ID |
+| `taskType` | yes | `debug`, `review`, `implement`, or `explain` |
+| `taskText` | yes | Task description, up to 2,000 characters |
+| `budget.maxTokens` | yes | Maximum tokens for the complete canonical payload |
+| `focusPaths` | no | Repository-relative paths to prioritize |
+| `focusSymbols` | no | Symbol IDs or names to prioritize |
+| `chatMentions` | no | Identifiers explicitly named by the caller |
+| `includeTests` | no | Override the selected task profile's test preference |
+| `ifNoneMatch` | no | Return `notModified` when the canonical payload is unchanged |
+| `responseMode` | no | `inline`, `auto`, or `handle` |
+| `refsMode` | no | `auto` or `off` |
+| `wireFormat` | no | `json`, `packed`, or `auto` |
 
-### Document-heavy planning
-
-For document-heavy planning, locate the relevant README, ADR, specification, or plan and use targeted `sdl.file` `op: "read"` with `search`, bounded ranges, or `jsonPath`. If broad `sdl.context` returns irrelevant symbol evidence, switch retrieval surfaces instead of widening symbol budgets.
-
-Use a targeted document read when repository prose drives the task:
+Focus fields are authoritative seed priorities, not output boundaries. The engine resolves a bounded Tier-0 seed set first, then expands connected Tier-1 candidates when the budget permits.
 
 ```json
 {
-  "op": "read",
-  "repoId": "sdl-mcp",
-  "filePath": "docs/feature-deep-dives/agent-context.md",
-  "search": "## When To Use It",
-  "searchContext": 8,
-  "limit": 4
+  "repoId": "my-repo",
+  "taskType": "debug",
+  "taskText": "Find why parseConfig rejects valid timeout values",
+  "budget": { "maxTokens": 4000 },
+  "focusPaths": ["src/config/parse.ts"],
+  "chatMentions": ["parseConfig"],
+  "includeTests": true,
+  "responseMode": "auto",
+  "refsMode": "auto",
+  "wireFormat": "auto"
 }
 ```
 
-`searchContext` and `limit` bound the result. Keep using cards, slices, skeletons, hot paths, or gated code windows for indexed source; do not use `file.read` for indexed source.
+## Retrieval Pipeline
 
-First-class document entities, Markdown indexing, ranking, citations, and a planning-task benchmark remain product work outside this batch.
+Each request follows one deterministic pipeline:
 
-That separation matters. A workflow can reproduce context retrieval, but it costs more tokens and forces the model to plan a ladder that `sdl.context` already knows how to choose.
+1. The graph-read availability gate verifies that the current persisted graph is readable.
+2. The task profile selects expansion direction, depth, preferred rungs, and the default test policy.
+3. The shared candidate core resolves exact and focus seeds, then runs the available FTS, vector, file-summary, graph, overlay, feedback, and memory lanes.
+4. Weighted reciprocal-rank fusion collapses vector models by source kind, keeps Tier-0 candidates first, and breaks ties by symbol ID.
+5. The slice beam-search engine expands the selected graph frontier.
+6. The value-per-token selector chooses per-symbol card, skeleton, and hot-path bundles.
+7. Hydration loads only selected bundles and evicts optional Tier-1 work if exact serialized size exceeds the budget.
 
----
+The response reports one retrieval level:
 
-## Context Modes
+- `hybrid`: lexical and vector lanes contribute with full configured coverage.
+- `hybrid-partial`: at least one vector lane contributes with partial coverage.
+- `lexical`: lexical lanes contribute without vector evidence.
+- `graph-only`: resolved graph seeds are available without text or vector candidates.
 
-`contextMode` controls how much evidence SDL-MCP returns:
+Insufficient retrieval is an error, not a successful empty result.
 
-- `precise` keeps the smallest useful set of symbols and rungs.
-- `broad` returns more surrounding structure, guidance, and follow-up context.
+## Response Contract
 
-### `options.focusPaths`
+A successful canonical payload contains:
 
-`focusPaths` scopes task-text retrieval to repository-relative files or directories. SDL-MCP distinguishes paths supplied by the caller from paths inferred from task text because they carry different intent.
+```json
+{
+  "status": "complete",
+  "taskType": "debug",
+  "retrieval": {
+    "level": "hybrid",
+    "lanes": [
+      { "id": "exactIdentifier", "available": true },
+      { "id": "symbolFts", "available": true },
+      { "id": "symbolVec", "available": true, "coveragePermille": 1000 }
+    ]
+  },
+  "evidence": [
+    {
+      "rung": "card",
+      "symbolId": "src/config/parse.ts::parseConfig",
+      "path": "src/config/parse.ts",
+      "rank": 1,
+      "tier": 0,
+      "lanes": ["exactIdentifier", "symbolFts"],
+      "content": {}
+    }
+  ],
+  "edges": [],
+  "omitted": {
+    "total": 0,
+    "byReason": { "budget": 0 },
+    "highestRanked": []
+  },
+  "nextActions": [],
+  "etag": "..."
+}
+```
 
-| Scope | Behavior |
-| :---- | :------- |
-| `contextMode: "precise"` with explicit `focusPaths` | Treats the paths as a hard boundary. Retrieval filters candidates to the paths, and final selection contains only in-scope symbols. |
-| `contextMode: "broad"` with explicit `focusPaths` | Treats the paths as a soft boundary. Retrieval favors in-scope candidates first, then allows the best out-of-scope evidence to spill over for recall. |
-| Inferred paths in either mode | Uses paths as soft hints for coverage and ranking. Inferred paths do not hard-filter candidates, penalize out-of-scope results, or trigger scoped over-fetching. |
+`status` has three successful values:
 
-> **Caller-visible behavior change:** Precise mode returns an empty selection when no candidate matches explicit `focusPaths`. It does not substitute an out-of-scope guess. Use broad mode when recall outside the supplied paths is acceptable.
+- `complete`: all selected evidence fits.
+- `budgetLimited`: resolved priority work exceeds the budget. Tier-1 evidence is suppressed, and `omitted.highestRanked` identifies bounded recovery work.
+- `empty`: healthy available lanes ran and found no candidates.
 
-When precise mode receives both explicit `focusPaths` and `focusSymbols`, it applies intersection semantics. A named symbol remains eligible only when its file also matches an explicit path.
+Evidence rungs stop at `card`, `skeleton`, and `hotPath`. Raw code windows remain behind `sdl.retrieve` `codeNeedWindow`, where proof-of-need policy applies.
 
-Path inference runs only when the caller provides no explicit paths or symbols. The engine carries inferred paths separately from `focusPaths`, so downstream selection cannot mistake a soft retrieval hint for caller-authorized scope.
+## Determinism And Wrappers
 
-See [Context Modes](./context-modes.md) for the detailed comparison.
+SDL-MCP computes the ETag from the complete canonical payload before applying session refs, packed wire encoding, or generic response-artifact wrapping. Repeated inline JSON and packed responses with `refsMode: "off"` are byte-stable against an unchanged graph.
 
----
+`responseMode: "auto"` or `"handle"` can return a generic `response.get` artifact containing the complete canonical payload. The context engine does not create its own continuation or describe only a trimmed first page.
 
-## Response Shape
+Session refs can replace repeated evidence content with stable references within one session. Set `refsMode: "off"` when byte identity or full content is required.
 
-Broad mode returns a compact model-facing envelope that prioritizes `finalEvidence`, `summary`, and `answer`.
+## Errors
 
-Precise mode strips that envelope down further and focuses on `path`, `finalEvidence`, and `metrics`.
+An unreadable or unverified graph fails through the graph-retrieval availability gate. When every usable retrieval capability is insufficient, the handler returns `isError: true` with a deterministic recovery action.
 
-In both modes, the purpose is the same: give the model useful evidence without making it reconstruct the ladder by hand.
-
----
+A budget below the canonical envelope minimum returns `CONTEXT_BUDGET_TOO_SMALL` with `minimumTokens`. Unknown request fields fail strict schema validation.
 
 ## Related Surfaces
 
-| Surface | Purpose |
-| :------ | :------ |
-| `sdl.context` | Task-shaped context retrieval in Code Mode |
-| Manual ladder | Flat or gateway retrieval when Code Mode is disabled |
-| `sdl.workflow` | Procedural multi-step operations |
-| `sdl-mcp summary` | Portable exported summary for non-MCP destinations |
-
----
+- `sdl.symbol.search` and `sdl.symbol.getCard` handle exact symbol lookup.
+- `sdl.slice.build` retains stack-trace, failing-test, edited-file, and explicit-entry seed sources.
+- `sdl.retrieve` exposes one-hop cards, slices, skeletons, hot paths, and gated code windows.
+- `sdl.workflow` handles multi-step pipelines, runtime execution, transforms, and mutations.
+- `sdl.response.get` retrieves generic large-response artifacts.
 
 ## Key Files
 
-| File | Responsibility |
-| :--- | :------------- |
-| `src/agent/context-engine.ts` | Top-level task-shaped context orchestration |
-| `src/agent/context-seeding.ts` | Semantic, lexical, and feedback-based seeding |
-| `src/agent/context-ranking.ts` | Evidence-aware candidate scoring |
-| `src/agent/planner.ts` | Rung selection and budget trimming |
-| `src/agent/executor.ts` | Rung execution and evidence collection |
-| `src/mcp/tools/context.ts` | MCP handler for `sdl.context` |
-
----
+- `src/mcp/tools.ts`: public request and response schemas
+- `src/mcp/tools/context.ts`: validation, graph admission, ETag, refs, wire format, and response artifacts
+- `src/context/engine.ts`: v2 orchestration
+- `src/context/profiles.ts`: task profiles
+- `src/context/select.ts`: deterministic value-per-token selection
+- `src/context/hydrate.ts`: selected-only evidence hydration
+- `src/context/serialize.ts`: canonical stable serialization
+- `src/retrieval/context-candidate-search.ts`: shared candidate collection and fusion
+- `src/graph/slice/beam-search-engine.ts`: graph expansion
 
 ## Related
 
-- [Context Modes](./context-modes.md)
+- [Context Profiles](./context-modes.md)
 - [Code Mode](./code-mode.md)
-- [Iris Gate Ladder](./iris-gate-ladder.md)
-- [`sdl.context`](../mcp-tools-detailed.md#sdlcontext)
-- [`sdl.agent.feedback`](../mcp-tools-detailed.md#sdlagentfeedback)
-
-[Back to README](../../README.md)
+- [Token Economy](./token-economy.md)
+- [MCP Tools Reference](../mcp-tools-reference.md)

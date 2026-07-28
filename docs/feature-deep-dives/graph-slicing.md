@@ -142,7 +142,7 @@ flowchart LR
 
 You don't even need to know symbol IDs. Pass a `taskText` string (or `stackTrace`, `failingTestPath`, `editedFiles`) and SDL-MCP will automatically discover the best entry symbols:
 
-**With hybrid retrieval** (when `semantic.retrieval.mode: "hybrid"` and indexes are healthy):
+**With full hybrid coverage** (when FTS and vector indexes are healthy):
 1. Run a single hybrid search (FTS + vector + RRF fusion) on the task text
 2. Score and rank candidates across all retrieval sources
 3. Build the slice from the top-ranked seeds
@@ -168,14 +168,17 @@ When `includeRetrievalEvidence: true` is set, the slice response includes eviden
 ```json
 {
   "retrievalEvidence": {
-    "mode": "hybrid",
+    "sources": ["fts", "vector:jinacode"],
+    "topRanksPerSource": {
+      "fts": [1, 3],
+      "vector:jinacode": [2]
+    },
     "symptomType": "taskText",
     "candidateCountPerSource": {
       "fts": 28,
-      "vector:jina-embeddings-v2-base-code": 24
+      "vector:jinacode": 24
     },
-    "fusionLatencyMs": 8,
-    "fallbackReason": null
+    "fusionLatencyMs": 8
   }
 }
 ```

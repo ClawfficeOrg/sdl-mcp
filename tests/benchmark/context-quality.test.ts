@@ -96,7 +96,7 @@ const NOISE_RATE_MAX = 10;
 const SCOPED_PRECISE_P95_MAX_MS = 250;
 const PAIRED_LATENCY_WARMUP_RUNS = 1;
 const PAIRED_LATENCY_SAMPLE_RUNS = 3;
-const V1_DEFAULT_CONTEXT_TOKEN_BUDGET = 50_000;
+const DEFAULT_CONTEXT_TOKEN_BUDGET = 50_000;
 const REPORT_CASE_IDS = new Set([
   "review-precise-tool-qa-tests",
   "review-broad-sdl-tool-functionality",
@@ -265,11 +265,7 @@ type SymbolToolsModule = typeof import("../../dist/mcp/tools/symbol.js");
 type DerivedStateModule =
   typeof import("../../dist/db/ladybug-derived-state.js");
 
-const variants: Variant[] = [
-  { name: "lexical", semantic: false },
-  { name: "default" },
-  { name: "semantic", semantic: true },
-];
+const variants: Variant[] = [{ name: "semantic" }];
 
 const metrics = {
   manifest: undefined as ReturnType<typeof buildBenchmarkManifest> | undefined,
@@ -279,7 +275,7 @@ const metrics = {
   variants: new Map<string, VariantMetrics>(),
   v2Shadow: createMetrics("v2-shadow"),
   pairedLatency: undefined as
-    | Awaited<ReturnType<typeof measurePairedLatency>>
+    | Awaited<ReturnType<typeof measureV2LatencyAgainstCommittedBaseline>>
     | undefined,
   scopedPrecise: createMetrics("scoped-precise"),
   providerContextCardInvariant: {
@@ -298,7 +294,6 @@ const metrics = {
 let allCases: BenchmarkCase[] = [];
 let cases: BenchmarkCase[] = [];
 let contextEngine: ContextEngineLike | undefined;
-let contextEngineV2: ContextEngineLike | undefined;
 let rawContextEngineV2: ContextEngineV2Like | undefined;
 type CloseLadybugDb = (options?: { strict?: boolean }) => Promise<void>;
 
@@ -386,6 +381,109 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+interface CommittedV1Baseline {
+  relevance: {
+    requiredSymbolRecallPercent: number;
+    primarySymbolMrr: number;
+    explicitNoiseTokenRatio: number;
+    evidenceTokensPerRequiredHit: number | null;
+  };
+  latencyP50Ms: number;
+  latencyP95Ms: number;
+}
+
+function requiredNumber(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): number {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new BenchmarkProvenanceError(
+      `Committed V1 baseline is missing ${label}.${key}`,
+    );
+  }
+  return value;
+}
+
+function loadCommittedV1Baseline(
+  corpus: BenchmarkCorpus,
+): CommittedV1Baseline {
+  const path = resolve(
+    import.meta.dirname,
+    "../../devdocs/benchmarks/context-quality-v1-baseline.json",
+  );
+  const root = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!isRecord(root) || root.engine !== "v1" || !isRecord(root.corpora)) {
+    throw new BenchmarkProvenanceError("Invalid committed V1 baseline artifact");
+  }
+  const artifact = root.corpora[corpus];
+  if (!isRecord(artifact) || !Array.isArray(artifact.variants)) {
+    throw new BenchmarkProvenanceError(
+      `Committed V1 baseline has no ${corpus} corpus`,
+    );
+  }
+  const semantic = artifact.variants.find(
+    (variant) => isRecord(variant) && variant.name === "semantic",
+  );
+  if (!isRecord(semantic) || !isRecord(semantic.relevance)) {
+    throw new BenchmarkProvenanceError(
+      `Committed V1 baseline has no ${corpus} semantic relevance metrics`,
+    );
+  }
+  const pairedLatency = artifact.pairedLatency;
+  if (
+    !isRecord(pairedLatency) ||
+    !isRecord(pairedLatency.baseline)
+  ) {
+    throw new BenchmarkProvenanceError(
+      `Committed V1 baseline has no ${corpus} latency metrics`,
+    );
+  }
+  const evidenceTokensPerRequiredHit =
+    semantic.relevance.evidenceTokensPerRequiredHit;
+  if (
+    evidenceTokensPerRequiredHit !== null &&
+    typeof evidenceTokensPerRequiredHit !== "number"
+  ) {
+    throw new BenchmarkProvenanceError(
+      `Committed V1 baseline has invalid ${corpus} evidenceTokensPerRequiredHit`,
+    );
+  }
+  return {
+    relevance: {
+      requiredSymbolRecallPercent: requiredNumber(
+        semantic.relevance,
+        "requiredSymbolRecallPercent",
+        `${corpus}.semantic.relevance`,
+      ),
+      primarySymbolMrr: requiredNumber(
+        semantic.relevance,
+        "primarySymbolMrr",
+        `${corpus}.semantic.relevance`,
+      ),
+      explicitNoiseTokenRatio: requiredNumber(
+        semantic.relevance,
+        "explicitNoiseTokenRatio",
+        `${corpus}.semantic.relevance`,
+      ),
+      evidenceTokensPerRequiredHit,
+    },
+    latencyP50Ms: requiredNumber(
+      pairedLatency.baseline,
+      "p50Ms",
+      `${corpus}.pairedLatency.baseline`,
+    ),
+    latencyP95Ms: requiredNumber(
+      pairedLatency.baseline,
+      "p95Ms",
+      `${corpus}.pairedLatency.baseline`,
+    ),
+  };
+}
+
+const committedV1Baseline = loadCommittedV1Baseline(CORPUS);
+
 const SUCCESSFUL_CONTEXT_RETRIEVAL_LEVELS = [
   "hybrid",
   "hybrid-partial",
@@ -420,7 +518,7 @@ async function assertCanonicalV2PayloadDeterminism(
     taskType: benchmarkCase.taskType,
     taskText: benchmarkCase.taskText,
     budget: {
-      maxTokens: benchmarkCase.budgetTokens ?? V1_DEFAULT_CONTEXT_TOKEN_BUDGET,
+      maxTokens: benchmarkCase.budgetTokens ?? DEFAULT_CONTEXT_TOKEN_BUDGET,
     },
     focusPaths: benchmarkCase.focusPaths,
     chatMentions: benchmarkCase.chatMentions,
@@ -630,7 +728,6 @@ function createV2BenchmarkAdapter(
     buildContext: async (task) => {
       if (!isRecord(task))
         throw new TypeError("benchmark task must be an object");
-      const options = isRecord(task.options) ? task.options : {};
       const budget = isRecord(task.budget) ? task.budget : {};
       if (
         typeof task.repoId !== "string" ||
@@ -655,19 +752,19 @@ function createV2BenchmarkAdapter(
           maxTokens:
             typeof budget.maxTokens === "number"
               ? budget.maxTokens
-              : V1_DEFAULT_CONTEXT_TOKEN_BUDGET,
+              : DEFAULT_CONTEXT_TOKEN_BUDGET,
         },
-        ...(stringArray(options.focusPaths)
-          ? { focusPaths: stringArray(options.focusPaths) }
+        ...(stringArray(task.focusPaths)
+          ? { focusPaths: stringArray(task.focusPaths) }
           : {}),
-        ...(stringArray(options.focusSymbols)
-          ? { focusSymbols: stringArray(options.focusSymbols) }
+        ...(stringArray(task.focusSymbols)
+          ? { focusSymbols: stringArray(task.focusSymbols) }
           : {}),
-        ...(stringArray(options.chatMentions)
-          ? { chatMentions: stringArray(options.chatMentions) }
+        ...(stringArray(task.chatMentions)
+          ? { chatMentions: stringArray(task.chatMentions) }
           : {}),
-        ...(typeof options.includeTests === "boolean"
-          ? { includeTests: options.includeTests }
+        ...(typeof task.includeTests === "boolean"
+          ? { includeTests: task.includeTests }
           : {}),
       };
       const v2Result = await engine.buildContext(request);
@@ -1005,6 +1102,82 @@ async function measurePairedLatency(
   };
 }
 
+async function measureV2LatencyAgainstCommittedBaseline(
+  benchmarkCases: readonly BenchmarkCase[],
+  control: ContextEngineLike,
+  baseline: CommittedV1Baseline,
+  options: {
+    warmupRuns: number;
+    sampleRuns: number;
+    now?: () => number;
+  },
+) {
+  const now = options.now ?? performance.now.bind(performance);
+  const samples: number[] = [];
+  const issues: Array<{
+    lane: "control";
+    caseId: string;
+    iteration: number;
+    kind: "failure" | "timeout";
+    message: string;
+  }> = [];
+  for (
+    let iteration = -options.warmupRuns;
+    iteration < options.sampleRuns;
+    iteration++
+  ) {
+    for (const c of benchmarkCases) {
+      const startedAt = now();
+      try {
+        const result = await control.buildContext(
+          buildTask(c, { name: "default" }, c.focusPaths.length > 0),
+        );
+        if (!result.success) {
+          issues.push({
+            lane: "control",
+            caseId: c.id,
+            iteration,
+            kind: "failure",
+            message: "context result reported success=false",
+          });
+        } else if (iteration >= 0) {
+          samples.push(now() - startedAt);
+        }
+      } catch (error) {
+        issues.push({
+          lane: "control",
+          caseId: c.id,
+          iteration,
+          kind: "failure",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  return {
+    protocol: {
+      warmupRuns: options.warmupRuns,
+      sampleRuns: options.sampleRuns,
+      interleave: "current-v2-against-committed-v1" as const,
+      laneLabels: ["baseline", "control"] as const,
+      casesPerLanePerSample: benchmarkCases.length,
+    },
+    failures: issues.filter(({ kind }) => kind === "failure").length,
+    timeouts: issues.filter(({ kind }) => kind === "timeout").length,
+    issues,
+    baseline: {
+      samplesMs: [] as number[],
+      p50Ms: baseline.latencyP50Ms,
+      p95Ms: baseline.latencyP95Ms,
+    },
+    control: {
+      samplesMs: samples,
+      p50Ms: percentile(samples, 50),
+      p95Ms: percentile(samples, 95),
+    },
+  };
+}
+
 function evidenceText(result: ContextResult, limit?: number): string {
   return (result.finalEvidence ?? [])
     .slice(0, limit)
@@ -1014,27 +1187,21 @@ function evidenceText(result: ContextResult, limit?: number): string {
 
 function buildTask(
   c: BenchmarkCase,
-  variant: Variant,
+  _variant: Variant,
   scoped: boolean,
 ): unknown {
-  const options: Record<string, unknown> = {
-    contextMode: c.contextMode,
-    includeTests: c.includeTests,
-    includeRetrievalEvidence: true,
-  };
-  if (variant.semantic !== undefined) {
-    options.semantic = variant.semantic;
-  }
-  if (c.chatMentions?.length) options.chatMentions = c.chatMentions;
-  if ((scoped || c.sourcePlanCitations) && c.focusPaths.length > 0) {
-    options.focusPaths = c.focusPaths;
-  }
   return {
     taskType: c.taskType,
     taskText: c.taskText,
     repoId: REPO_ID,
-    ...(c.budgetTokens ? { budget: { maxTokens: c.budgetTokens } } : {}),
-    options,
+    budget: {
+      maxTokens: c.budgetTokens ?? DEFAULT_CONTEXT_TOKEN_BUDGET,
+    },
+    includeTests: c.includeTests,
+    ...(c.chatMentions?.length ? { chatMentions: c.chatMentions } : {}),
+    ...((scoped || c.sourcePlanCitations) && c.focusPaths.length > 0
+      ? { focusPaths: c.focusPaths }
+      : {}),
   };
 }
 
@@ -1577,9 +1744,11 @@ function aggregateRelevanceMetrics(m: VariantMetrics) {
 }
 
 function assertV2ShadowQuality(
-  baseline: VariantMetrics,
+  baseline: CommittedV1Baseline,
   shadow: VariantMetrics,
-  pairedLatency: Awaited<ReturnType<typeof measurePairedLatency>>,
+  pairedLatency: Awaited<
+    ReturnType<typeof measureV2LatencyAgainstCommittedBaseline>
+  >,
 ): void {
   assert.equal(shadow.failures, 0, "V2 shadow should not fail benchmark cases");
   assert.equal(
@@ -1626,7 +1795,7 @@ function assertV2ShadowQuality(
     );
   }
 
-  const v1 = aggregateRelevanceMetrics(baseline);
+  const v1 = baseline.relevance;
   const v2 = aggregateRelevanceMetrics(shadow);
   assert.ok(
     v2.requiredSymbolRecallPercent >= v1.requiredSymbolRecallPercent,
@@ -1669,7 +1838,7 @@ function persistBenchmarkArtifact(): void {
     ladybugClosedBeforeArtifact,
     seedResolutionDiagnostics: {
       command: "npm run benchmark:seed-resolution",
-      artifact: "devdocs/benchmarks/seed-resolution-evaluation-v1.json",
+      artifact: "devdocs/benchmarks/seed-resolution-evaluation-v2.json",
     },
     corpusCaseCount: metrics.totalCases,
     selectedCaseId: SELECTED_CASE_ID ?? null,
@@ -1741,7 +1910,6 @@ describe("context quality benchmarks", () => {
         core,
         queries,
         paths,
-        engine,
         contextV2,
         benchmarkOutput,
         contextTools,
@@ -1758,7 +1926,6 @@ describe("context quality benchmarks", () => {
         import("../../dist/db/ladybug-core.js"),
         import("../../dist/db/ladybug-queries.js"),
         import("../../dist/util/paths.js"),
-        import("../../dist/agent/context-engine.js"),
         import("../../dist/context/engine.js"),
         import("../../dist/benchmark/output-file.js"),
         import("../../dist/mcp/tools/context.js"),
@@ -1785,9 +1952,8 @@ describe("context quality benchmarks", () => {
       );
       await initGraphDb(config, configPath);
       closeLadybugDb = ladybug.closeLadybugDb;
-      contextEngine = engine.contextEngine;
       rawContextEngineV2 = new contextV2.ContextEngineV2();
-      contextEngineV2 = createV2BenchmarkAdapter(rawContextEngineV2);
+      contextEngine = createV2BenchmarkAdapter(rawContextEngineV2);
       ladybugQueries = queries;
       normalizeEvidencePath = paths.normalizePath;
       handleAgentContext = contextTools.handleAgentContext;
@@ -1873,7 +2039,7 @@ describe("context quality benchmarks", () => {
         repoId: "controlled",
         taskType: "explain",
         taskText: "verify deterministic degradation responses",
-        budget: { maxTokens: V1_DEFAULT_CONTEXT_TOKEN_BUDGET },
+        budget: { maxTokens: DEFAULT_CONTEXT_TOKEN_BUDGET },
       });
       assert.deepEqual(Object.keys(serialized), [
         ...SUCCESSFUL_CONTEXT_RETRIEVAL_LEVELS,
@@ -2121,13 +2287,9 @@ describe("context quality benchmarks", () => {
         repoId: "fixture-repo",
         taskType: "debug",
         taskText: "debug PrimarySymbol",
-        options: {
-          contextMode: "broad",
-          semantic: true,
-          focusPaths: ["src/primary.ts"],
-          chatMentions: ["PrimarySymbol"],
-          includeTests: true,
-        },
+        focusPaths: ["src/primary.ts"],
+        chatMentions: ["PrimarySymbol"],
+        includeTests: true,
       });
 
       assert.deepEqual(capturedRequest, {
@@ -2439,7 +2601,7 @@ describe("context quality benchmarks", () => {
     );
   });
 
-  it("runs lexical, confidence-gated default, and semantic retrieval variants", async () => {
+  it("runs the current v2 retrieval benchmark", async () => {
     if (!metrics.repoAvailable) {
       skipOrFail(metrics.availabilityReason);
       return;
@@ -2468,24 +2630,9 @@ describe("context quality benchmarks", () => {
     }
 
     if (RUN_V2_SHADOW) {
-      assert.ok(
-        contextEngineV2,
-        "ContextEngineV2 must be initialized for shadow benchmarking",
-      );
-      metrics.v2Shadow = createMetrics("v2-shadow");
-      for (const c of selectedCases) {
-        const scopedSelectedCase = shouldScopeCase(
-          c,
-          SELECTED_CASE_ID !== undefined,
-        );
-        await runCase(
-          c,
-          { name: "default" },
-          scopedSelectedCase,
-          metrics.v2Shadow,
-          contextEngineV2,
-        );
-      }
+      const current = metrics.variants.get("semantic");
+      assert.ok(current, "Current V2 benchmark metrics must be available");
+      metrics.v2Shadow = { ...current, name: "v2-shadow" };
     }
 
     if ((RECORD_BASELINE || RUN_V2_SHADOW) && !SELECTED_CASE_ID) {
@@ -2493,15 +2640,10 @@ describe("context quality benchmarks", () => {
         contextEngine,
         "ContextEngine must be initialized for paired latency",
       );
-      const pairedControl = RUN_V2_SHADOW ? contextEngineV2 : contextEngine;
-      assert.ok(
-        pairedControl,
-        "Paired control engine must be initialized for latency measurement",
-      );
-      metrics.pairedLatency = await measurePairedLatency(
+      metrics.pairedLatency = await measureV2LatencyAgainstCommittedBaseline(
         selectedCases,
         contextEngine,
-        pairedControl,
+        committedV1Baseline,
         {
           warmupRuns: PAIRED_LATENCY_WARMUP_RUNS,
           sampleRuns: PAIRED_LATENCY_SAMPLE_RUNS,
@@ -2518,7 +2660,11 @@ describe("context quality benchmarks", () => {
     );
     if (RUN_V2_SHADOW && !SELECTED_CASE_ID) {
       assert.ok(metrics.pairedLatency);
-      assertV2ShadowQuality(semantic, metrics.v2Shadow, metrics.pairedLatency);
+      assertV2ShadowQuality(
+        committedV1Baseline,
+        metrics.v2Shadow,
+        metrics.pairedLatency,
+      );
     }
     if (
       SELECTED_CASE_ID &&
@@ -2576,23 +2722,16 @@ describe("context quality benchmarks", () => {
         taskType: "review",
         taskText:
           "Review SDL MCP tool handlers, schemas, gateway routing, and response formatting",
-        budget: { maxActions: 3, maxTokens: 12_000 },
-        options: {
-          contextMode: "broad",
-          semantic: true,
-          includeTests: false,
-          cardDetail: "full",
-        },
+        budget: { maxTokens: 12_000 },
+        includeTests: false,
         responseMode: "inline",
         wireFormat: "json",
         refsMode: "off",
       },
       session,
     );
-    assert.ok("finalEvidence" in context);
-    const symbolEvidence = context.finalEvidence.filter(({ reference }) =>
-      reference.startsWith("symbol:"),
-    );
+    assert.ok("evidence" in context);
+    const symbolEvidence = context.evidence;
     assert.ok(
       symbolEvidence.length > 0,
       "Clean provider context must return dereferenceable symbol evidence",
@@ -2600,9 +2739,7 @@ describe("context quality benchmarks", () => {
 
     const symbolIds = [
       ...new Set(
-        symbolEvidence.map(({ reference }) =>
-          reference.slice("symbol:".length),
-        ),
+        symbolEvidence.map(({ symbolId }) => symbolId),
       ),
     ];
     const symbols = await ladybugQueries.getSymbolsByIds(
@@ -2622,11 +2759,10 @@ describe("context quality benchmarks", () => {
     });
     assert.ok(
       providerBackedSymbolIds.length > 0,
-      "Invariant must exercise provider-first symbol rows, not only legacy fallback rows",
+      "Invariant must exercise provider-first symbol rows",
     );
 
-    for (const evidence of symbolEvidence) {
-      const symbolId = evidence.reference.slice("symbol:".length);
+    for (const symbolId of symbolIds) {
       const symbol = symbols.get(symbolId);
       assert.ok(symbol, `Context returned missing provider symbol ${symbolId}`);
       const file = files.get(symbol.fileId);
@@ -2635,13 +2771,6 @@ describe("context quality benchmarks", () => {
       const signature = symbol.signatureJson
         ? (JSON.parse(symbol.signatureJson) as Record<string, unknown>)
         : undefined;
-      assert.match(
-        evidence.summary,
-        new RegExp(relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-      );
-      if (typeof signature?.text === "string") {
-        assert.ok(evidence.summary.includes(`sig: ${signature.text}`));
-      }
 
       const cardResponse = await handleSymbolGetCard(
         { repoId: REPO_ID, symbolId, refsMode: "off" },

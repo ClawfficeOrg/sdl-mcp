@@ -253,7 +253,7 @@ jobs:
           tarball=$(node -e "const fs=require('fs');const path=require('path');const f='sdl-mcp-'+process.env.VERSION+'.tgz';if(!fs.existsSync(path.join('release-pack',f)))process.exit(1);console.log(path.resolve('release-pack',f).replace(/\\\\/g,'/'));")
           fixture_test=$(node -e "console.log(require('path').resolve('tests/integration/live-index-symbol-fts-crash.test.ts').replace(/\\\\/g,'/'))")
           fixture_child=$(node -e "console.log(require('path').resolve('tests/fixtures/ladybug/windows-fts-clean-env-child.mjs').replace(/\\\\/g,'/'))")
-          planner_source=$(node -e "console.log(require('path').resolve('src/agent/planner.ts').replace(/\\\\/g,'/'))")
+          context_source=$(node -e "console.log(require('path').resolve('src/context/profiles.ts').replace(/\\\\/g,'/'))")
           install_args=("${tarball}" "--legacy-peer-deps")
           if [[ "${{ matrix.os }}" == "windows-latest" && "${{ matrix.accelerators }}" == "included" ]]; then
             native_tarball=$(node -e "console.log(require('path').resolve('release-pack/sdl-mcp-native-'+process.env.VERSION+'.tgz').replace(/\\\\/g,'/'))")
@@ -314,10 +314,10 @@ jobs:
 
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             # Node 24 does not strip TypeScript under node_modules. Build a temporary harness beside it.
-            mkdir -p "${smoke_dir}/tests/integration" "${smoke_dir}/tests/fixtures/ladybug" "${smoke_dir}/src/agent"
+            mkdir -p "${smoke_dir}/tests/integration" "${smoke_dir}/tests/fixtures/ladybug" "${smoke_dir}/src/context"
             cp "${fixture_test}" "${smoke_dir}/tests/integration/live-index-symbol-fts-crash.test.ts"
             cp "${fixture_child}" "${smoke_dir}/tests/fixtures/ladybug/windows-fts-clean-env-child.mjs"
-            cp "${planner_source}" "${smoke_dir}/src/agent/planner.ts"
+            cp "${context_source}" "${smoke_dir}/src/context/profiles.ts"
             cp -R node_modules/sdl-mcp/dist "${smoke_dir}/dist"
             if [[ "${{ matrix.accelerators }}" == "included" ]]; then
               SDL_LADYBUG_WINDOWS_FTS_TEST_MODE=fixed-regression SDL_LADYBUG_WINDOWS_FTS_REQUIRE_MODE=1 \

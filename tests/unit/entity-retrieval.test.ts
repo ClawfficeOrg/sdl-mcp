@@ -128,7 +128,6 @@ describe("EntitySearchResultItem – type surface", () => {
       "fts",
       "vector:jinacode",
       "vector:nomic",
-      "legacyFallback",
       "overlay",
     ];
     for (const source of sources) {

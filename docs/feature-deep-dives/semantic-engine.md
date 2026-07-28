@@ -272,12 +272,14 @@ Standard symbol search is lexical: searching for `"validate"` matches `validateT
 
 ### How It Works: Hybrid Retrieval
 
-SDL-MCP supports two retrieval modes, controlled by `semantic.retrieval.mode`:
+SDL-MCP uses one coverage-aware retrieval pipeline. It combines the available
+FTS, vector, lexical, and graph lanes and renormalizes configured weights when
+a lane is unavailable. There is no retrieval-mode selector.
 
-- **`hybrid`** — FTS + vector search fused via Reciprocal Rank Fusion (recommended)
-- **`legacy`** — alpha-blended lexical + embedding rerank (original architecture)
-
-When `semantic.retrieval.mode` is `"hybrid"` and the required database extensions are healthy, searches follow the hybrid path. If extensions or indexes are unavailable, the system automatically falls back to the legacy path.
+`sdl.symbol.search` preserves lexical search on the same admitted database
+connection when FTS and vector lanes cannot contribute. `sdl.context` reports
+the achieved retrieval level so callers can distinguish full hybrid coverage
+from partial, lexical, or graph-only results.
 
 #### Hybrid Retrieval Pipeline
 
@@ -328,7 +330,8 @@ Unresolved mentions are reported in `evidence.pprBoosts.unresolvedMentions` rath
 
 ##### Tool surface
 
-Both `sdl.symbol.search` and `sdl.context` accept the same four optional fields:
+`sdl.context` accepts flat `chatMentions`. `sdl.symbol.search` also accepts
+per-mention weights and PPR tuning fields:
 
 ```json
 {
@@ -341,18 +344,18 @@ Both `sdl.symbol.search` and `sdl.context` accept the same four optional fields:
 
 Leaving `chatMentions` empty / unset disables PPR entirely — the orchestrator emits exactly the RRF-only ordering it would have without the feature.
 
-#### Legacy Pipeline (Alpha Blending)
+#### Coverage-Aware Degradation
 
-The legacy path is retained as a fallback and can be explicitly selected via `semantic.retrieval.mode: "legacy"`:
+The orchestrator checks lane readiness before each search:
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
 flowchart TD
-    Query["User Query: check auth credentials"] e1@--> Lexical["1. Lexical Search<br/>always runs first"]
-    Lexical e2@--> Embed["2. Embed Query + Cosine Similarity<br/>sim(authenticate)=0.87<br/>sim(validateToken)=0.91"]
-    Embed e3@--> Blend["3. Alpha blending (deprecated)<br/>alpha * lexicalScore + (1 - alpha) * semanticScore<br/>60% lexical, 40% semantic by default"]
+    Query["User Query: check auth credentials"] e1@--> Readiness["1. Check lane readiness"]
+    Readiness e2@--> Available["2. Run available FTS, vector, lexical, and graph lanes"]
+    Available e3@--> Coverage["3. Report hybrid, hybrid-partial, lexical, or graph-only coverage"]
 
-    style Blend fill:#FFF4D6,stroke:#B45309,stroke-width:2px,color:#102A43
+    style Coverage fill:#FFF4D6,stroke:#B45309,stroke-width:2px,color:#102A43
 
     classDef source fill:#E7F8F2,stroke:#0F766E,stroke-width:2px,color:#102A43;
     classDef process fill:#E8F1FF,stroke:#2563EB,stroke-width:2px,color:#102A43;
@@ -364,11 +367,11 @@ flowchart TD
     class e1,e2,e3 animate;
 ```
 
-> **Legacy mode note**: `semantic.retrieval.mode: "legacy"` still preserves the compatibility rerank path, but current tuning guidance belongs under `semantic.retrieval.*` rather than deprecated alpha controls.
-
-#### Automatic Fallback
-
-The hybrid retrieval system performs health checks before each search. If the Ladybug `fts` or `vector` extensions are unavailable, or if indexes are unhealthy, it automatically falls back to the legacy path and records the fallback reason in telemetry. This ensures `symbol.search` and `slice.build` remain functional in all environments.
+Healthy FTS and vector lanes produce `hybrid` coverage; one semantic lane
+produces `hybrid-partial`; lexical-only recovery produces `lexical`; and
+structural seeds without a text lane produce `graph-only`. Missing lanes are
+omitted instead of switching to a separate engine, and retrieval evidence
+records the reason for reduced coverage.
 
 #### Retrieval Evidence
 
@@ -377,21 +380,23 @@ When `includeRetrievalEvidence: true` is passed to `symbol.search` or `slice.bui
 ```json
 {
   "retrievalEvidence": {
-    "mode": "hybrid",
-    "ftsAvailable": true,
-    "vectorAvailable": true,
+    "sources": ["fts", "vector:jinacode", "vector:nomic"],
+    "topRanksPerSource": {
+      "fts": [1, 3],
+      "vector:jinacode": [2],
+      "vector:nomic": [4]
+    },
     "candidateCountPerSource": {
       "fts": 42,
-      "vector:jina-embeddings-v2-base-code": 38,
-      "vector:nomic-embed-text-v1.5": 35
+      "vector:jinacode": 38,
+      "vector:nomic": 35
     },
-    "fusionLatencyMs": 12,
-    "fallbackReason": null
+    "fusionLatencyMs": 12
   }
 }
 ```
 
-If a fallback occurred, `mode` is `"legacy"` and `fallbackReason` explains why (e.g., `"fts extension not loaded"`, `"vector index unhealthy"`).
+When a lane is unavailable, `fallbackReason` explains why and `sources` lists the lanes that actually ran.
 
 ### Two Supported Embedding Models
 
@@ -804,7 +809,6 @@ LLM summaries improve the text each configured embedding lane receives. With the
     "symbolEmbeddingModels": ["jina-embeddings-v2-base-code"], // optional lane override
     "fileSummaryEmbeddingModels": ["nomic-embed-text-v1.5"], // optional lane override
     "modelCacheDir": null, // Custom model cache directory
-    "retrieval": { "mode": "hybrid" }, // Current search tuning entry point
 
     // ── Summary Configuration ──
     "generateSummaries": false, // Enable LLM summary generation
@@ -1005,8 +1009,9 @@ sdl-mcp index --repo-id my-app
   "repoId": "my-app",
   "taskType": "explain",
   "taskText": "trace the authentication middleware",
-  "budget": { "maxTokens": 2000, "maxActions": 3 },
-  "options": { "contextMode": "precise" }
+  "budget": { "maxTokens": 2000 },
+  "chatMentions": ["authentication"],
+  "includeTests": false
 }
 ```
 
@@ -1051,24 +1056,26 @@ sdl.symbol.search({
 # {
 #   "symbols": [...],
 #   "retrievalEvidence": {
-#     "mode": "hybrid",
-#     "ftsAvailable": true,
-#     "vectorAvailable": true,
+#     "sources": ["fts", "vector:jinacode", "vector:nomic"],
+#     "topRanksPerSource": {
+#       "fts": [1, 3],
+#       "vector:jinacode": [2],
+#       "vector:nomic": [4]
+#     },
 #     "candidateCountPerSource": {
 #       "fts": 42,
-#       "vector:jina-embeddings-v2-base-code": 38,
-#       "vector:nomic-embed-text-v1.5": 35
+#       "vector:jinacode": 38,
+#       "vector:nomic": 35
 #     },
-#     "fusionLatencyMs": 12,
-#     "fallbackReason": null
+#     "fusionLatencyMs": 12
 #   }
 # }
 #
-# If hybrid is unavailable, mode is "legacy" with a fallbackReason:
+# If a lane is unavailable, fallbackReason explains why:
 # "fallbackReason": "vector extension not loaded"
 ```
 
-### Example 8: Configuring Hybrid Retrieval
+### Example 8: Configuring Retrieval Lanes
 
 ```jsonc
 {
@@ -1077,9 +1084,8 @@ sdl.symbol.search({
     "provider": "local",
     "embeddingProfile": "specialized",
 
-    // Hybrid retrieval replaces alpha-blending
+    // Healthy enabled lanes are fused automatically.
     "retrieval": {
-      "mode": "hybrid", // "hybrid" or "legacy"
       "fts": {
         "enabled": true, // Full-text search on Symbol.searchText
         "topK": 75, // Max FTS candidates

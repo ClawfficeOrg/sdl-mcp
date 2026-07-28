@@ -3,35 +3,10 @@
  * limits. Final MCP text content applies the stricter model projection below.
  */
 
-import { isZeroMatchHotPathEvidence } from "../agent/evidence.js";
-import type { TaskType } from "../agent/types.js";
-import { getContinuationWithProjection } from "../code-mode/workflow-truncation.js";
 import {
   getResponseProjectionRule,
   getWorkflowChildAction,
 } from "./context-response-projection-registry.js";
-import { CARD_WIRE_FIELD_ORDER } from "./tools/symbol-utils.js";
-
-/** Fields kept in the compact broad response before final model-content projection.
- *  Shared with context-engine.ts for pre-truncation compaction. */
-const BROAD_MODEL_VISIBLE_FIELDS = new Set([
-  "taskType",
-  "success",
-  "status",
-  "summary",
-  "answer",
-  "finalEvidence",
-  "nextBestAction",
-  "error",
-  "truncation",
-]);
-
-export const BROAD_VISIBLE_FIELDS = new Set([
-  ...BROAD_MODEL_VISIBLE_FIELDS,
-  "etag",
-  "diagnostics",
-  "retrievalEvidence",
-]);
 
 type ProjectionDetail = "compact" | "standard" | "full";
 
@@ -213,107 +188,6 @@ function copyIfPresent(
   if (key in source) {
     target[key] = source[key];
   }
-}
-
-function projectDeps(
-  source: Record<string, unknown>,
-  fields: { imports?: true; calls?: true },
-): Record<string, unknown> | undefined {
-  if (!isRecord(source.deps)) {
-    return undefined;
-  }
-
-  const deps: Record<string, unknown> = {};
-  if (fields.imports) copyIfPresent(source.deps, deps, "imports");
-  if (fields.calls) copyIfPresent(source.deps, deps, "calls");
-  return Object.keys(deps).length > 0 ? deps : undefined;
-}
-
-export function projectCardForTask(
-  card: Record<string, unknown>,
-  taskType: TaskType,
-): Record<string, unknown> {
-  const projected: Record<string, unknown> = {};
-  const visibleFields = new Set<string>([
-    "symbolId",
-    "file",
-    "range",
-    "kind",
-    "name",
-    "signature",
-  ]);
-  let deps: Record<string, unknown> | undefined;
-  if (taskType === "debug") {
-    visibleFields.add("summary");
-    visibleFields.add("sideEffects");
-    visibleFields.add("deps");
-    deps = projectDeps(card, { calls: true });
-  } else if (taskType === "implement") {
-    visibleFields.add("summary");
-    visibleFields.add("invariants");
-    visibleFields.add("deps");
-    deps = projectDeps(card, { imports: true });
-  } else if (taskType === "explain") {
-    visibleFields.add("summary");
-    visibleFields.add("summaryProvenance");
-    visibleFields.add("deps");
-    deps = projectDeps(card, { imports: true, calls: true });
-  } else {
-    visibleFields.add("summary");
-    visibleFields.add("sideEffects");
-    visibleFields.add("metrics");
-  }
-
-  for (const field of CARD_WIRE_FIELD_ORDER) {
-    if (!visibleFields.has(field)) continue;
-    if (field === "deps") {
-      if (deps !== undefined) projected.deps = deps;
-    } else {
-      copyIfPresent(card, projected, field);
-    }
-  }
-
-  if (taskType === "debug") copyIfPresent(card, projected, "canonicalTest");
-  copyIfPresent(card, projected, "ref");
-  copyIfPresent(card, projected, "unchanged");
-  copyIfPresent(card, projected, "changedSincePrior");
-
-  return projected;
-}
-
-export function projectSymbolCardEvidenceForTask(
-  evidence: Record<string, unknown>,
-  taskType: TaskType,
-): Record<string, unknown> {
-  const projected: Record<string, unknown> = {};
-  copyIfPresent(evidence, projected, "type");
-  copyIfPresent(evidence, projected, "reference");
-
-  const projectedCard = projectCardForTask(evidence, taskType);
-  for (const [key, value] of Object.entries(projectedCard)) {
-    projected[key] = value;
-  }
-
-  return projected;
-}
-
-function projectEvidenceForModel(value: unknown): unknown {
-  const projectItem = (item: unknown): unknown => {
-    if (!isRecord(item)) return item;
-
-    const projected: Record<string, unknown> = {};
-    for (const [key, itemValue] of Object.entries(item)) {
-      if (key !== "timestamp") projected[key] = itemValue;
-    }
-    return projected;
-  };
-  if (Array.isArray(value)) {
-    // Function-adjacent fallbacks do not prove relevance to the requested identifiers.
-    return value
-      .filter((item) => !isZeroMatchHotPathEvidence(item))
-      .map(projectItem);
-  }
-  return isZeroMatchHotPathEvidence(value) ? null : projectItem(value);
 }
 
 function normalizedDetail(value: unknown): ProjectionDetail {
@@ -602,99 +476,12 @@ function projectGenericValueForModel(
   return projected;
 }
 
-function projectContextResultForModel(
-  result: Record<string, unknown>,
-  options: ModelContentProjectionOptions,
-): Record<string, unknown> {
-  const projected: Record<string, unknown> = {};
-
-  copyIfPresent(result, projected, "taskType");
-  copyIfPresent(result, projected, "success");
-  copyIfPresent(result, projected, "status");
-  copyIfPresent(result, projected, "answer");
-  copyIfPresent(result, projected, "confidence");
-  copyIfPresent(result, projected, "evidence");
-  copyIfPresent(result, projected, "expand");
-  copyIfPresent(result, projected, "answerFirstFallback");
-  copyIfPresent(result, projected, "summary");
-  if ("finalEvidence" in result) {
-    projected.finalEvidence = projectEvidenceForModel(result.finalEvidence);
-  }
-  copyIfPresent(result, projected, "nextBestAction");
-  copyIfPresent(result, projected, "error");
-  if (result.truncation !== false) {
-    copyIfPresent(result, projected, "truncation");
-  }
-
-  if (options.includeRetrievalEvidence) {
-    copyIfPresent(result, projected, "retrievalEvidence");
-  }
-  if (options.includeDiagnostics) {
-    copyIfPresent(result, projected, "diagnostics");
-  }
-
-  return projected;
-}
-
 function projectWorkflowContinuationForModel(
   result: unknown,
-  args: unknown,
+  _args: unknown,
   options: ModelContentProjectionOptions,
 ): unknown {
-  const projected = projectGenericValueForModel("workflow", result, options);
-  if (!isRecord(result) || !isRecord(projected) || !("data" in result)) {
-    return projected;
-  }
-
-  const path = isRecord(args) && typeof args.path === "string" ? args.path : undefined;
-  const isEvidencePath = path === "finalEvidence"
-    || path?.startsWith("finalEvidence.")
-    || path?.startsWith("finalEvidence[");
-  if (
-    isEvidencePath &&
-    isRecord(args) &&
-    typeof args.handle === "string"
-  ) {
-    const projectedPage = getContinuationWithProjection(
-      args.handle,
-      projectEvidenceForModel,
-      typeof args.offset === "number" ? args.offset : undefined,
-      typeof args.limit === "number" ? args.limit : undefined,
-      path,
-    );
-    if (projectedPage) {
-      return projectGenericValueForModel("workflow", projectedPage, options);
-    }
-  }
-  if (
-    path === undefined &&
-    isRecord(args) &&
-    typeof args.handle === "string" &&
-    isRecord(result.data) &&
-    result.data.encoding === "json"
-  ) {
-    let projectedContext = false;
-    const projectedPage = getContinuationWithProjection(
-      args.handle,
-      (stored) => {
-        if (!isRecord(stored) || !("finalEvidence" in stored)) return stored;
-        projectedContext = true;
-        return projectContextResultForModel(stored, options);
-      },
-      typeof args.offset === "number" ? args.offset : undefined,
-      typeof args.limit === "number" ? args.limit : undefined,
-    );
-    if (projectedContext && projectedPage) {
-      return projectGenericValueForModel("workflow", projectedPage, options);
-    }
-  }
-  const data = isEvidencePath
-    ? projectEvidenceForModel(result.data)
-    : path === undefined && isRecord(result.data) && "finalEvidence" in result.data
-      ? projectContextResultForModel(result.data, options)
-      : projected.data;
-
-  return { ...projected, data };
+  return projectGenericValueForModel("workflow", result, options);
 }
 
 function projectCompactFailureTrace(value: unknown): unknown {
@@ -1057,49 +844,7 @@ function projectActionSearchForModel(
   return projected;
 }
 
-/**
- * Returns true when the result looks like a broad context response that
- * should be compacted.
- */
-export function isBroadContextResult(
-  toolName: string,
-  result: unknown,
-): boolean {
-  if (getResponseProjectionRule(toolName)?.projector !== "context") {
-    return false;
-  }
-  if (!isRecord(result)) {
-    return false;
-  }
-
-  const r = result;
-  return (
-    "taskId" in r &&
-    "actionsTaken" in r &&
-    "answer" in r &&
-    r.success !== undefined
-  );
-}
-
-export function projectBroadContextResult(
-  toolName: string,
-  result: unknown,
-): unknown {
-  if (!isBroadContextResult(toolName, result)) {
-    return result;
-  }
-
-  const r = result as Record<string, unknown>;
-  const projected: Record<string, unknown> = {};
-  for (const key of Object.keys(r)) {
-    if (BROAD_MODEL_VISIBLE_FIELDS.has(key)) {
-      projected[key] = r[key];
-    }
-  }
-  return projected;
-}
-
-export function projectContextResultForUsageAccounting(
+export function projectResultForUsageAccounting(
   toolName: string,
   result: Record<string, unknown>,
   args: Record<string, unknown> = {},
@@ -1151,12 +896,6 @@ export function projectToolResultForModelContent(
       toolName,
       stripFullDetailHiddenFieldsForModel(result),
     );
-  }
-  if (
-    projectionRule?.projector === "context"
-    && ("answer" in result || "finalEvidence" in result)
-  ) {
-    return projectContextResultForModel(result, options);
   }
   if (projectionRule?.projector === "usage") {
     return projectUsageStatsForModel(result);

@@ -37,6 +37,8 @@ import type {
 
 export interface ContextCandidateSearchOptions {
   repoId: string;
+  /** Durable graph version admitted by the caller's read transaction. */
+  graphVersionId?: string;
   query: string;
   limit: number;
   includeFileSummary: boolean;
@@ -143,15 +145,21 @@ export async function applyContextPpr(
       options.repoId,
       options.chatMentions,
     );
-    let snapshot = getGraphSnapshot(options.repoId);
+    let snapshot = getGraphSnapshot(options.repoId, options.graphVersionId);
     if (!snapshot) {
-      snapshot = await loadAndCacheGraphSnapshot(conn, options.repoId);
+      snapshot = await loadAndCacheGraphSnapshot(
+        conn,
+        options.repoId,
+        options.graphVersionId,
+      );
     }
     if (!snapshot || seeds.seeds.size === 0) return fused;
     const ppr = await computePpr({
       graph: snapshot,
+      graphVersionId: options.graphVersionId,
       snapshotCreatedAt:
-        getGraphSnapshotCreatedAt(options.repoId) ?? Date.now(),
+        getGraphSnapshotCreatedAt(options.repoId, options.graphVersionId) ??
+        Date.now(),
       repoId: options.repoId,
       options: { seeds: seeds.seeds },
     });

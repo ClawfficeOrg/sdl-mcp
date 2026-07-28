@@ -23,7 +23,7 @@ import {
   type RetrievalSeedCandidateRow,
 } from "../db/ladybug-retrieval.js";
 import { logger } from "../util/logger.js";
-import { extractIdentifiersFromText } from "../agent/identifier-extraction.js";
+import { extractIdentifiersFromText } from "./identifier-extraction.js";
 
 /** Cap on auto-extracted mentions; conservative vs. the schema's 20-mention max. */
 export const AUTO_EXTRACT_LIMIT = 8;

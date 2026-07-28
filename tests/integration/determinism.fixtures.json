@@ -23,6 +23,36 @@
       }
     },
     {
+      "tool": "sdl.context",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskType": "explain",
+        "taskText": "Explain UserRepository findById behavior",
+        "budget": {
+          "maxTokens": 2048
+        },
+        "focusSymbols": ["UserRepository", "findById"],
+        "refsMode": "off",
+        "responseMode": "inline",
+        "wireFormat": "json"
+      }
+    },
+    {
+      "tool": "sdl.context",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskType": "explain",
+        "taskText": "Explain UserRepository findById behavior",
+        "budget": {
+          "maxTokens": 2048
+        },
+        "focusSymbols": ["UserRepository", "findById"],
+        "refsMode": "off",
+        "responseMode": "inline",
+        "wireFormat": "packed"
+      }
+    },
+    {
       "tool": "sdl.repo.status",
       "args": {
         "repoId": "{REPO_ID}",
@@ -192,6 +222,22 @@
     {
       "tool": "sdl.response.get",
       "reason": "Response artifact handles are process-local continuation state; only inline responses participate in byte-stability comparisons."
+    },
+    {
+      "tool": "sdl.manual",
+      "reason": "Manual rendering is covered by focused catalog tests; tools/list is the byte-stability contract here."
+    },
+    {
+      "tool": "sdl.retrieve",
+      "reason": "The unified retrieval variants are covered by their stable underlying tool fixtures."
+    },
+    {
+      "tool": "sdl.workflow",
+      "reason": "Workflow results can include stateful continuation handles and runtime artifacts."
+    },
+    {
+      "tool": "sdl.file",
+      "reason": "The unified file gateway includes mutations and expiring edit plans."
     },
     {
       "tool": "sdl.usage.stats",

@@ -33,6 +33,7 @@ type FileRow = Graph extends { files?: Map<number, infer F> } ? F : never;
 interface GraphSnapshot {
   graph: Graph;
   repoEpoch: number;
+  graphVersionId?: string;
   createdAt: number;
   symbolCount: number;
   edgeCount: number;
@@ -53,8 +54,19 @@ const MAX_CACHED_REPOS = 3;
 const snapshotsByRepo = new Map<RepoId, GraphSnapshot>();
 const loadingPromises = new Map<
   RepoId,
-  { repoEpoch: number; promise: Promise<Graph | null> }
+  {
+    repoEpoch: number;
+    graphVersionId?: string;
+    promise: Promise<Graph | null>;
+  }
 >();
+
+type GraphSnapshotLoader = (
+  conn: Connection,
+  repoId: RepoId,
+  repoEpoch: number,
+  graphVersionId?: string,
+) => Promise<Graph | null>;
 
 /**
  * Configure cache settings.
@@ -78,7 +90,10 @@ export function configureGraphSnapshotCache(options: {
 /**
  * Get a cached graph snapshot for a repo, or null if expired / not present.
  */
-export function getGraphSnapshot(repoId: RepoId): Graph | null {
+export function getGraphSnapshot(
+  repoId: RepoId,
+  graphVersionId?: string,
+): Graph | null {
   const entry = snapshotsByRepo.get(repoId);
   if (!entry) return null;
 
@@ -96,6 +111,13 @@ export function getGraphSnapshot(repoId: RepoId): Graph | null {
     return null;
   }
 
+  if (
+    graphVersionId !== undefined &&
+    entry.graphVersionId !== graphVersionId
+  ) {
+    return null;
+  }
+
   return entry.graph;
 }
 
@@ -104,10 +126,19 @@ export function getGraphSnapshot(repoId: RepoId): Graph | null {
  * null if no live entry exists. Caches keyed on snapshot age (e.g. PPR) read
  * this to invalidate when a fresh snapshot replaces a stale one.
  */
-export function getGraphSnapshotCreatedAt(repoId: RepoId): number | null {
+export function getGraphSnapshotCreatedAt(
+  repoId: RepoId,
+  graphVersionId?: string,
+): number | null {
   const entry = snapshotsByRepo.get(repoId);
   if (!entry) return null;
   if (Date.now() - entry.createdAt > snapshotTtlMs) return null;
+  if (
+    graphVersionId !== undefined &&
+    entry.graphVersionId !== graphVersionId
+  ) {
+    return null;
+  }
   return entry.createdAt;
 }
 
@@ -126,6 +157,7 @@ export function setGraphSnapshot(
   repoId: RepoId,
   graph: Graph,
   expectedEpoch = captureActiveRepoEpoch(repoId),
+  graphVersionId?: string,
 ): boolean {
   if (
     expectedEpoch === undefined ||
@@ -136,6 +168,7 @@ export function setGraphSnapshot(
   snapshotsByRepo.set(repoId, {
     graph,
     repoEpoch: expectedEpoch,
+    graphVersionId,
     createdAt: Date.now(),
     symbolCount: graph.symbols.size,
     edgeCount: graph.edges.length,
@@ -229,16 +262,21 @@ export function getGraphSnapshotStats(): {
 export async function loadAndCacheGraphSnapshot(
   conn: Connection,
   repoId: RepoId,
+  graphVersionId?: string,
+  loadSnapshot: GraphSnapshotLoader = _loadGraphSnapshot,
 ): Promise<Graph | null> {
   const repoEpoch = captureActiveRepoEpoch(repoId);
   if (repoEpoch === undefined) return null;
   const inflight = loadingPromises.get(repoId);
-  if (inflight?.repoEpoch === repoEpoch) {
+  if (
+    inflight?.repoEpoch === repoEpoch &&
+    inflight.graphVersionId === graphVersionId
+  ) {
     return inflight.promise;
   }
 
-  const promise = _loadGraphSnapshot(conn, repoId, repoEpoch);
-  const loading = { repoEpoch, promise };
+  const promise = loadSnapshot(conn, repoId, repoEpoch, graphVersionId);
+  const loading = { repoEpoch, graphVersionId, promise };
   loadingPromises.set(repoId, loading);
   try {
     return await promise;
@@ -253,6 +291,7 @@ async function _loadGraphSnapshot(
   conn: Connection,
   repoId: RepoId,
   repoEpoch: number,
+  graphVersionId?: string,
 ): Promise<Graph | null> {
   // Check symbol count first to avoid loading huge repos
   const symbolCount = await ladybugDb.getSymbolCount(conn, repoId);
@@ -403,7 +442,7 @@ async function _loadGraphSnapshot(
     clusters,
   };
 
-  if (!setGraphSnapshot(repoId, graph, repoEpoch)) return null;
+  if (!setGraphSnapshot(repoId, graph, repoEpoch, graphVersionId)) return null;
 
   logger.info("Graph snapshot loaded and cached", {
     repoId,

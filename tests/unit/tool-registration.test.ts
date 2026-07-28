@@ -488,27 +488,39 @@ describe("MCP tool registration", () => {
       string,
       Record<string, unknown>
     >;
-    for (const field of ["refsMode", "wireFormat", "ifNoneMatch"]) {
-      assert.ok(field in contextProperties, `missing context ${field}`);
-    }
+    assert.deepStrictEqual(Object.keys(contextProperties), [
+      "repoId",
+      "taskType",
+      "taskText",
+      "budget",
+      "focusPaths",
+      "focusSymbols",
+      "chatMentions",
+      "includeTests",
+      "ifNoneMatch",
+      "responseMode",
+      "refsMode",
+      "wireFormat",
+    ]);
+    assert.deepStrictEqual(context.wireSchema.required, [
+      "repoId",
+      "taskType",
+      "taskText",
+      "budget",
+    ]);
     const contextBudget = contextProperties.budget.properties as Record<
       string,
       unknown
     >;
-    for (const field of [
-      "maxTokens",
-      "maxEstimatedTokens",
-      "maxActions",
-      "maxDurationMs",
-    ]) {
-      assert.ok(field in contextBudget, `missing context budget.${field}`);
-    }
-    const contextOptions = contextProperties.options.properties as Record<
-      string,
-      unknown
-    >;
-    assert.ok("focusSymbols" in contextOptions);
-    assert.ok("focusPaths" in contextOptions);
+    assert.deepStrictEqual(Object.keys(contextBudget), ["maxTokens"]);
+    assert.deepStrictEqual(contextProperties.budget.required, ["maxTokens"]);
+    assert.strictEqual(
+      (contextProperties.budget as { additionalProperties?: unknown })
+        .additionalProperties,
+      false,
+    );
+    assert.ok(!("options" in contextProperties));
+    assert.strictEqual(context.wireSchema.additionalProperties, false);
 
     const retrieve = firstTools.find((tool) => tool.name === "sdl.retrieve");
     assert.ok(retrieve?.wireSchema, "expected sdl.retrieve wire schema");

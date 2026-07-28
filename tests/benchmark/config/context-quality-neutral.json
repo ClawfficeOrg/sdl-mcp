@@ -51,7 +51,6 @@
       "nomic-embed-text-v1.5"
     ],
     "retrieval": {
-      "mode": "hybrid",
       "fts": {
         "enabled": true,
         "indexName": "symbol_search_text_v1"

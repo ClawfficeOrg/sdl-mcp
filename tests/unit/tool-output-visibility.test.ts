@@ -132,21 +132,18 @@ describe("visible tool output", () => {
   it("formats sdl.context as an evidence summary without internal noise", () => {
     const blocks = buildToolResponseContentBlocks(
       {
-        taskId: "task-1",
+        status: "complete",
         taskType: "debug",
-        success: true,
-        summary: "internal action summary",
-        finalEvidence: [
+        evidence: [
           {
-            type: "symbolCard",
-            reference: "symbol:abc",
-            summary: "function attachDisplayFooter | src/server.ts | fileAlias: Server",
-            timestamp: 12345,
+            symbolId: "symbol:abc",
+            rung: "card",
+            card: { file: "src/server.ts" },
           },
           {
-            type: "hotPath",
-            reference: "hotpath:def",
-            summary: "symbol | Hot path (0 matches, ~42 tokens): code",
+            symbolId: "symbol:def",
+            rung: "hotPath",
+            hotPath: { code: "function attachDisplayFooter() {}" },
           },
         ],
         diagnostics: { timings: { totalMs: 12 } },
@@ -165,26 +162,25 @@ describe("visible tool output", () => {
       [
         "Sdl context",
         "",
+        "status: complete",
         "taskType: debug",
-        "finalEvidence: 2 items",
+        "evidence: 2 items",
       ].join("\n"),
     );
-    assert.doesNotMatch(blocks[0]?.text ?? "", /diagnostics|actionsTaken|taskId|rungs|internal action summary/);
+    assert.doesNotMatch(blocks[0]?.text ?? "", /diagnostics|actionsTaken|taskId|rungs/);
     assert.doesNotMatch(blocks[0]?.text ?? "", /etag|abc123/);
   });
 
   it("keeps task-relevant structured content and omits internal fields by default", () => {
     const envelope = buildToolResponseEnvelope(
       {
+        status: "complete",
         taskType: "debug",
-        success: true,
-        answer: "# Debug Results",
-        finalEvidence: [
+        evidence: [
           {
-            type: "symbolCard",
-            reference: "symbol:1",
-            summary: "function loadConfig | src/config/loadConfig.ts",
-            timestamp: 12345,
+            symbolId: "symbol:1",
+            rung: "card",
+            card: { file: "src/config/load-config.ts" },
           },
         ],
         retrievalEvidence: { fusionLatencyMs: 10 },
@@ -200,9 +196,8 @@ describe("visible tool output", () => {
       {},
     );
 
+    assert.equal(envelope.structuredContent?.status, "complete");
     assert.equal(envelope.structuredContent?.taskType, "debug");
-    assert.equal(envelope.structuredContent?.success, true);
-    assert.equal(envelope.structuredContent?.answer, "# Debug Results");
     assert.equal(envelope.structuredContent?.etag, undefined);
     assert.equal(envelope.structuredContent?.retrievalEvidence, undefined);
     assert.equal(envelope.structuredContent?.diagnostics, undefined);
@@ -210,9 +205,8 @@ describe("visible tool output", () => {
     assert.equal(envelope.structuredContent?.actionsTaken, undefined);
     assert.equal(envelope.structuredContent?.path, undefined);
 
-    const evidence = envelope.structuredContent?.finalEvidence as Record<string, unknown>[];
-    assert.equal(evidence[0]?.reference, "symbol:1");
-    assert.equal(evidence[0]?.timestamp, undefined);
+    const evidence = envelope.structuredContent?.evidence as Record<string, unknown>[];
+    assert.equal(evidence[0]?.symbolId, "symbol:1");
   });
 
   it("omits workflow etag cache from agent-visible output", () => {
@@ -237,10 +231,9 @@ describe("visible tool output", () => {
   it("keeps requested diagnostics in structured content without adding them to visible text", () => {
     const envelope = buildToolResponseEnvelope(
       {
+        status: "complete",
         taskType: "debug",
-        success: true,
-        finalEvidence: [],
-        retrievalEvidence: { fusionLatencyMs: 10 },
+        evidence: [],
         diagnostics: { timings: { totalMs: 12 } },
         _packedStats: { savedRatio: 0.5 },
       },
@@ -249,14 +242,12 @@ describe("visible tool output", () => {
       "sdl.context",
       {
         includeDiagnostics: true,
-        options: { includeRetrievalEvidence: true },
       },
     );
 
-    assert.deepEqual(envelope.structuredContent?.retrievalEvidence, { fusionLatencyMs: 10 });
     assert.deepEqual(envelope.structuredContent?.diagnostics, { timings: { totalMs: 12 } });
     assert.equal(envelope.structuredContent?._packedStats, undefined);
-    assert.doesNotMatch(envelope.content[0]?.text ?? "", /diagnostics|fusionLatencyMs|_packedStats/);
+    assert.doesNotMatch(envelope.content[0]?.text ?? "", /diagnostics|_packedStats/);
   });
 
   it("preserves requested timing diagnostics for generic tools", () => {
@@ -367,25 +358,21 @@ describe("visible tool output", () => {
       "sdl.context",
       {
         includeDiagnostics: true,
-        options: { includeRetrievalEvidence: true },
       },
       {
+        status: "complete",
         taskType: "debug",
-        success: true,
-        answer: "Debug answer",
-        finalEvidence: [],
+        evidence: [],
         etag: "context-etag",
         diagnostics: { timings: { totalMs: 12 } },
-        retrievalEvidence: { fusionLatencyMs: 7 },
       },
     );
 
     const content = result.content as Array<Record<string, unknown>>;
     const structuredContent = result.structuredContent as Record<string, unknown>;
     assert.equal(structuredContent.etag, undefined);
-    assert.deepEqual(structuredContent.retrievalEvidence, { fusionLatencyMs: 7 });
     assert.ok(structuredContent.diagnostics);
-    assert.doesNotMatch(String(content[0]?.text), /fusionLatencyMs|totalMs/);
+    assert.doesNotMatch(String(content[0]?.text), /totalMs/);
     assert.doesNotMatch(String(content[0]?.text), /context-etag/);
   });
 

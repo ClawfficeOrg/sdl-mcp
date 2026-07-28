@@ -47,12 +47,8 @@ export type {
   FeedbackBoostOptions,
 } from "./feedback-boost.js";
 
-// Fallback / health
-export {
-  checkRetrievalHealth,
-  shouldFallbackToLegacy,
-  isHybridRetrievalAvailable,
-} from "./fallback.js";
+// Retrieval health
+export { checkRetrievalHealth } from "./health.js";
 // Index lifecycle
 export {
   createFtsIndex,

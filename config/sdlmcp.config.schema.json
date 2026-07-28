@@ -1024,15 +1024,6 @@
           "type": "object",
           "description": "Hybrid retrieval pipeline configuration (FTS + vector fusion). Controls the new two-stage retrieval path that replaces legacy embedding re-ranking.",
           "properties": {
-            "mode": {
-              "type": "string",
-              "enum": [
-                "legacy",
-                "hybrid"
-              ],
-              "default": "hybrid",
-              "description": "'legacy' = original semantic-only re-rank path; 'hybrid' = FTS + vector fusion pipeline."
-            },
             "extensionsOptional": {
               "type": "boolean",
               "default": true,
@@ -1169,10 +1160,6 @@
                       "type": "number",
                       "minimum": 0
                     },
-                    "legacyFallback": {
-                      "type": "number",
-                      "minimum": 0
-                    },
                     "overlay": {
                       "type": "number",
                       "minimum": 0
@@ -1181,13 +1168,11 @@
                   "required": [
                     "fts",
                     "vector",
-                    "legacyFallback",
                     "overlay"
                   ],
                   "default": {
                     "fts": 1,
                     "vector": 1,
-                    "legacyFallback": 1,
                     "overlay": 1
                   }
                 },
@@ -1205,7 +1190,6 @@
                 "weights": {
                   "fts": 1,
                   "vector": 1,
-                  "legacyFallback": 1,
                   "overlay": 1
                 },
                 "partialCoverageThresholdPermille": 1000
@@ -1219,7 +1203,6 @@
             }
           },
           "default": {
-            "mode": "hybrid",
             "extensionsOptional": true,
             "fts": {
               "enabled": true,
@@ -1246,7 +1229,6 @@
               "weights": {
                 "fts": 1,
                 "vector": 1,
-                "legacyFallback": 1,
                 "overlay": 1
               },
               "partialCoverageThresholdPermille": 1000

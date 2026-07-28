@@ -26,46 +26,77 @@ import {
 } from "../../dist/observability/event-tap.js";
 
 const SMALL_RESPONSE: Record<string, unknown> = {
+  status: "empty",
   taskType: "explain",
-  taskId: "t1",
-  actionsTaken: [],
-  finalEvidence: [],
-  path: {
-    rungs: ["card"],
-    estimatedTokens: 50,
-    estimatedDurationMs: 10,
-    reasoning: "",
+  retrieval: {
+    level: "lexical",
+    lanes: [{ id: "symbolFts", available: true }],
   },
-  metrics: { totalTokens: 50 },
+  evidence: [],
+  edges: [],
+  omitted: { total: 0, byReason: { budget: 0 }, highestRanked: [] },
+  nextActions: [],
 };
 
 const LARGE_RESPONSE: Record<string, unknown> = {
+  status: "budgetLimited",
   taskType: "debug",
-  taskId: "t2",
-  actionsTaken: Array.from({ length: 10 }, (_, i) => ({
-    id: `action-${i}-${"x".repeat(40)}`,
-    type: "getCard",
-    status: "completed",
-    input: { context: ["file:src/foo.ts"] },
-    output: { cardsProcessed: 5 },
-    timestamp: 1234567890,
-    durationMs: 50,
-    evidence: [],
-  })),
-  finalEvidence: Array.from({ length: 20 }, (_, i) => ({
-    type: "symbolCard",
-    reference: `symbol:${"a".repeat(48)}-${i}`,
-    summary: `function someFunctionName${i} | src/some/long/path/module-${i}.ts | does some work`,
-  })),
-  path: {
-    rungs: ["card", "skeleton"],
-    estimatedTokens: 1500,
-    estimatedDurationMs: 200,
-    reasoning: "precise debug",
+  retrieval: {
+    level: "hybrid-partial",
+    lanes: [
+      { id: "exactIdentifier", available: true },
+      { id: "symbolFts", available: true },
+      { id: "symbolVec", available: true, coveragePermille: 800 },
+    ],
   },
-  metrics: { totalTokens: 1500 },
-  summary: "Long task summary with multiple findings across the codebase.",
-  success: true,
+  evidence: Array.from({ length: 20 }, (_, i) => ({
+    rung: i % 2 === 0 ? "card" : "skeleton",
+    symbolId: `${"a".repeat(48)}-${i}`,
+    path: `src/some/long/path/module-${i}.ts`,
+    rank: i + 1,
+    tier: i < 2 ? 0 : 1,
+    lanes: i < 2 ? ["exactIdentifier", "symbolFts"] : ["symbolFts"],
+    content:
+      i % 2 === 0
+        ? { kind: "function", name: `someFunctionName${i}` }
+        : `function someFunctionName${i}(): void`,
+  })),
+  edges: Array.from({ length: 10 }, (_, i) => ({
+    from: `${"a".repeat(48)}-${i}`,
+    to: `${"a".repeat(48)}-${i + 1}`,
+    kind: "call",
+    confidencePermille: 900,
+  })),
+  omitted: {
+    total: 1,
+    byReason: { budget: 1 },
+    highestRanked: [
+      {
+        symbolId: `${"b".repeat(48)}-1`,
+        path: "src/some/long/path/omitted.ts",
+        rung: "hotPath",
+        rank: 21,
+        tier: 1,
+        reason: "budget",
+        action: {
+          id: "codeHotPath",
+          args: {
+            symbolId: `${"b".repeat(48)}-1`,
+            identifiersToFind: ["someFunctionName"],
+          },
+        },
+      },
+    ],
+  },
+  nextActions: [
+    {
+      id: "codeHotPath",
+      args: {
+        symbolId: `${"b".repeat(48)}-1`,
+        identifiersToFind: ["someFunctionName"],
+      },
+    },
+  ],
 };
 
 function captureTap(): {
@@ -102,7 +133,7 @@ function captureTap(): {
   return { events, uninstall: () => resetObservabilityTap() };
 }
 
-test("sdl.context budget enforces the continuation-safe minimum", () => {
+test("sdl.context budget accepts only the v2 maxTokens field", () => {
   const request = {
     repoId: "repo-1",
     taskType: "explain",
@@ -119,9 +150,9 @@ test("sdl.context budget enforces the continuation-safe minimum", () => {
   assert.equal(
     AgentContextRequestSchema.safeParse({
       ...request,
-      budget: { maxEstimatedTokens: 512 },
+      budget: { maxTokens: 512, maxEstimatedTokens: 512 },
     }).success,
-    true,
+    false,
   );
   assert.equal(
     AgentContextRequestSchema.safeParse({
@@ -147,7 +178,7 @@ test("wireFormat=undefined returns json passthrough (no gate)", () => {
   assert.equal(result.gateDecision, undefined);
 });
 
-test("wireFormat=packed publishes tap with ctx1 encoder", () => {
+test("wireFormat=packed publishes tap with ctx3 encoder", () => {
   const { events, uninstall } = captureTap();
   tokenAccumulator.reset();
 
@@ -158,7 +189,7 @@ test("wireFormat=packed publishes tap with ctx1 encoder", () => {
   assert.ok(result.gateDecision !== undefined);
   publishContextWireDecision(result, result.gateDecision);
   assert.equal(events.length, 1);
-  assert.equal(events[0].encoderId, "ctx1");
+  assert.equal(events[0].encoderId, "ctx3");
   assert.equal(events[0].decision, result.gateDecision);
 
   uninstall();
@@ -173,7 +204,7 @@ test("wireFormat=auto: large input → packed wins, payload is string", () => {
   if (result.gateDecision === "packed") {
     assert.equal(result.format, "packed");
     assert.equal(typeof result.payload, "string");
-    assert.equal(result.encoderId, "ctx1");
+    assert.equal(result.encoderId, "ctx3");
   }
 });
 
@@ -208,8 +239,8 @@ test("sdl.context auto mode does not attach a duplicate packed payload", () => {
 test("sdl.context packed stats separate candidate decision from returned payload", () => {
   const wireResult = {
     format: "packed" as const,
-    payload: "ctx1|...",
-    encoderId: "ctx1",
+    payload: "ctx3|...",
+    encoderId: "ctx3",
     jsonBytes: 10_000,
     packedBytes: 1_000,
     jsonTokens: 2_500,
@@ -241,8 +272,14 @@ test("packed payload round-trips via decodePacked", () => {
     return;
   }
   const decoded = decodePacked(result.payload as string);
-  assert.equal(decoded.encoderId, "ctx1");
-  assert.ok(decoded.data);
+  assert.equal(decoded.encoderId, "ctx3");
+  assert.equal(decoded.data.status, "budgetLimited");
+  assert.equal(decoded.data.taskType, "debug");
+  assert.equal(decoded.data.retrievalLevel, "hybrid-partial");
+  assert.equal((decoded.data.evidence as unknown[]).length, 20);
+  assert.equal((decoded.data.edges as unknown[]).length, 10);
+  assert.equal((decoded.data.omitted as unknown[]).length, 1);
+  assert.equal((decoded.data.nextActions as unknown[]).length, 1);
 });
 
 test("fallback path also publishes tap", () => {
@@ -258,7 +295,7 @@ test("fallback path also publishes tap", () => {
   publishContextWireDecision(result, "fallback");
   assert.equal(events.length, 1);
   assert.equal(events[0].decision, "fallback");
-  assert.equal(events[0].encoderId, "ctx1");
+  assert.equal(events[0].encoderId, "ctx3");
 
   uninstall();
 });

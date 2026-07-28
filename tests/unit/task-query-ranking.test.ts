@@ -43,10 +43,10 @@ describe("task query ranking", () => {
       name: "FileScanner",
     };
     const tangentialCandidate = {
-      filePath: "src/agent/classify-symptom-type.ts",
-      kind: "function",
+      filePath: "src/policy/engine.ts",
+      kind: "class",
       exported: true,
-      name: "classifySymptomType",
+      name: "PolicyEngine",
     };
 
     assert.ok(

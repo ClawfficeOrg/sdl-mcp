@@ -240,6 +240,7 @@ let dbClosePromise: Promise<void> | null = null;
 let preserveCloseHooksForCurrentClose = false;
 let strictCloseForCurrentClose = false;
 const activeExclusiveReadLeases = new Set<Promise<void>>();
+const exclusiveReadCloseFailures: unknown[] = [];
 const sessionWriteBodyLimiters = new WeakMap<
   LadybugConnection,
   ConcurrencyLimiter
@@ -970,14 +971,23 @@ export async function withExclusiveReadConnection<T>(
   activeExclusiveReadLeases.add(lease);
 
   let conn: LadybugConnection | undefined;
+  let callbackFailed = false;
+  let closeFailed = false;
+  let closeError: unknown;
   try {
     conn = await createConnection(db);
     return await fn(conn);
+  } catch (error) {
+    callbackFailed = true;
+    throw error;
   } finally {
     if (conn) {
       try {
         await conn.close();
       } catch (err) {
+        closeFailed = true;
+        closeError = err;
+        exclusiveReadCloseFailures.push(err);
         logger.warn("Error closing LadybugDB exclusive read connection", {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -985,6 +995,9 @@ export async function withExclusiveReadConnection<T>(
     }
     activeExclusiveReadLeases.delete(lease);
     releaseLease();
+    // Preserve callback error precedence while still failing a successful read
+    // whose native connection could not be released.
+    if (!callbackFailed && closeFailed) throw closeError;
   }
 }
 
@@ -1459,6 +1472,8 @@ export function closeLadybugDb(
 async function closeLadybugDbImpl(): Promise<void> {
   const closeFailures: unknown[] = [];
   await Promise.allSettled([...activeExclusiveReadLeases]);
+  closeFailures.push(...exclusiveReadCloseFailures);
+  exclusiveReadCloseFailures.length = 0;
 
   // Best-effort flush of any audit events queued by the post-index buffer
   // (src/mcp/audit-buffer.ts). Done before the writeLimiter drain so the

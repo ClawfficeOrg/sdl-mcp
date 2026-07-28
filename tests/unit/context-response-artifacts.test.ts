@@ -4,17 +4,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { contextEngine } from "../../dist/agent/context-engine.js";
-import type { ContextResult } from "../../dist/agent/types.js";
 import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
 import type { ParsedWorkflowRequest } from "../../dist/code-mode/workflow-parser.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
+import { ContextEngineV2 } from "../../dist/context/engine.js";
+import type { ContextPayload } from "../../dist/context/types.js";
 import { createActionMap } from "../../dist/gateway/router.js";
 import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
-import {
-  calculateContextRawEquivalentTokens,
-  handleAgentContext,
-} from "../../dist/mcp/tools/context.js";
+import { handleAgentContext } from "../../dist/mcp/tools/context.js";
 import {
   _setResponseRepoExistsForTesting,
   handleResponseGet,
@@ -22,7 +19,7 @@ import {
 import { maybeStoreLargeResponse } from "../../dist/runtime/response-artifacts.js";
 
 const originalSdlConfig = process.env.SDL_CONFIG;
-const originalBuildContext = contextEngine.buildContext.bind(contextEngine);
+const originalBuildContext = ContextEngineV2.prototype.buildContext;
 let tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -33,7 +30,7 @@ function makeTempDir(): string {
 
 afterEach(() => {
   _setResponseRepoExistsForTesting();
-  contextEngine.buildContext = originalBuildContext;
+  ContextEngineV2.prototype.buildContext = originalBuildContext;
   if (originalSdlConfig === undefined) {
     delete process.env.SDL_CONFIG;
   } else {
@@ -47,7 +44,7 @@ afterEach(() => {
 });
 
 describe("sdl.context response artifacts", () => {
-  it("stores context responses behind response.get without storing _rawContext", async () => {
+  it("stores the same canonical context payload returned inline", async () => {
     _setResponseRepoExistsForTesting(async () => true);
     const baseDir = makeTempDir();
     const configPath = join(baseDir, "sdlmcp.config.json");
@@ -63,64 +60,57 @@ describe("sdl.context response artifacts", () => {
     process.env.SDL_CONFIG = configPath;
     invalidateConfigCache();
 
-    contextEngine.buildContext = async (): Promise<ContextResult> => ({
-      taskId: "task-a",
+    const payload: ContextPayload = {
+      status: "complete",
       taskType: "explain",
-      actionsTaken: [],
-      path: {
-        rungs: ["card"],
-        estimatedTokens: 10,
-        estimatedDurationMs: 1,
-        reasoning: "test",
+      retrieval: {
+        level: "lexical",
+        lanes: [{ id: "symbolFts", available: true }],
       },
-      finalEvidence: [
+      evidence: [
         {
-          type: "symbolCard",
-          reference: "sym-a",
-          summary: "A".repeat(2048),
-          timestamp: Date.now(),
+          rung: "card",
+          symbolId: "sym-a",
+          path: "src/a.ts",
+          rank: 1,
+          tier: 0,
+          lanes: ["symbolFts"],
+          content: { name: "symbolA", summary: "A".repeat(2048) },
         },
       ],
-      summary: "large context response",
-      success: true,
-      truncation: {
-        originalTokens: 6000,
-        truncatedTokens: 512,
-        fieldsAffected: ["finalEvidence"],
-        continuationHandle: "cont-context-response",
-        continuationAction: "workflowContinuationGet",
+      edges: [],
+      omitted: {
+        total: 0,
+        byReason: { budget: 0 },
+        highestRanked: [],
       },
-      metrics: {
-        totalDurationMs: 1,
-        totalTokens: 6000,
-        totalActions: 1,
-        successfulActions: 1,
-        failedActions: 0,
-        cacheHits: 0,
-      },
-    });
+      nextActions: [],
+    };
+    ContextEngineV2.prototype.buildContext = async () =>
+      structuredClone(payload);
 
-    const response = await handleAgentContext({
+    const request = {
       repoId: "repo-a",
-      taskType: "explain",
+      taskType: "explain" as const,
       taskText: "explain the large response",
+      budget: { maxTokens: 8192 },
+      refsMode: "off" as const,
+      wireFormat: "json" as const,
+    };
+    const inline = (await handleAgentContext({
+      ...request,
+      responseMode: "inline",
+    })) as Record<string, unknown>;
+    const response = (await handleAgentContext({
+      ...request,
       responseMode: "handle",
-      wireFormat: "json",
-    }) as Record<string, unknown>;
+    })) as Record<string, unknown>;
 
     assert.equal(response.responseMode, "handle");
     assert.equal(response.kind, "responseArtifact");
     assert.equal(response.action, "response.get");
     assert.equal((response.metadata as Record<string, unknown>).toolName, "sdl.context");
-    const expectedRawTokens = calculateContextRawEquivalentTokens({
-      fileRawTokens: 0,
-      evidenceCount: 1,
-      resolvedEvidenceCount: 0,
-    });
-
-    assert.deepEqual((response as Record<string, unknown>)._rawContext, {
-      rawTokens: expectedRawTokens,
-    });
+    assert.equal(response._rawContext, undefined);
 
     const full = await handleResponseGet({
       repoId: "repo-a",
@@ -128,15 +118,10 @@ describe("sdl.context response artifacts", () => {
       full: true,
     }) as Record<string, unknown>;
     const content = full.content as Record<string, unknown>;
-    assert.equal(content.taskId, "task-a");
     assert.equal(content._rawContext, undefined);
-    assert.deepEqual(content.truncation, {
-      originalTokens: 6000,
-      truncatedTokens: 512,
-      fieldsAffected: ["finalEvidence"],
-      continuationHandle: "cont-context-response",
-      continuationAction: "workflowContinuationGet",
-    });
+    assert.deepEqual(content, inline);
+    assert.equal("taskId" in content, false);
+    assert.equal("truncation" in content, false);
   });
 
   it("keeps invalid response.get recovery actionable through workflow projection", async () => {
@@ -159,8 +144,20 @@ describe("sdl.context response artifacts", () => {
       repoId: "repo-a",
       toolName: "sdl.context",
       payload: {
-        summary: "compact summary",
-        finalEvidence: [{ reference: "symbol:target" }],
+        status: "complete",
+        taskType: "explain",
+        retrieval: {
+          level: "lexical",
+          lanes: [{ id: "symbolFts", available: true }],
+        },
+        evidence: [{ rung: "card", symbolId: "target" }],
+        edges: [],
+        omitted: {
+          total: 0,
+          byReason: { budget: 0 },
+          highestRanked: [],
+        },
+        nextActions: [],
       },
       responseMode: "handle",
       artifactBaseDir: baseDir,
@@ -194,7 +191,7 @@ describe("sdl.context response artifacts", () => {
       workflowConfig,
     );
     assert.deepEqual(rawFailure.results[0].failureTrace?.details?.details, [
-      "Available top-level keys: finalEvidence, summary",
+      "Available top-level keys: edges, evidence, nextActions, omitted, retrieval, status, taskType",
     ]);
     const projectedFailure = projectToolResultForModelContent(
       "sdl.workflow",
@@ -203,7 +200,7 @@ describe("sdl.context response artifacts", () => {
     ) as { results: Array<{ failureTrace?: { details?: Record<string, unknown> } }> };
     const recovery = projectedFailure.results[0].failureTrace?.details;
     assert.deepEqual(recovery?.details, [
-      "Available top-level keys: finalEvidence, summary",
+      "Available top-level keys: edges, evidence, nextActions, omitted, retrieval, status, taskType",
     ]);
     assert.equal(
       recovery?.fallbackRationale,
@@ -214,7 +211,7 @@ describe("sdl.context response artifacts", () => {
       args: {
         repoId: "repo-a",
         handle,
-        jsonPath: "finalEvidence",
+        jsonPath: "evidence",
         offset: 0,
         limit: 5,
       },
@@ -225,7 +222,7 @@ describe("sdl.context response artifacts", () => {
       steps: [{
         fn: "responseGet",
         action: "response.get",
-        args: { handle, jsonPath: "finalEvidence", offset: 0, limit: 5 },
+        args: { handle, jsonPath: "evidence", offset: 0, limit: 5 },
       }],
     };
     const retry = await executeWorkflow(retryRequest, actionMap, workflowConfig);

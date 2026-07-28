@@ -418,18 +418,16 @@ const VALIDATORS: Record<string, ValidatorFn> = {
 
   "sdl.context": (_args, result) => {
     const tool = "sdl.context";
-    const checks: ToolResultCheck[] = [
+    return [
+      checkNonEmptyString(tool, "status present", result.status),
       checkNonEmptyString(tool, "taskType present", result.taskType),
-      checkExists(tool, "success present", result.success),
-      checkExists(tool, "finalEvidence present", result.finalEvidence)];
-    // Broad mode projects model-facing structured content.
-    // taskId/actionsTaken/path/metrics are intentionally omitted.
-    if (result.success === true && result.answer !== undefined) {
-      checks.push(
-        checkNonEmptyString(tool, "answer present on success", result.answer),
-      );
-    }
-    return checks;
+      checkExists(tool, "retrieval present", result.retrieval),
+      checkExists(tool, "evidence present", result.evidence),
+      checkExists(tool, "edges present", result.edges),
+      checkExists(tool, "omitted present", result.omitted),
+      checkExists(tool, "nextActions present", result.nextActions),
+      checkNonEmptyString(tool, "etag present", result.etag),
+    ];
   },
 
   "sdl.agent.feedback": (_args, result) => {

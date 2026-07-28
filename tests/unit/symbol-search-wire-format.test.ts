@@ -225,7 +225,6 @@ test("actual handler JSON and packed responses satisfy the output schema", async
   });
   t.mock.module("../../dist/retrieval/index.js", {
     namedExports: {
-      checkRetrievalHealth: async () => ({ healthy: true }),
       createRetrievalQueryContext: () => ({
         healthPromises: new Map(),
         embeddingPromises: new Map(),
@@ -240,7 +239,6 @@ test("actual handler JSON and packed responses satisfy the output schema", async
         _repoId: string,
         work: () => Promise<unknown>,
       ) => work(),
-      shouldFallbackToLegacy: () => false,
     },
   });
 

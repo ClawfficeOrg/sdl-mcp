@@ -978,7 +978,7 @@ Follow the same workflow as the SDL-MCP Agent Workflow skill when that skill is 
    - Use \`sdl.context\` for task-shaped explain/debug/review/implement context.
    - Use \`symbolSearch\` / \`sdl.symbol.search\` plus \`symbolGetCard\` / \`sdl.symbol.getCard\` for exact symbols, APIs, and focused edit targets.
    - Use \`sliceBuild\` / \`sdl.slice.build\` when you need likely files, a dependency frontier, blast radius, or an edit-planning set.
-   - For \`sdl.context\`, set \`contextMode: "precise"\` for named symbols, exact paths, narrow bugs, and focused reviews; use \`contextMode: "broad"\` for unfamiliar subsystems.
+   - For \`sdl.context\`, provide \`budget.maxTokens\` and use flat \`focusPaths\`, \`focusSymbols\`, or \`chatMentions\` for named targets. Inspect \`evidence\`, \`edges\`, \`omitted\`, and \`nextActions\`.
    - Set \`responseMode: "auto"\` for potentially large responses and use \`response.get\` only for needed excerpts. For JSON artifacts, prefer \`jsonPath\` with dot or bracket array paths, add \`offset\`/\`limit\` for large arrays, and use \`raw: true\` only when byte-slicing JSON text is intentional.
    - Keep budgets tight; use slice budgets when file/card counts matter.
 
@@ -1065,10 +1065,8 @@ All SDL-MCP enforcement is conditional on the server being active (PID file exis
 
 ## Context Retrieval
 
-Start understanding tasks with sdl.context, exact symbol tasks with symbolSearch/symbolGetCard, and edit-planning tasks with slice.build; then use sdl.workflow for batched follow-up steps when cards, skeletons, hot paths, or bounded windows are needed:
-- contextMode: "precise" — targeted symbol/file lookups
-- contextMode: "broad" — exploratory codebase understanding
-Provide focusSymbols and/or focusPaths to scope the retrieval. Always set a budget (maxTokens, maxActions).
+Start understanding tasks with sdl.context, exact symbol tasks with symbolSearch/symbolGetCard, and edit-planning tasks with slice.build; then use sdl.workflow for batched follow-up steps when cards, skeletons, hot paths, or bounded windows are needed.
+Provide flat focusSymbols and/or focusPaths as seed priorities. Always set budget.maxTokens.
 
 ## Runtime Execution
 
@@ -1245,8 +1243,8 @@ function fallbackSkillBody() {
     "",
     "Load and follow the \`sdl-mcp-agent-workflow\` skill when available. Fallback rules:",
     "1. Start every repository task with \`repo.status\`, then choose \`sdl.context\`, \`symbolSearch\`/\`symbolGetCard\`, or \`slice.build\` based on the task.",
-    "2. Use \`contextMode: \\"precise\\"\` for named symbols, exact paths, narrow bugs, focused reviews, and implementation follow-up.",
-    "3. Use \`contextMode: \\"broad\\"\` for subsystem mapping, behavior tracing, unfamiliar code, or broad investigations.",
+    "2. Give \`sdl.context\` a required \`budget.maxTokens\`; use flat \`focusPaths\`, \`focusSymbols\`, or \`chatMentions\` for named targets.",
+    "3. Inspect its deterministic \`evidence\`, \`edges\`, \`omitted\`, and \`nextActions\`; the tool does not synthesize answers.",
     "4. Batch follow-up retrieval through \`sdl.workflow\`: \`symbolSearch\`, \`symbolGetCard\`, \`sliceBuild\` for graph/file frontiers, \`codeSkeleton\`, \`codeHotPath\`, then \`codeNeedWindow\` as a last resort.",
     "5. Use \`symbol.edit\` for one-symbol indexed edits; use \`searchEditPreview\` with \`targeting:\\"identifier\\"\`, \`targeting:\\"structural\\"\`, or \`operations[]\` for safer cross-file edits.",
     "6. Use \`runtimeExecute\` with \`stdin\` for repo-local commands and multiline scripts/input; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.",
@@ -1733,6 +1731,29 @@ function buildEnforcementAssets(
         path: join(repoRoot, ".codex", "hooks", "load-sdl-skill.mjs"),
         content: buildCodexSessionStartHook(),
         executable: true,
+      },
+      {
+        path: join(
+          repoRoot,
+          ".codex",
+          "skills",
+          "sdl-mcp-agent-workflow",
+          "SKILL.md",
+        ),
+        content: loadTextTemplate("sdl-mcp-agent-workflow/SKILL.md"),
+      },
+      {
+        path: join(
+          repoRoot,
+          ".codex",
+          "skills",
+          "sdl-mcp-agent-workflow",
+          "references",
+          "tool-recipes.md",
+        ),
+        content: loadTextTemplate(
+          "sdl-mcp-agent-workflow/references/tool-recipes.md",
+        ),
       },
       {
         path: join(repoRoot, ".codex", "hooks", "force-sdl-mcp.mjs"),

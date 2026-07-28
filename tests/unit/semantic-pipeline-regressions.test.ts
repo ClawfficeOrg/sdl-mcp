@@ -131,7 +131,7 @@ describe("semantic pipeline regressions", () => {
     );
   });
 
-  it("uses hybrid search path instead of legacy rerank", () => {
+  it("uses the unified retrieval path instead of a legacy rerank", () => {
     const source = readSource("src/mcp/tools/symbol.ts");
     const fnStart = source.indexOf("export async function handleSymbolSearch(");
     const fnEnd = source.indexOf(
@@ -148,9 +148,10 @@ describe("semantic pipeline regressions", () => {
     );
     assert.match(
       fnBody,
-      /useHybrid/,
-      "handleSymbolSearch should have useHybrid flag",
+      /useUnifiedRetrieval/,
+      "handleSymbolSearch should select the unified retrieval path",
     );
+    assert.doesNotMatch(fnBody, /useHybrid|shouldFallbackToLegacy/);
   });
 
   it("hybrid search handles overlay and durable results", () => {
@@ -166,7 +167,7 @@ describe("semantic pipeline regressions", () => {
     assert.match(
       fnBody,
       /searchSymbolsWithOverlay/,
-      "handleSymbolSearch should use overlay search for legacy path",
+      "handleSymbolSearch should retain explicit lexical overlay search",
     );
     assert.match(
       fnBody,

@@ -9,10 +9,6 @@ import {
 } from "../../dist/mcp/context-response-projection.js";
 import { formatToolCallForUser } from "../../dist/mcp/tool-call-formatter.js";
 import { handleActionSearch } from "../../dist/code-mode/index.js";
-import {
-  buildContextFtsQuery,
-  buildSeedEntitySearchPlan,
-} from "../../dist/agent/context-seeding.js";
 import { extractSymbols } from "../../dist/indexer/treesitter/extractSymbols.js";
 
 describe("SDL tool functionality QA", () => {
@@ -239,20 +235,4 @@ describe("SDL tool functionality QA", () => {
     assert.ok(Object.keys(result.summary?.byNamespace ?? {}).length > 0);
   });
 
-  it("prioritizes discriminating terms for broad tool-QA context", () => {
-    const taskText =
-      "existing test files symbols cover workflow result aggregation usage stats " +
-      "through search edit preview delta signature prompt cache deterministic tool output";
-    const query = buildContextFtsQuery(taskText);
-    const plan = buildSeedEntitySearchPlan(taskText, true);
-
-    assert.match(query, /delta/);
-    assert.match(query, /signature/);
-    assert.match(query, /prompt/);
-    assert.doesNotMatch(query, /\b(existing|files|symbols|cover|through)\b/);
-    assert.equal(plan.toolQaFocused, true);
-    assert.ok(plan.actionSeedQueries.length >= 3);
-    assert.match(plan.ftsQuery, /\btest\b/);
-    assert.deepEqual(plan.entityTypes, ["symbol", "fileSummary"]);
-  });
 });

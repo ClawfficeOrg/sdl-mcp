@@ -186,58 +186,65 @@ The runner fingerprints the complete source database family before and after sta
 
 ## Context Quality Suite
 
-The context quality benchmark (`tests/benchmark/context-quality.test.ts`) validates that `ContextEngine.buildContext()` produces useful, noise-free evidence and preserves answer content under broad-mode truncation. It runs 26 cases across all four task types (debug, explain, review, implement), split evenly between precise and broad context modes.
+The context quality benchmark (`tests/benchmark/context-quality.test.ts`) validates the canonical v2 evidence response against pinned, verified LadybugDB graphs. The SDL corpus contains the original 27 cases plus four QA-derived hard-floor cases. The neutral corpus contains two cases from `sdlbench/tests/fixtures/repo`.
 
 ### What It Measures
 
-- **Answer preservation**: Whether broad-mode responses retain a meaningful `answer` field after truncation. An answer that contains `[answer removed` or `[answer truncated` is counted as lost.
-- **Useful-symbol recall**: The fraction of `expectedUsefulSymbols` (per case) that appear in `finalEvidence[].summary` or `finalEvidence[].reference`. Higher recall means the retrieval pipeline is surfacing the right symbols for the task.
-- **Configured-noise rate**: For each case, count each configured `unexpectedSymbol` at most once when it appears anywhere in the concatenated evidence, sum those hits, and divide by the total evidence-item count. Unexpected symbols are things like Zod request schemas, tool descriptors, and unrelated tool handlers that should not appear in task-focused context. This is a corpus-specific guard, not a general result-precision measurement.
-- **Latency**: Wall-clock time per case, tracked for regression detection.
-
-### Useful vs Noisy Evidence
-
-**Useful evidence** contains symbols that are directly relevant to the task. For a debug task targeting `truncateIfOverBudget`, useful symbols include `ContextEngine`, `estimateTokens`, and `MAX_CONTEXT_RESPONSE_TOKENS` — the actual functions and constants involved in the truncation logic.
-
-**Noisy evidence** contains symbols that are structurally reachable but semantically irrelevant. For the same debug task, `AgentContextRequestSchema` (a Zod validation schema), `ToolDescriptor` (tool registration plumbing), and `registerLegacyTools` (gateway wiring) would be noise — they are connected in the dependency graph but do not help understand or fix the truncation behavior.
+- **Required-symbol recall**: The fraction of declared hard requirements represented by distinct evidence symbols at the case budget.
+- **Primary-symbol MRR**: The reciprocal rank of the declared primary symbol. Duplicate evidence rungs do not improve rank.
+- **Explicit-negative token ratio**: The fraction of evidence tokens assigned to labeled negative symbols or paths. The benchmark does not treat unlabeled evidence as noise.
+- **Evidence tokens per required hit**: The evidence-token cost of each required-symbol hit.
+- **Paired latency**: Interleaved v1 baseline and v2 control measurements after a fixed warm-up, reported at p50 and p95.
 
 ### Quality and Latency Gates
 
-The suite now runs lexical-only, confidence-gated default, and forced semantic/hybrid variants. A live indexed repository is required for the quality gates; set `SDL_CONTEXT_QUALITY_REQUIRE_INDEX=1` to fail when the suite cannot find one.
+The committed v1 reference lives at `devdocs/benchmarks/context-quality-v1-baseline.json`. Release evaluation runs v2 against a closed copy of the same pinned graph family and requires `graphIntegrityState: "verified"`.
 
 | Metric | Status |
 | ------ | ------ |
-| Forced semantic aggregate recall | Hard gate: `>= 85%` |
-| Forced semantic noise rate | Hard gate: `<= 10%` |
-| Forced semantic failed cases | Hard gate: `0` |
-| Default scoped-precise latency | Hard gate: `p95 <= 250ms` |
-| Forced semantic precise/broad recall | Report-only diagnostic |
-| Forced semantic p50/p95/max and total wall time | Report-only diagnostic |
-| Broad answer preservation | Hard gate: answers remain present after budget trimming |
+| QA-derived required-symbol recall | Hard gate: `100%` for every case |
+| Aggregate required-symbol recall | Hard gate: `>=` committed v1 baseline |
+| Primary-symbol MRR | Hard gate: `>=` committed v1 baseline |
+| Explicit-negative token ratio | Hard gate: `<=` committed v1 baseline |
+| Evidence tokens per required hit | Hard gate: `<=` committed v1 baseline |
+| Paired v2 p95 latency | Hard gate: `<= 1.25x` committed v1 baseline |
+| Failures and timeouts | Hard gate: `0` |
+| Neutral corpus | Hard gate: both cases pass without SDL-specific ranking rules |
 
-Candidate comparisons use the same build, configuration, and fresh clones of one pinned logical index snapshot. Discard one warmup, then compare the median total wall time from three complete 26-case forced-semantic runs on that candidate's clone; only candidates that pass every forced-semantic hard gate qualify. Do not refresh or reindex the snapshot or clones. LadybugDB may checkpoint files on open/close, so filesystem mtimes are not corpus fingerprints. The normal full benchmark separately retains the default scoped-precise p95 gate.
-
-A July 16, 2026 pinned-index measurement of the selected forced-semantic implementation produced 109/124 expected-symbol recall (87.9%), one configured-noise hit across 601 evidence items (0.2%), and zero failures in all three measured passes. Total wall times were 47.905, 47.969, and 48.843 seconds (median 47.969 seconds); p50 ranged from 1478 to 1536 ms and p95 from 2805 to 2890 ms.
-
-For tool-call latency regressions, collect at least one cold and one warm sample with `includeDiagnostics: true` before changing retrieval or DB code. Compare the returned phase timings against the observability dashboard's per-tool `phases` and `dbLatencyP95Ms` so regressions can be attributed to server overhead, retrieval, LadybugDB native execution/materialization, response shaping, or runtime artifact handling.
+Candidate comparisons use the same build, configuration, and fresh copies of one pinned logical index snapshot. Do not refresh or reindex the source snapshot. LadybugDB may checkpoint files on open or close, so compare the complete source file-family fingerprint instead of filesystem modification times.
 
 ### Running the Suite
 
 ```bash
-# Requires a built dist/ and indexed sdl-mcp repository
-SDL_CONTEXT_QUALITY_REQUIRE_INDEX=1 node --experimental-strip-types --test tests/benchmark/context-quality.test.ts
+# Requires a built dist/ and an isolated verified graph copy.
+SDL_CONTEXT_QUALITY_REQUIRE_INDEX=1 \
+SDL_CONTEXT_QUALITY_CORPUS=sdl-mcp \
+SDL_CONTEXT_QUALITY_REPO_ID=sdl-mcp \
+SDL_CONTEXT_QUALITY_VARIANT=semantic \
+SDL_CONTEXT_QUALITY_V2_SHADOW=1 \
+SDL_CONTEXT_QUALITY_OUTPUT_PATH=/absolute/path/context-quality.json \
+SDL_CONFIG=/absolute/path/sdlmcp.config.json \
+SDL_GRAPH_DB_PATH=/absolute/path/working.lbug \
+node --experimental-strip-types --test tests/benchmark/context-quality.test.ts
 ```
 
 PowerShell:
 
 ```powershell
 $env:SDL_CONTEXT_QUALITY_REQUIRE_INDEX='1'
+$env:SDL_CONTEXT_QUALITY_CORPUS='sdl-mcp'
+$env:SDL_CONTEXT_QUALITY_REPO_ID='sdl-mcp'
+$env:SDL_CONTEXT_QUALITY_VARIANT='semantic'
+$env:SDL_CONTEXT_QUALITY_V2_SHADOW='1'
+$env:SDL_CONTEXT_QUALITY_OUTPUT_PATH='C:\isolated\context-quality.json'
+$env:SDL_CONFIG='C:\isolated\sdlmcp.config.json'
+$env:SDL_GRAPH_DB_PATH='C:\isolated\working.lbug'
 node --experimental-strip-types --test tests/benchmark/context-quality.test.ts
 ```
 
-Set `SDL_CONTEXT_QUALITY_VARIANT=semantic` to run only the forced-semantic variant during candidate measurement; this intentionally skips the unrelated default scoped-precise gate, which remains active in the normal full command. Optional diagnostic controls `SDL_CONTEXT_QUALITY_CASE_DETAILS=missing` and `SDL_CONTEXT_QUALITY_CASE_ID=<case-id>` report misses without changing the corpus or gates.
+Set `SDL_CONTEXT_QUALITY_REQUIRE_PROVIDER_INVARIANT=1` for the SDL release gate. Set `SDL_CONTEXT_QUALITY_CORPUS=neutral` and use the neutral repository ID, configuration, and graph copy for the neutral hard floor. Optional controls `SDL_CONTEXT_QUALITY_CASE_DETAILS=missing` and `SDL_CONTEXT_QUALITY_CASE_ID=<case-id>` report individual misses without changing the corpus definitions.
 
-The suite degrades gracefully: when no indexed repository is available, only structural validation of the case definitions runs. Retrieval quality and answer preservation checks are skipped with a summary noting the skip count.
+Without `SDL_CONTEXT_QUALITY_REQUIRE_INDEX=1`, the suite may run only structural case validation when no indexed repository is available. Release evidence must set the flag and persist a non-skipped artifact.
 
 ## Statistical Smoothing
 

@@ -11,7 +11,7 @@ Code Mode is built around one clear separation of responsibility:
 - `sdl.workflow` handles multi-step operations.
 - `sdl.file` handles file reads, writes, edits, and gated source windows.
 
-If you remember only one rule, make it this one: use `sdl.context` first for `explain`, `debug`, `review`, and most `implement` requests. For explain/debug, try `options.answerFirst: true` before card-heavy context. Use `sdl.retrieve` for one exact retrieval step, `sdl.file` for file/edit/window work, and `sdl.workflow` only when the work is genuinely procedural.
+If you remember only one rule, make it this one: use `sdl.context` first for `explain`, `debug`, `review`, and most `implement` requests. Always provide `budget.maxTokens` and add flat focus fields for named targets. Use `sdl.retrieve` for one exact retrieval step, `sdl.file` for file/edit/window work, and `sdl.workflow` only when the work is genuinely procedural.
 
 ---
 
@@ -47,18 +47,20 @@ SDL-MCP internal bookkeeping is not duplicated into model-visible output by defa
 
 Code Mode surfaces now include static price tags in `sdl.manual` and `sdl.action.search`. Pick the cheapest rung that can answer the task, then use `usage.stats` and its `signalDensity` section only when you need to inspect token savings or delivered-but-unused context.
 
-For explain/debug, start with an answer-first context request:
+For explain/debug, start with a bounded evidence request:
 
 ```json
 {
   "repoId": "my-repo",
   "taskType": "debug",
   "taskText": "Why does parseConfig reject timeout=0?",
-  "options": { "contextMode": "precise", "answerFirst": true }
+  "budget": { "maxTokens": 3000 },
+  "focusSymbols": ["parseConfig"],
+  "includeTests": true
 }
 ```
 
-If the answer is not enough, expand from the returned evidence IDs with `symbol.getCard` or a normal `sdl.context` call. If the response includes `answerFirstFallback`, use normal card-mode context; the fallback means SDL did not have enough summary provenance to answer safely.
+Inspect the returned `evidence`, selected-symbol `edges`, and bounded `omitted` details. Follow `nextActions` or use `symbol.getCard` only when the selected content is insufficient.
 
 Packed results may introduce session-local aliases:
 
@@ -120,7 +122,10 @@ It mirrors `sdl.context`, but it sits next to `sdl.manual` and `sdl.workflow` so
 - `review`
 - `implement` when the immediate need is understanding existing code
 
-The public schema includes the complete nested `budget` and `options` contracts plus `refsMode`, `wireFormat`, and `ifNoneMatch`. Context budgets accept `maxTokens`, `maxEstimatedTokens`, `maxActions`, and `maxDurationMs`. Unknown fields fail validation, while `maxCards` returns guidance to use `slice.build` for card-count budgets.
+The strict public schema requires `budget.maxTokens` and keeps `focusPaths`,
+`focusSymbols`, `chatMentions`, and `includeTests` at the root. It also accepts
+`refsMode`, `wireFormat`, `responseMode`, and `ifNoneMatch`. Unknown root or
+budget fields fail validation.
 
 ### `sdl.retrieve`
 
@@ -171,8 +176,8 @@ Good fits:
 
 | Request shape | Start with | Why |
 |:--------------|:-----------|:----|
-| Explain a symbol or module | `sdl.context` with `answerFirst` | Returns a compact answer plus evidence IDs before cards |
-| Debug a bug or trace behavior | `sdl.context` with `answerFirst` | Starts with a compact answer and falls back to cards when provenance is insufficient |
+| Explain a symbol or module | `sdl.context` | Returns deterministic cards, skeletons, hot paths, and edges |
+| Debug a bug or trace behavior | `sdl.context` with focus fields | Prioritizes named targets, then expands connected evidence within the budget |
 | Review code or inspect risk | `sdl.context` | Gives compact review-oriented evidence first |
 | Learn a pattern before implementing | `sdl.context` | Gets structural context with less overhead than a workflow |
 | Need one exact retrieval step | `sdl.retrieve` | Runs a single symbol, slice, skeleton, hot-path, or code-window operation |
@@ -217,7 +222,7 @@ flowchart TD
     end
 
     WF e11@--> S1
-    CTX e12@-->|"finalEvidence + metrics"| Agent
+    CTX e12@-->|"evidence + edges + omissions"| Agent
     RET e13@-->|"retrieval result"| Agent
     FILE e14@-->|"file/edit/window result"| Agent
     S3 e15@-->|"step results + budget + traces"| Agent
@@ -345,7 +350,7 @@ For SDL-first agents:
 1. `sdl.repo.status`
 2. `sdl.action.search` when the right surface is unclear
 3. `sdl.manual(query|actions)` when a compact API slice helps
-4. `sdl.context` for explain/debug/review/implement context retrieval; use `options.answerFirst: true` first for explain/debug
+4. `sdl.context` for explain/debug/review/implement evidence retrieval with `budget.maxTokens` and any known flat focus fields
 5. `sdl.retrieve` for one exact retrieval step
 6. `sdl.file` for file, edit, or source-window work
 7. `sdl.workflow` for runtime execution, data shaping, batch mutations, and other procedural pipelines

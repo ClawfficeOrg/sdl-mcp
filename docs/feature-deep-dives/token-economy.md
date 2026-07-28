@@ -74,20 +74,21 @@ row=s1|WorkflowExecutor|src/code-mode/workflow.ts
 
 Use `s1`, `s2`, and other `sN` aliases anywhere a symbol ID is accepted. Recover the full hash from the `@ids` line that introduced the alias. JSON mode keeps full IDs unchanged.
 
-### Answer-First Context
+### Budgeted Context
 
-For explain/debug tasks, start with `sdl.context` and `options.answerFirst: true`:
+For explain/debug tasks, give `sdl.context` a strict token budget and any known focus fields:
 
 ```json
 {
   "repoId": "my-repo",
   "taskType": "explain",
   "taskText": "Trace how runtime output is summarized",
-  "options": { "contextMode": "precise", "answerFirst": true }
+  "budget": { "maxTokens": 3000 },
+  "focusSymbols": ["handleRuntimeQueryOutput"]
 }
 ```
 
-SDL returns a compact synthesized answer with evidence IDs when summary provenance is strong enough. If it returns `answerFirstFallback`, use normal card-mode context because SDL did not have enough proven summary coverage to answer safely.
+SDL returns deterministic evidence bundles that fit the complete canonical payload budget. When priority work does not fit, `status: "budgetLimited"` and `omitted.highestRanked` identify the most valuable recovery actions without creating an engine continuation.
 
 ### Search Near Misses
 
@@ -120,7 +121,7 @@ Retry with `search` plus `searchContext`, `offset` plus `limit`, `jsonPath`, `ma
 | A response contains `{ ref, unchanged: true }`, but the agent no longer has the original content | Re-run the request with `refsMode: "off"` |
 | A request using `s41` fails with an unknown-alias error | Re-run the producing packed call or use the full symbol ID from the original `@ids` line |
 | A digest omits the needed failure detail | Call `runtime.queryOutput` with focused `queryTerms` or `lineRange` |
-| `answerFirst` returns `answerFirstFallback` | Call normal `sdl.context` or request cards for evidence symbols |
+| `sdl.context` returns `status: "budgetLimited"` | Inspect `omitted.highestRanked`, then follow its action or raise the budget only for required work |
 | `symbol.search` returns `nearMisses` | Retry with one listed `name` |
 | `file.read` returns the large-read hint | Retry with a targeted read |
 
