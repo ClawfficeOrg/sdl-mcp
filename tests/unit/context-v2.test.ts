@@ -246,7 +246,7 @@ describe("ContextEngineV2 pure contracts", () => {
     );
   });
 
-  it("allocates a nonzero path cap round-robin with symbol-ID ordering", () => {
+  it("allocates exact-file hits round-robin with symbol-ID ordering", () => {
     const hits = Array.from({ length: 10 }, (_, index) => [
       {
         path: "./src/b.ts",

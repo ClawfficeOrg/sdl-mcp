@@ -460,6 +460,104 @@ export function resolveOverlayMentionSymbolIds(
   );
 }
 
+interface FocusPathResolution {
+  exactFileSymbolHits: FocusPathSymbolHit[];
+  directoryPrefixes: string[];
+}
+
+export async function resolveFocusPaths(
+  conn: Connection,
+  repoId: string,
+  focusPaths: readonly string[],
+  overlaySnapshot: OverlaySnapshot,
+  queries: FocusPathReadQueries = DEFAULT_FOCUS_PATH_READ_QUERIES,
+): Promise<FocusPathResolution> {
+  const exactFiles = new Map<
+    string,
+    NonNullable<Awaited<ReturnType<typeof ladybugDb.getFileByRepoPath>>>
+  >();
+  const directoryPrefixes = new Set<string>();
+  const normalizedFocusPaths = uniqueStrings(
+    focusPaths.map((focusPath) =>
+      normalizePath(focusPath).replace(/^\.\//, "").replace(/\/+$/, ""),
+    ),
+  )
+    .filter(Boolean)
+    .sort();
+
+  for (const normalized of normalizedFocusPaths) {
+    const overlayFiles = [...overlaySnapshot.filesById.values()].filter(
+      (file) =>
+        file.repoId === repoId &&
+        (file.relPath === normalized ||
+          file.relPath.startsWith(`${normalized}/`)),
+    );
+    const overlayExact = overlayFiles.find(
+      (file) => file.relPath === normalized,
+    );
+    const durableExact = overlayExact
+      ? null
+      : await queries.getFileByRepoPath(conn, repoId, normalized);
+    const exact =
+      overlayExact ??
+      (durableExact &&
+      !overlaySnapshot.touchedFileIds.has(durableExact.fileId)
+        ? durableExact
+        : null);
+
+    if (exact) {
+      exactFiles.set(exact.fileId, exact);
+      continue;
+    }
+    if (overlayFiles.length > 0) {
+      directoryPrefixes.add(normalized);
+      continue;
+    }
+
+    const durablePrefixFiles = await queries.getFilesByPrefix(
+      conn,
+      repoId,
+      normalized,
+      FOCUS_PATH_FILE_LIMIT,
+    );
+    if (
+      durablePrefixFiles.some(
+        (file) => !overlaySnapshot.touchedFileIds.has(file.fileId),
+      )
+    ) {
+      directoryPrefixes.add(normalized);
+    }
+  }
+
+  const exactFileSymbolHits: FocusPathSymbolHit[] = [];
+  for (const file of [...exactFiles.values()].sort(
+    (left, right) =>
+      left.relPath.localeCompare(right.relPath) ||
+      left.fileId.localeCompare(right.fileId),
+  )) {
+    const overlaySymbols = [...overlaySnapshot.symbolsById.values()].filter(
+      (symbol) => symbol.fileId === file.fileId,
+    );
+    const symbols = (overlaySnapshot.filesById.has(file.fileId)
+      ? overlaySymbols
+      : await queries.getSymbolsByFile(conn, file.fileId)
+    )
+      .filter((symbol) => symbol.external !== true)
+      .sort(compareSymbolRows);
+    for (const symbol of symbols) {
+      exactFileSymbolHits.push({
+        path: file.relPath,
+        symbolId: symbol.symbolId,
+      });
+    }
+  }
+
+  return {
+    exactFileSymbolHits,
+    directoryPrefixes: [...directoryPrefixes].sort(),
+  };
+}
+
 export async function resolveFocusPathSymbolHits(
   conn: Connection,
   repoId: string,

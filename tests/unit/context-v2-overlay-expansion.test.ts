@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import type { Connection } from "kuzu";
 
 import * as contextEngine from "../../dist/context/engine.js";
+import { resolveFocusPaths } from "../../dist/context/engine.js";
 import { getTaskProfile } from "../../dist/context/profiles.js";
 
 function overlaySnapshot() {
@@ -66,6 +67,189 @@ function overlaySnapshot() {
     ]),
   };
 }
+
+function durableFixture(relPath: string) {
+  const snapshot = overlaySnapshot();
+  const overlayFile = snapshot.filesById.get("overlay-file");
+  const overlaySymbol = snapshot.symbolsById.get("overlay-focus");
+  assert.ok(overlayFile);
+  assert.ok(overlaySymbol);
+  snapshot.touchedFileIds.clear();
+  snapshot.filesById.clear();
+  snapshot.symbolsById.clear();
+
+  const file = {
+    ...overlayFile,
+    fileId: "durable-file",
+    relPath,
+    directory: relPath.slice(0, Math.max(0, relPath.lastIndexOf("/"))),
+  };
+  const symbol = {
+    ...overlaySymbol,
+    symbolId: "durable-symbol",
+    fileId: file.fileId,
+  };
+  return { snapshot, file, symbol };
+}
+
+describe("resolveFocusPaths", () => {
+  it("classifies a durable exact file as symbol hits", async () => {
+    const { snapshot, file, symbol } = durableFixture("src/durable.ts");
+    let prefixCalls = 0;
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/durable.ts", "./src/durable.ts/"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => file,
+        getFilesByPrefix: async () => {
+          prefixCalls += 1;
+          return [];
+        },
+        getSymbolsByFile: async () => [symbol],
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [
+        { path: "src/durable.ts", symbolId: "durable-symbol" },
+      ],
+      directoryPrefixes: [],
+    });
+    assert.equal(prefixCalls, 0);
+  });
+
+  it("classifies a durable directory without loading its symbols", async () => {
+    const { snapshot, file } = durableFixture("tests/unit/example.test.ts");
+    let symbolCalls = 0;
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["tests"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => null,
+        getFilesByPrefix: async () => [file],
+        getSymbolsByFile: async () => {
+          symbolCalls += 1;
+          return [];
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: ["tests"],
+    });
+    assert.equal(symbolCalls, 0);
+  });
+
+  it("ignores a missing focus path", async () => {
+    const { snapshot } = durableFixture("src/missing.ts");
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/missing.ts"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => null,
+        getFilesByPrefix: async () => [],
+        getSymbolsByFile: async () => [],
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: [],
+    });
+  });
+
+  it("treats an overlay-only exact file as authoritative", async () => {
+    const snapshot = overlaySnapshot();
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/overlay-focus.ts"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => {
+          throw new Error("durable exact lookup must not run");
+        },
+        getFilesByPrefix: async () => {
+          throw new Error("directory lookup must not run");
+        },
+        getSymbolsByFile: async () => {
+          throw new Error("durable symbol lookup must not run");
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [
+        { path: "src/overlay-focus.ts", symbolId: "overlay-focus" },
+      ],
+      directoryPrefixes: [],
+    });
+  });
+
+  it("classifies an overlay-only directory without loading symbols", async () => {
+    const snapshot = overlaySnapshot();
+    let symbolCalls = 0;
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => null,
+        getFilesByPrefix: async () => [],
+        getSymbolsByFile: async () => {
+          symbolCalls += 1;
+          return [];
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: ["src"],
+    });
+    assert.equal(symbolCalls, 0);
+  });
+
+  it("hides a durable exact file tombstoned by the overlay", async () => {
+    const { snapshot, file } = durableFixture("src/deleted.ts");
+    snapshot.touchedFileIds.add(file.fileId);
+    let symbolCalls = 0;
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/deleted.ts"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => file,
+        getFilesByPrefix: async () => [file],
+        getSymbolsByFile: async () => {
+          symbolCalls += 1;
+          return [];
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: [],
+    });
+    assert.equal(symbolCalls, 0);
+  });
+});
 
 describe("Context V2 captured overlay expansion", () => {
   it("resolves overlay-only explicit and focus-path symbols from one snapshot", async () => {
