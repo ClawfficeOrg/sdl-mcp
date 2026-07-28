@@ -27,7 +27,9 @@ The input is flat and strict. Unknown root keys and unknown `budget` keys are re
 | `refsMode` | no | `auto` or `off` |
 | `wireFormat` | no | `json`, `packed`, or `auto` |
 
-Focus fields are authoritative seed priorities, not output boundaries. The engine resolves a bounded Tier-0 seed set first, then expands connected Tier-1 candidates when the budget permits.
+Focus fields are authoritative priorities, not output boundaries. An exact indexed or overlay file in `focusPaths` can add its symbols to the existing bounded Tier-0 allocation. A directory is soft scope: after fusion bounds the candidate pool, it stable-partitions that pool without changing scores or provenance. Existing Tier-0 pins remain first, followed by unpinned in-directory rows in fused order, then remaining rows in fused order. Directory scope does not widen lanes, oversample, or rerun retrieval. Missing and tombstoned paths have no effect.
+
+For JavaScript and TypeScript test files, bounded static titles from `describe`, `it`, and `test` participate in module lexical-search metadata. A dotted literal such as `sdl.info` can center a hot path only after the engine selects a module or symbol; it is not a retrieval lane. Existing indexed test files need a forced full reindex to receive this metadata because incremental indexing is content-hash driven. This is not a schema migration and adds no configuration.
 
 ```json
 {

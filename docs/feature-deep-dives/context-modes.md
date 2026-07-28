@@ -27,7 +27,9 @@ The profile also selects expansion direction and depth. Explicit `includeTests` 
 
 Use `focusSymbols` when canonical symbol IDs or names are known. Use `focusPaths` for repository-relative files or directories, and use `chatMentions` for identifiers named in the current conversation.
 
-Resolved focus candidates enter Tier 0 in deterministic order. Exact task-text identifiers can also enter Tier 0. Remaining fused and graph-expanded candidates enter Tier 1.
+An exact indexed or overlay file in `focusPaths` can enter the existing bounded Tier-0 allocation. A directory is soft scope: it stable-partitions only the already-fused, already-bounded candidate pool. Existing Tier-0 pins remain first; unpinned in-directory rows keep fused order, followed by remaining rows in fused order. Directory scope does not widen lanes, oversample, rerun retrieval, or change scores or provenance. Missing and tombstoned paths have no effect.
+
+For JavaScript and TypeScript test files, bounded static titles from `describe`, `it`, and `test` participate in module lexical-search metadata. Dotted literals such as `sdl.info` center hot paths only after module or symbol selection; they are not retrieval lanes. To add this metadata to an unchanged indexed test file, run a forced full reindex: incremental indexing is content-hash driven. This is not a schema migration and adds no configuration.
 
 If every selected Tier-0 rung cannot fit, the response uses `status: "budgetLimited"`, emits no Tier-1 evidence, and identifies the highest-ranked omitted Tier-0 work.
 
