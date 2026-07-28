@@ -275,6 +275,36 @@ describe("Context code evidence snapshot identity", () => {
     assert.equal(hotPath.excerpt.includes(oversizedRaw), false);
   });
 
+  it("counts only unique valid bounded terms toward the direct literal cap", async () => {
+    const { findQualifiedTermLines } = await import(
+      "../../dist/code/hotpath.js"
+    );
+    const validTerms = Array.from(
+      { length: 17 },
+      (_, index) => `api.slot${String(index).padStart(2, "0")}x`,
+    );
+    const oversized = "api." + "x".repeat(150);
+    const lines = [...validTerms, oversized].map(
+      (term) => `const value = "${term}";`,
+    );
+
+    const result = findQualifiedTermLines(lines, [
+      "plain",
+      "api.",
+      oversized,
+      validTerms[0],
+      validTerms[0],
+      ...validTerms,
+    ]);
+
+    assert.deepEqual(result, {
+      lineNumbers: Array.from({ length: 16 }, (_, index) => index + 1),
+      matchedIdentifiers: validTerms.slice(0, 16),
+    });
+    assert.equal(result.matchedIdentifiers.includes(validTerms[16]), false);
+    assert.equal(result.matchedIdentifiers.includes(oversized), false);
+  });
+
   it("keeps qualified includes visibility without broadening AST identifiers", async () => {
     const hotPathModule = await import("../../dist/code/hotpath.js");
     const capturedContent = [
