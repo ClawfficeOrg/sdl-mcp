@@ -61,7 +61,7 @@ That instruction layer now includes natural-identifier lookup and guidance field
 
 The generated `explore-sdl` agent mirrors the SDL-MCP Agent Workflow skill: it chooses the cheapest SDL discovery surface (`sdl.context`, `symbolSearch`/`symbolGetCard`, or `slice.build`), escalates through batched SDL workflow steps only when needed, uses SDL runtime with minimal persisted output for repo-local commands, avoids habitual index refreshes, and calls `usageStats` only for requested savings reports, telemetry debugging, or persisted usage snapshots.
 
-SDL-MCP also advertises server-level MCP instructions that tell clients to load `sdl-mcp-agent-workflow` at session start when skills are supported. Codex enforcement adds a stronger `.codex/hooks/load-sdl-skill.mjs` `SessionStart` hook that injects the lean skill body as a system message.
+SDL-MCP places the required workflow in the first advertised tool description. The fuller `sdl-mcp-agent-workflow` skill is optional and installed repo-locally only with `sdl-mcp init --skill`. Codex enforcement's `.codex/hooks/load-sdl-skill.mjs` hook loads that skill when available and otherwise injects its bundled fallback summary.
 
 ---
 

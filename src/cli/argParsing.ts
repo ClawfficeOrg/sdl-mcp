@@ -93,6 +93,8 @@ export function parseInitOptions(
       options.dryRun = true;
     } else if (arg === "--enforce-agent-tools") {
       options.enforceAgentTools = true;
+    } else if (arg === "--skill") {
+      options.skill = true;
     } else if (arg === "--from-postinstall") {
       options.fromPostinstall = true;
     }
@@ -137,6 +139,9 @@ export function parseInitOptions(
   }
   if (values["enforce-agent-tools"] === true) {
     options.enforceAgentTools = true;
+  }
+  if (values.skill === true) {
+    options.skill = true;
   }
   if (values["from-postinstall"] === true) {
     options.fromPostinstall = true;

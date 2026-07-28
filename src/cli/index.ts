@@ -63,6 +63,7 @@ async function main(): Promise<void> {
       "auto-index": { type: "boolean" },
       "dry-run": { type: "boolean" },
       "enforce-agent-tools": { type: "boolean" },
+      skill: { type: "boolean" },
       "from-postinstall": { type: "boolean" },
       watch: { type: "boolean", short: "w" },
       "repo-id": { type: "string" },
@@ -308,6 +309,7 @@ Global Options:
     --auto-index          Run index + doctor automatically after init
     --dry-run             Print generated config and exit without writing files
     --enforce-agent-tools Enable SDL-first runtime/code-mode config and write client enforcement assets
+    --skill               Install the optional repo-local sdl-mcp-agent-workflow Codex skill
 
  Index Options:
    -w, --watch          Watch for file changes

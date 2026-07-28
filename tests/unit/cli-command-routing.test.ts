@@ -139,6 +139,11 @@ describe("CLI command routing", () => {
       assert.strictEqual(options.enforceAgentTools, true);
     });
 
+    it("accepts --skill flag", () => {
+      const options = parseInitOptions(["--skill"], global, {});
+      assert.strictEqual(options.skill, true);
+    });
+
     it("rejects path traversal in --repo-path", () => {
       assert.throws(
         () => parseInitOptions(["--repo-path", "../escape"], global, {}),

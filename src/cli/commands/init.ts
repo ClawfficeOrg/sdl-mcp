@@ -1261,7 +1261,7 @@ if (input.hook_event_name && input.hook_event_name !== "SessionStart") {
 const skill = loadSkill();
 const sourceLine = skill
   ? \`Skill source: \${skill.path}\`
-  : "Skill source: fallback summary; install the user-global sdl-mcp-agent-workflow skill for the full version.";
+  : "Skill source: fallback summary; run sdl-mcp init --skill in this repository to install the full version.";
 const body = skill?.body ?? fallbackSkillBody();
 
 process.stdout.write(JSON.stringify({
@@ -1271,7 +1271,9 @@ process.stdout.write(JSON.stringify({
     "",
     body,
     "",
-    "For detailed recipes, load references/tool-recipes.md from the same skill directory when needed."
+    skill
+      ? "For detailed recipes, load references/tool-recipes.md from the same skill directory when needed."
+      : ""
   ].join("\\n")
 }));
 `;
@@ -1630,6 +1632,27 @@ function buildAgentInstructionAssets(
   });
 }
 
+function buildAgentWorkflowSkillAssets(repoRoot: string): GeneratedAsset[] {
+  const skillRoot = join(
+    repoRoot,
+    ".codex",
+    "skills",
+    "sdl-mcp-agent-workflow",
+  );
+  return [
+    {
+      path: join(skillRoot, "SKILL.md"),
+      content: loadTextTemplate("sdl-mcp-agent-workflow/SKILL.md"),
+    },
+    {
+      path: join(skillRoot, "references", "tool-recipes.md"),
+      content: loadTextTemplate(
+        "sdl-mcp-agent-workflow/references/tool-recipes.md",
+      ),
+    },
+  ];
+}
+
 function buildEnforcementAssets(
   repoRoot: string,
   repoId: string,
@@ -1731,29 +1754,6 @@ function buildEnforcementAssets(
         path: join(repoRoot, ".codex", "hooks", "load-sdl-skill.mjs"),
         content: buildCodexSessionStartHook(),
         executable: true,
-      },
-      {
-        path: join(
-          repoRoot,
-          ".codex",
-          "skills",
-          "sdl-mcp-agent-workflow",
-          "SKILL.md",
-        ),
-        content: loadTextTemplate("sdl-mcp-agent-workflow/SKILL.md"),
-      },
-      {
-        path: join(
-          repoRoot,
-          ".codex",
-          "skills",
-          "sdl-mcp-agent-workflow",
-          "references",
-          "tool-recipes.md",
-        ),
-        content: loadTextTemplate(
-          "sdl-mcp-agent-workflow/references/tool-recipes.md",
-        ),
       },
       {
         path: join(repoRoot, ".codex", "hooks", "force-sdl-mcp.mjs"),
@@ -2302,6 +2302,23 @@ function printDryRunPreview(
 export async function initCommand(options: InitOptions): Promise<void> {
   const initialConfigPath = resolveCliConfigPath(options.config, "write");
   if (
+    options.skill &&
+    existsSync(initialConfigPath) &&
+    !options.force &&
+    !options.dryRun
+  ) {
+    const repoRoot = resolve(options.repoPath ?? process.cwd());
+    const createdPaths: string[] = [];
+    const createdDirs: string[] = [];
+    for (const asset of buildAgentWorkflowSkillAssets(repoRoot)) {
+      writeGeneratedAsset(asset, createdPaths, createdDirs);
+    }
+    console.log(
+      "Workflow skill is available in .codex/skills/sdl-mcp-agent-workflow.",
+    );
+    return;
+  }
+  if (
     existsSync(initialConfigPath) &&
     !options.force &&
     !options.dryRun &&
@@ -2641,8 +2658,14 @@ export async function initCommand(options: InitOptions): Promise<void> {
           .filter((asset) => !agentInstructionPaths.has(asset.path)),
       )
     : [];
+  // The first advertised SDL-MCP tool carries the workflow; install the fuller
+  // repo-local Codex skill only when the user explicitly requests it.
+  const skillAssets = options.skill
+    ? buildAgentWorkflowSkillAssets(repoRoot)
+    : [];
   const generatedAssets = [
     ...baseGeneratedAssets,
+    ...skillAssets,
     ...agentInstructionAssets,
     ...enforcementAssets,
     ...buildUndetectedAgentConfigAssets(selectedAgents, detections, configPath),

@@ -26,6 +26,7 @@ export interface InitOptions extends CLIOptions {
   autoIndex?: boolean;
   dryRun?: boolean;
   enforceAgentTools?: boolean;
+  skill?: boolean;
   fromPostinstall?: boolean;
 }
 

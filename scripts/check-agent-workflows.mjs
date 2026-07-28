@@ -11,17 +11,6 @@ const exactCopySets = [
     canonicalPath: "templates/SDL.md",
     copies: ["SDL.md", "tests/stress/fixtures/SDL.md"],
   },
-  {
-    canonicalPath: "templates/sdl-mcp-agent-workflow/SKILL.md",
-    copies: [".codex/skills/sdl-mcp-agent-workflow/SKILL.md"],
-  },
-  {
-    canonicalPath:
-      "templates/sdl-mcp-agent-workflow/references/tool-recipes.md",
-    copies: [
-      ".codex/skills/sdl-mcp-agent-workflow/references/tool-recipes.md",
-    ],
-  },
 ];
 
 const syncSurfaces = [

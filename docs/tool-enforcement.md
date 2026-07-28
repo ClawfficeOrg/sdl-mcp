@@ -82,7 +82,7 @@ See the client-specific guide in [tool-enforcement-for-claude.md](./tool-enforce
 
 ### Codex App / Codex CLI
 
-Codex gets repo-local instruction files and Codex lifecycle hook assets. The generated `.codex/config.toml` enables `codex_hooks`, `.codex/hooks.json` registers a `SessionStart` skill-loader hook plus a broad `PreToolUse` policy hook, `.codex/hooks/load-sdl-skill.mjs` injects the lean `sdl-mcp-agent-workflow` skill body at session start, and `.codex/hooks/force-sdl-mcp.mjs` redirects repo-local native shell, file read/write/edit, apply-patch, and non-SDL MCP file/search tools toward SDL-MCP when the PID file is present. Native access remains allowed for `.codex/**`, `.claude/**`, and non-repo skills, memories, and session internals.
+Codex gets repo-local instruction files and Codex lifecycle hook assets. The generated `.codex/config.toml` enables `codex_hooks`, `.codex/hooks.json` registers a `SessionStart` workflow-loader hook plus a broad `PreToolUse` policy hook, and `.codex/hooks/force-sdl-mcp.mjs` redirects repo-local native shell, file read/write/edit, apply-patch, and non-SDL MCP file/search tools toward SDL-MCP when the PID file is present. The optional `sdl-mcp-agent-workflow` skill is not installed by enforcement; pass `sdl-mcp init --skill` to install it repo-locally. The session hook loads it when available and otherwise uses its bundled fallback summary. Native access remains allowed for `.codex/**`, `.claude/**`, and non-repo skills, memories, and session internals.
 
 The generated `CODEX.md` and `AGENTS.md` still matter: they describe natural-identifier lookup and fallback-guided recovery so Codex can stay inside SDL-MCP even when the exact `symbolId` is unknown.
 

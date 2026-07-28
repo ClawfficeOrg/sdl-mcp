@@ -91,7 +91,8 @@ Key options:
 - `-y, --yes` (non-interactive mode with repo/language auto-detection)
 - `--auto-index` (run inline incremental index and doctor checks)
 - `--dry-run` (print generated config without writing files)
-- `--enforce-agent-tools` (generate SDL-first enforcement assets for the chosen client: enables runtime, exclusive Code Mode, and writes client-specific instruction/hook files)
+- `--enforce-agent-tools` (generate SDL-first enforcement assets for the chosen client: enables runtime, exclusive Code Mode, and writes client-specific instruction/hook files; does not install the optional workflow skill)
+- `--skill` (install the optional repo-local Codex `sdl-mcp-agent-workflow` skill)
 
 ### `sdl-mcp doctor`
 
