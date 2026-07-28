@@ -12,6 +12,7 @@ import {
   type ContextEngineV2Dependencies,
   derivedTierOneMentionsForRequest,
   focusPathTierZeroCapacity,
+  identifiersForContextRequest,
   tierZeroMentionsForRequest,
 } from "../../dist/context/engine.js";
 import { hydrateContextBundles } from "../../dist/context/hydrate.js";
@@ -40,6 +41,7 @@ import type {
   ContextEvidence,
   ContextPayload,
   ContextRung,
+  ContextV2Request,
 } from "../../dist/context/types.js";
 
 function testContextEngine(
@@ -168,6 +170,31 @@ function expectedResponseTokens(value: ContextPayload): number {
 }
 
 describe("ContextEngineV2 pure contracts", () => {
+  it("orders qualified terms before caller and auto-extracted identifiers", () => {
+    const request: ContextV2Request = {
+      repoId: "repo",
+      taskType: "explain",
+      taskText: "Find sdl.info, then sdl.workflow and ExistingThing",
+      chatMentions: ["caller.symbol", "  ExplicitThing  ", "sdl.info"],
+      budget: { maxTokens: 1_400 },
+    };
+
+    assert.deepEqual(identifiersForContextRequest(request), [
+      "sdl.info",
+      "sdl.workflow",
+      "caller.symbol",
+      "ExplicitThing",
+      "xistingThing",
+      "ExistingThing",
+      "sdl",
+      "info",
+      "then",
+      "workflow",
+      "sdlInfo",
+      "SdlInfo",
+    ]);
+  });
+
   it("keeps generic task words out of Tier 0 without dropping explicit identifiers", () => {
     assert.deepEqual(
       tierZeroMentionsForRequest({

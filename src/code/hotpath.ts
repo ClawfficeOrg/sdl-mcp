@@ -44,6 +44,38 @@ interface IdentifierMatchResult {
   confirmedIdentifiers: Set<string>;
 }
 
+const QUALIFIED_IDENTIFIER =
+  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$/;
+
+export function findQualifiedTermLines(
+  lines: readonly string[],
+  identifiersToFind: readonly string[],
+): { lineNumbers: number[]; matchedIdentifiers: string[] } {
+  const lineNumbers = new Set<number>();
+  const matchedIdentifiers: string[] = [];
+  const considered = new Set<string>();
+
+  for (const identifier of identifiersToFind) {
+    if (considered.has(identifier) || !QUALIFIED_IDENTIFIER.test(identifier)) {
+      continue;
+    }
+    considered.add(identifier);
+    let matched = false;
+    for (let index = 0; index < lines.length; index++) {
+      if (lines[index].includes(identifier)) {
+        lineNumbers.add(index + 1);
+        matched = true;
+      }
+    }
+    if (matched) matchedIdentifiers.push(identifier);
+  }
+
+  return {
+    lineNumbers: [...lineNumbers].sort((left, right) => left - right),
+    matchedIdentifiers,
+  };
+}
+
 function findLinesMatchingIdentifiers(
   tree: Parser.Tree,
   identifiersToFind: string[],
@@ -425,6 +457,11 @@ export async function renderPreparedHotPath(
       tree,
       identifiersToFind,
     );
+    const qualifiedTerms = findQualifiedTermLines(lines, identifiersToFind);
+    for (const line of qualifiedTerms.lineNumbers) matchedLines.add(line);
+    for (const identifier of qualifiedTerms.matchedIdentifiers) {
+      confirmedIdentifiers.add(identifier);
+    }
 
     // Filter matched lines to symbol range so we don't return unrelated code
     const symStart = symbol.rangeStartLine ?? 1;

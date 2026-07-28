@@ -124,6 +124,99 @@ describe("Context code evidence snapshot identity", () => {
     assert.doesNotMatch(hotPath.excerpt, /newNeedle/);
   });
 
+  it("centers prepared module evidence on exact qualified literals", async () => {
+    const hotPathModule = await import("../../dist/code/hotpath.js");
+    const capturedContent = [
+      "// module header",
+      "export const moduleStart = true;",
+      "const first = 1;",
+      "const second = 2;",
+      "const third = 3;",
+      'const infoLiteral = "sdl.info";',
+      "const fourth = 4;",
+      "const fifth = 5;",
+      'const workflowLiteral = "sdl.workflow";',
+      "export const moduleEnd = true;",
+    ].join("\n");
+    const symbol = {
+      ...symbolRow("qualified-module", "qualified-file", "qualified-module"),
+      kind: "module",
+      rangeStartLine: 2,
+      rangeEndLine: 10,
+    };
+    const prepared = {
+      symbol,
+      filePath: "src/qualified-module.ts",
+      relativePath: "src/qualified-module.ts",
+      extension: "ts",
+      sourceKind: "overlay",
+      capturedContentHash: hashContent(capturedContent),
+      capturedContent,
+    };
+
+    const hotPath = await hotPathModule.renderPreparedHotPath(
+      prepared as never,
+      ["sdl.info", "sdl.workflow"],
+      { contextLines: 0, maxLines: 4, maxTokens: 200 },
+    );
+
+    assert.ok(hotPath);
+    assert.match(hotPath.excerpt, /sdl\.info/);
+    assert.match(hotPath.excerpt, /sdl\.workflow/);
+    assert.deepEqual(hotPath.matchedIdentifiers, [
+      "sdl.info",
+      "sdl.workflow",
+    ]);
+    assert.deepEqual(hotPath.matchedLineNumbers, [6, 9]);
+    assert.equal(hotPath.actualRange.startLine, 6);
+    assert.doesNotMatch(hotPath.excerpt, /moduleStart/);
+  });
+
+  it("excludes qualified literals outside the selected symbol range", async () => {
+    const hotPathModule = await import("../../dist/code/hotpath.js");
+    const capturedContent = [
+      "// file header",
+      'const outsideBefore = "sdl.info";',
+      "",
+      "export function selectedSymbol() {",
+      "  return localValue;",
+      "}",
+      "",
+      'const outsideAfter = "sdl.workflow";',
+    ].join("\n");
+    const symbol = {
+      ...symbolRow("selected-symbol", "selected-file", "selectedSymbol"),
+      rangeStartLine: 4,
+      rangeEndLine: 6,
+    };
+    const prepared = {
+      symbol,
+      filePath: "src/selected-symbol.ts",
+      relativePath: "src/selected-symbol.ts",
+      extension: "ts",
+      sourceKind: "overlay",
+      capturedContentHash: hashContent(capturedContent),
+      capturedContent,
+    };
+
+    const hotPath = await hotPathModule.renderPreparedHotPath(
+      prepared as never,
+      ["sdl.info", "sdl.workflow"],
+      { contextLines: 0, maxLines: 4, maxTokens: 200 },
+    );
+
+    assert.ok(hotPath);
+    assert.doesNotMatch(hotPath.excerpt, /sdl\./);
+    assert.deepEqual(hotPath.matchedIdentifiers, []);
+    assert.deepEqual(hotPath.matchedLineNumbers, [4]);
+    assert.deepEqual(hotPath.actualRange, {
+      startLine: 4,
+      startCol: 0,
+      endLine: 4,
+      endCol: "export function selectedSymbol() {".length,
+    });
+  });
+
   it("fails closed when a durable file changes after preparation", async () => {
     const skeletonModule = await import("../../dist/code/skeleton.js");
     const hotPathModule = await import("../../dist/code/hotpath.js");

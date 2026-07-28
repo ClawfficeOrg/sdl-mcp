@@ -16,6 +16,7 @@ import {
   type OverlaySnapshot,
 } from "../live-index/overlay-reader.js";
 import { searchContextCandidates } from "../retrieval/context-candidate-search.js";
+import { extractQualifiedTermsFromContext } from "../retrieval/identifier-extraction.js";
 import {
   createRetrievalQueryContext,
   prewarmRetrievalEmbeddingPromises,
@@ -211,6 +212,20 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [
     ...new Set(values.map((value) => value.trim()).filter(Boolean)),
   ];
+}
+
+/** Keep exact dotted evidence ahead of broader caller and task identifiers. */
+export function identifiersForContextRequest(
+  request: ContextV2Request,
+): string[] {
+  return uniqueStrings([
+    ...extractQualifiedTermsFromContext(
+      request.taskText,
+      request.chatMentions ?? [],
+    ),
+    ...(request.chatMentions ?? []),
+    ...autoExtractMentions(request.taskText),
+  ]);
 }
 
 export function focusPathTierZeroCapacity({
@@ -1053,10 +1068,7 @@ async function defaultHydrate({
     repoId: request.repoId,
     versionId: runtime.versionId,
     selected,
-    identifiers: uniqueStrings([
-      ...(request.chatMentions ?? []),
-      ...autoExtractMentions(request.taskText),
-    ]),
+    identifiers: identifiersForContextRequest(request),
     overlaySnapshot: runtime.overlaySnapshot,
     prepared,
   });
@@ -1134,10 +1146,7 @@ export class ContextEngineV2 {
     request: ContextV2Request,
   ): Promise<ContextEngineV2Result> {
     const profile = getTaskProfile(request.taskType);
-    const identifiers = uniqueStrings([
-      ...(request.chatMentions ?? []),
-      ...autoExtractMentions(request.taskText),
-    ]);
+    const identifiers = identifiersForContextRequest(request);
     let snapshot: {
       retrieval: ContextRetrievalStageResult;
       selection?: ReturnType<typeof selectContextBundles>;

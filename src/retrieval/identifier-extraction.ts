@@ -4,6 +4,7 @@
 // Public exports:
 //   - BEHAVIORAL_KINDS, MAX_IDENTIFIERS, IDENTIFIER_STOP_WORDS
 //   - buildContextAwareStopWords(queryText)
+//   - extractQualifiedTermsFromContext(taskText, chatMentions)
 //   - generateCompoundIdentifiers(text)
 //   - extractIdentifiersFromText(text, queryContext?)
 //
@@ -12,6 +13,50 @@
 /** Injectable gate evaluator for testability. */
 
 export const MAX_IDENTIFIERS = 16;
+
+const QUALIFIED_IDENTIFIER_SOURCE =
+  "[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)+";
+const COMPLETE_QUALIFIED_IDENTIFIER = new RegExp(
+  "^" + QUALIFIED_IDENTIFIER_SOURCE + "$",
+);
+const MAX_QUALIFIED_TERM_CODE_POINTS = 128;
+
+export function extractQualifiedTermsFromContext(
+  taskText: string,
+  chatMentions: readonly string[],
+): string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+
+  for (const text of [taskText, ...chatMentions]) {
+    // Token boundaries keep invalid dotted chains and trailing dots from
+    // becoming broader matches while preserving source order.
+    const matches = new RegExp(
+      "(?<![A-Za-z0-9_$.])(" +
+        QUALIFIED_IDENTIFIER_SOURCE +
+        ")(?![A-Za-z0-9_$.])",
+      "g",
+    );
+    for (const match of text.matchAll(matches)) {
+      const codePoints = Array.from(match[1]);
+      let bounded = codePoints.slice(0, MAX_QUALIFIED_TERM_CODE_POINTS).join("");
+      if (
+        codePoints.length > MAX_QUALIFIED_TERM_CODE_POINTS &&
+        bounded.endsWith(".")
+      ) {
+        bounded = bounded.slice(0, -1);
+      }
+      if (!COMPLETE_QUALIFIED_IDENTIFIER.test(bounded) || seen.has(bounded)) {
+        continue;
+      }
+      seen.add(bounded);
+      terms.push(bounded);
+      if (terms.length === MAX_IDENTIFIERS) return terms;
+    }
+  }
+
+  return terms;
+}
 
 const ALWAYS_STOP_WORDS = new Set([
   "the",
