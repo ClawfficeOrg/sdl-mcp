@@ -486,11 +486,12 @@ export async function resolveFocusPaths(
     .sort();
 
   for (const normalized of normalizedFocusPaths) {
+    const directoryPrefix = `${normalized}/`;
     const overlayFiles = [...overlaySnapshot.filesById.values()].filter(
       (file) =>
         file.repoId === repoId &&
         (file.relPath === normalized ||
-          file.relPath.startsWith(`${normalized}/`)),
+          file.relPath.startsWith(directoryPrefix)),
     );
     const overlayExact = overlayFiles.find(
       (file) => file.relPath === normalized,
@@ -514,15 +515,18 @@ export async function resolveFocusPaths(
       continue;
     }
 
+    // Query one row beyond the maximum number of touched rows we may filter.
     const durablePrefixFiles = await queries.getFilesByPrefix(
       conn,
       repoId,
-      normalized,
-      FOCUS_PATH_FILE_LIMIT,
+      directoryPrefix,
+      overlaySnapshot.touchedFileIds.size + 1,
     );
     if (
       durablePrefixFiles.some(
-        (file) => !overlaySnapshot.touchedFileIds.has(file.fileId),
+        (file) =>
+          file.relPath.startsWith(directoryPrefix) &&
+          !overlaySnapshot.touchedFileIds.has(file.fileId),
       )
     ) {
       directoryPrefixes.add(normalized);

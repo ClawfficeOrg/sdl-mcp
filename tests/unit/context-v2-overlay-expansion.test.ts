@@ -147,6 +147,101 @@ describe("resolveFocusPaths", () => {
     assert.equal(symbolCalls, 0);
   });
 
+  it("requires a path-segment boundary for durable directories", async () => {
+    const { snapshot, file } = durableFixture("src/foobar.ts");
+    let symbolCalls = 0;
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/foo"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => null,
+        getFilesByPrefix: async (_conn, _repoId, prefix, limit) => {
+          assert.equal(prefix, "src/foo/");
+          assert.equal(limit, 1);
+          return [file];
+        },
+        getSymbolsByFile: async () => {
+          symbolCalls += 1;
+          return [];
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: [],
+    });
+    assert.equal(symbolCalls, 0);
+  });
+
+  it("recognizes an actual durable descendant", async () => {
+    const { snapshot, file } = durableFixture("src/foo/bar.ts");
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/foo"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => null,
+        getFilesByPrefix: async (_conn, _repoId, prefix) => {
+          assert.equal(prefix, "src/foo/");
+          return [file];
+        },
+        getSymbolsByFile: async () => [],
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: ["src/foo"],
+    });
+  });
+
+  it("looks past tombstoned durable descendants within a bounded query", async () => {
+    const { snapshot, file } = durableFixture("src/foo/deleted-0.ts");
+    const files = Array.from({ length: 5 }, (_, index) => ({
+      ...file,
+      fileId: `durable-${index}`,
+      relPath:
+        index < 4
+          ? `src/foo/deleted-${index}.ts`
+          : "src/foo/visible.ts",
+    }));
+    for (const tombstoned of files.slice(0, 4)) {
+      snapshot.touchedFileIds.add(tombstoned.fileId);
+    }
+    let symbolCalls = 0;
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["src/foo"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => null,
+        getFilesByPrefix: async (_conn, _repoId, prefix, limit) => {
+          assert.equal(prefix, "src/foo/");
+          assert.equal(limit, 5);
+          return files.slice(0, limit);
+        },
+        getSymbolsByFile: async () => {
+          symbolCalls += 1;
+          return [];
+        },
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      directoryPrefixes: ["src/foo"],
+    });
+    assert.equal(symbolCalls, 0);
+  });
+
   it("ignores a missing focus path", async () => {
     const { snapshot } = durableFixture("src/missing.ts");
 
