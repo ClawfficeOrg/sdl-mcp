@@ -52,7 +52,7 @@ Each candidate owns one bundle:
 - optional skeleton
 - optional hot path
 
-The selector orders Tier 0 before Tier 1 and compares deterministic value per estimated token. Hydration runs only for selected bundles. After hydration, one exact serialized-size pass evicts optional Tier-1 rungs when estimates were low.
+The selector orders Tier 0 before Tier 1 and admits complete non-exact Tier-1 bundles by rank. It compares deterministic value per estimated token only for progressive rung upgrades. Hydration runs only for selected bundles. After hydration, one exact serialized-size pass may evict optional Tier-1 rungs when estimates were low.
 
 Raw windows are not a context rung. Use `sdl.retrieve` `codeNeedWindow` with a concrete reason and identifiers when exact source is necessary.
 

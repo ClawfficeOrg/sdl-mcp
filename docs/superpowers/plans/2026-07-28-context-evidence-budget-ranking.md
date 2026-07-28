@@ -200,13 +200,21 @@ Expected: all commands exit 0.
 
 - [ ] **Step 2: Probe a fresh MCP server**
 
-Run this through SDL `runtimeExecute` with `runtime: "node"` so the child imports the newly built `dist` and starts a fresh stdio server:
+Run this through SDL `runtimeExecute` with `runtime: "node"` so the child imports the newly built `dist` and starts a fresh stdio server. Before running it, set `SDL_CONTEXT_ACCEPTANCE_CONFIG` to a config whose `codeMode.enabled` is `true` and whose registered repository uses an isolated, already verified graph. Set `SDL_CONTEXT_ACCEPTANCE_REPO_ID` when that repository is not named `sdl-mcp`. Do not point the probe at a database currently owned by another server process:
 
 ```javascript
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+
+const acceptanceConfig = process.env.SDL_CONTEXT_ACCEPTANCE_CONFIG;
+assert.ok(
+  acceptanceConfig,
+  "set SDL_CONTEXT_ACCEPTANCE_CONFIG to a code-mode-enabled verified graph config",
+);
+const acceptanceRepoId =
+  process.env.SDL_CONTEXT_ACCEPTANCE_REPO_ID ?? "sdl-mcp";
 
 const client = new Client(
   { name: "context-ranking-verifier", version: "1.0.0" },
@@ -215,11 +223,21 @@ const client = new Client(
 const transport = new StdioClientTransport({
   command: "node",
   args: ["dist/main.js"],
-  env: { ...process.env, NODE_ENV: "test" },
+  env: {
+    ...process.env,
+    NODE_ENV: "test",
+    SDL_CONFIG: acceptanceConfig,
+  },
 });
 
 await client.connect(transport);
 try {
+  const tools = await client.listTools();
+  assert.ok(
+    tools.tools.some(({ name }) => name === "sdl.context"),
+    "acceptance config must enable Code Mode and register sdl.context",
+  );
+
   for (const maxTokens of [1_600, 3_200, 12_000]) {
     const response = await client.request(
       {
@@ -227,7 +245,7 @@ try {
         params: {
           name: "sdl.context",
           arguments: {
-            repoId: "sdl-mcp",
+            repoId: acceptanceRepoId,
             taskType: "debug",
             taskText:
               "Find the exact tests that verify sdl.info tool registration and its public contract.",

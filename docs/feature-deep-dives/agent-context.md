@@ -53,7 +53,7 @@ Each request follows one deterministic pipeline:
 3. The shared candidate core resolves exact and focus seeds, then runs the available FTS, vector, file-summary, graph, overlay, feedback, and memory lanes.
 4. Weighted reciprocal-rank fusion collapses vector models by source kind, keeps Tier-0 candidates first, and breaks ties by symbol ID.
 5. The slice beam-search engine expands the selected graph frontier.
-6. The value-per-token selector chooses per-symbol card, skeleton, and hot-path bundles.
+6. The selector admits complete non-exact Tier-1 bundles by rank and compares value per estimated token for progressive rung upgrades.
 7. Hydration loads only selected bundles and evicts optional Tier-1 work if exact serialized size exceeds the budget.
 
 The response reports one retrieval level:
@@ -139,7 +139,7 @@ A budget below the canonical envelope minimum returns `CONTEXT_BUDGET_TOO_SMALL`
 - `src/mcp/tools/context.ts`: validation, graph admission, ETag, refs, wire format, and response artifacts
 - `src/context/engine.ts`: v2 orchestration
 - `src/context/profiles.ts`: task profiles
-- `src/context/select.ts`: deterministic value-per-token selection
+- `src/context/select.ts`: deterministic rank-first bundle admission and value-per-token rung selection
 - `src/context/hydrate.ts`: selected-only evidence hydration
 - `src/context/serialize.ts`: canonical stable serialization
 - `src/retrieval/context-candidate-search.ts`: shared candidate collection and fusion
