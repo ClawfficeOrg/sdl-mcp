@@ -4,12 +4,14 @@ import {
   unresolvedCallSymbolId,
 } from "../../db/symbol-placeholders.js";
 import type { SymbolKind } from "../../domain/types.js";
+import { logger } from "../../util/logger.js";
 import {
   addToSymbolIndex,
   isBuiltinCall,
   resolveCallTarget,
 } from "../edge-builder.js";
 import { resolveSymbolEnrichment } from "../symbol-enrichment.js";
+import { extractStaticTestTitleSearchText } from "../test-title-search-text.js";
 import {
   classifySummarySource,
   extractInvariants,
@@ -165,7 +167,19 @@ export async function buildSymbolAndEdgeRows(
   const edgesToInsert: EdgeRow[] = [];
   const fileSymbols: SymbolRow[] = [];
   const symbolsToUpsert: SymbolRow[] = [];
-  const symbolReferences = isTestFile(relPath, languages)
+  const testFile = isTestFile(relPath, languages);
+  let testTitleSearchText = "";
+  if (testFile && languageId === "typescript") {
+    try {
+      testTitleSearchText = extractStaticTestTitleSearchText(content, relPath);
+    } catch (error) {
+      logger.warn("Failed to extract static test titles for search metadata", {
+        filePath: relPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const symbolReferences = testFile
     ? buildSymbolReferences(content, repoId, fileId)
     : [];
 
@@ -270,7 +284,7 @@ export async function buildSymbolAndEdgeRows(
     }
 
     // ── Enrichment ───────────────────────────────────────────────
-    const { roleTagsJson, searchText } = resolveSymbolEnrichment({
+    const { roleTagsJson, searchText: baseSearchText } = resolveSymbolEnrichment({
       kind: extractedSymbol.kind,
       name: extractedSymbol.name,
       relPath,
@@ -279,6 +293,10 @@ export async function buildSymbolAndEdgeRows(
       nativeRoleTagsJson: nativeRoleTagsJson || undefined,
       nativeSearchText: nativeSearchText || undefined,
     });
+    const searchText =
+      extractedSymbol.kind === "module" && testTitleSearchText
+        ? `${baseSearchText}\n${testTitleSearchText}`
+        : baseSearchText;
 
     // ── SymbolRow ────────────────────────────────────────────────
     const symbol: SymbolRow = {

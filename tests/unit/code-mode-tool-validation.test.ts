@@ -389,7 +389,7 @@ describe("code-mode tool validation", () => {
     }
   });
 
-  it("throws a validation error for semantically invalid sdl.workflow requests", async () => {
+  it("rejects info and sdl.info as sdl.workflow actions", async () => {
     let workflowHandler: ((args: unknown) => Promise<unknown>) | null = null;
     const fakeServer = {
       registerTool(
@@ -419,31 +419,33 @@ describe("code-mode tool validation", () => {
     );
 
     assert.ok(workflowHandler);
-    await assert.rejects(
-      () =>
-        workflowHandler?.({
-          repoId: "demo-repo",
-          onError: "stop",
-          steps: [{ fn: "notARealFunction", args: {} }],
-        }),
-      (error: unknown) => {
-        const validationError = error as {
-          code?: string;
-          details?: string[];
-          message?: string;
-        };
-        assert.strictEqual(validationError.code, "VALIDATION_ERROR");
-        assert.ok(
-          validationError.message?.includes("Invalid sdl.workflow request"),
-        );
-        assert.ok(
-          validationError.details?.some((detail) =>
-            detail.includes("unknown function 'notARealFunction'"),
-          ),
-        );
-        return true;
-      },
-    );
+    for (const fn of ["notARealFunction", "info", "sdl.info"]) {
+      await assert.rejects(
+        () =>
+          workflowHandler?.({
+            repoId: "demo-repo",
+            onError: "stop",
+            steps: [{ fn, args: {} }],
+          }),
+        (error: unknown) => {
+          const validationError = error as {
+            code?: string;
+            details?: string[];
+            message?: string;
+          };
+          assert.strictEqual(validationError.code, "VALIDATION_ERROR");
+          assert.ok(
+            validationError.message?.includes("Invalid sdl.workflow request"),
+          );
+          assert.ok(
+            validationError.details?.some((detail) =>
+              detail.includes(`unknown function '${fn}'`),
+            ),
+          );
+          return true;
+        },
+      );
+    }
   });
 
   it("omits disabled memory tools from sdl.manual catalog output", async () => {

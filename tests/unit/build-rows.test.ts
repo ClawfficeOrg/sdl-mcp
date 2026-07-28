@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-function detail(nodeId: string, kind = "function") {
+import type { BuildRowsParams } from "../../src/indexer/parser/types.js";
+
+const TEST_CONTENT = [
+  'describe("registration   contract", () => {});',
+  'it.only("keeps sdl.info callable", () => {});',
+  "export function helper() {}",
+].join("\n");
+const TEST_TITLE_BLOCK = "registration contract\nkeeps sdl.info callable";
+
+function detail(
+  nodeId: string,
+  kind: "function" | "module" = "function",
+): BuildRowsParams["symbolDetails"][number] {
   return {
     extractedSymbol: {
       nodeId,
@@ -12,6 +24,48 @@ function detail(nodeId: string, kind = "function") {
     },
     astFingerprint: nodeId,
     symbolId: `sym:${nodeId}`,
+  };
+}
+
+function testBuildRowsParams(
+  symbolDetails: BuildRowsParams["symbolDetails"] = [
+    detail("module", "module"),
+    detail("helper"),
+  ],
+): BuildRowsParams {
+  const nameToSymbolIds = new Map<string, string[]>();
+  for (const symbolDetail of symbolDetails) {
+    nameToSymbolIds.set(symbolDetail.extractedSymbol.name, [
+      symbolDetail.symbolId,
+    ]);
+  }
+
+  return {
+    repoId: "test-repo",
+    relPath: "tests/unit/sample.test.ts",
+    fileId: "test-file",
+    filePath: "tests/unit/sample.test.ts",
+    content: TEST_CONTENT,
+    ext: "ts",
+    languages: ["ts"],
+    symbolDetails,
+    nodeIdToSymbolId: new Map(
+      symbolDetails.map((symbolDetail) => [
+        symbolDetail.extractedSymbol.nodeId,
+        symbolDetail.symbolId,
+      ]),
+    ),
+    nameToSymbolIds,
+    existingSymbolsById: new Map(),
+    importResolution: {
+      targets: [],
+      importedNameToSymbolIds: new Map(),
+      namespaceImports: new Map(),
+    },
+    calls: [],
+    edgeSourceNodeIds: new Set(),
+    languageId: "typescript",
+    skipCallResolution: true,
   };
 }
 
@@ -53,5 +107,70 @@ describe("buildSymbolAndEdgeRows import fanout", () => {
     });
 
     assert.equal(selected, sourceIds);
+  });
+
+  it("appends the same static test title block to fallback and native module search text", async () => {
+    const { buildSymbolAndEdgeRows } = await import(
+      "../../dist/indexer/parser/build-rows.js"
+    );
+    const fallbackParams = testBuildRowsParams();
+    const fallback = await buildSymbolAndEdgeRows(fallbackParams);
+    const fallbackModule = fallback.symbolsToUpsert.find(
+      (symbol) => symbol.kind === "module",
+    );
+    const fallbackFunction = fallback.symbolsToUpsert.find(
+      (symbol) => symbol.kind === "function",
+    );
+
+    assert.ok(fallbackModule);
+    assert.ok(fallbackFunction);
+    const expectedSuffix = `\n${TEST_TITLE_BLOCK}`;
+    const fallbackBaseSearchText = fallbackModule.searchText.endsWith(
+      expectedSuffix,
+    )
+      ? fallbackModule.searchText.slice(0, -expectedSuffix.length)
+      : fallbackModule.searchText;
+    const nativeParams = testBuildRowsParams(
+      fallbackParams.symbolDetails.map((symbolDetail) =>
+        symbolDetail.extractedSymbol.kind === "module"
+          ? {
+              ...symbolDetail,
+              nativeSearchText: fallbackBaseSearchText,
+            }
+          : symbolDetail,
+      ),
+    );
+    const native = await buildSymbolAndEdgeRows(nativeParams);
+    const nativeModule = native.symbolsToUpsert.find(
+      (symbol) => symbol.kind === "module",
+    );
+    const nativeFunction = native.symbolsToUpsert.find(
+      (symbol) => symbol.kind === "function",
+    );
+
+    assert.ok(nativeModule);
+    assert.ok(nativeFunction);
+    assert.ok(fallbackModule.searchText.endsWith(expectedSuffix));
+    assert.ok(nativeModule.searchText.endsWith(expectedSuffix));
+    assert.equal(nativeModule.searchText, fallbackModule.searchText);
+    assert.equal(nativeFunction.searchText, fallbackFunction.searchText);
+    assert.deepEqual(
+      native.symbolsToUpsert.map((symbol) => symbol.symbolId),
+      fallback.symbolsToUpsert.map((symbol) => symbol.symbolId),
+    );
+    assert.deepEqual(native.edgesToInsert, fallback.edgesToInsert);
+
+    const withoutModule = await buildSymbolAndEdgeRows(
+      testBuildRowsParams([detail("helper")]),
+    );
+    assert.equal(withoutModule.symbolsToUpsert.length, 1);
+    assert.equal(
+      withoutModule.symbolsToUpsert[0]?.searchText,
+      fallbackFunction.searchText,
+    );
+    assert.equal(
+      withoutModule.symbolsToUpsert[0]?.searchText.endsWith(expectedSuffix),
+      false,
+    );
   });
 });
