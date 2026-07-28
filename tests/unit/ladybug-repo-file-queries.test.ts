@@ -260,6 +260,67 @@ describe("LadybugDB Repo & File Queries", () => {
   );
 
   it(
+    "getFilesByPrefix filters exclusions before limiting",
+    { skip: !ladybugAvailable },
+    async () => {
+      const repoId = "repo-prefix-exclusions";
+      await queries.upsertRepo(conn as unknown as import("kuzu").Connection, {
+        repoId,
+        rootPath: "C:/tmp/repo-prefix-exclusions",
+        configJson: "{}",
+        createdAt: "2026-07-28T00:00:00Z",
+      });
+
+      const excludedFiles = Array.from({ length: 200 }, (_, index) => {
+        const suffix = String(index).padStart(3, "0");
+        return {
+          fileId: `excluded-${suffix}`,
+          repoId,
+          relPath: `src/foo/a-${suffix}.ts`,
+          contentHash: `excluded-${suffix}-hash`,
+          language: "ts",
+          byteSize: 1,
+          lastIndexedAt: null,
+        };
+      });
+      const visibleFile = {
+        fileId: "visible-file",
+        repoId,
+        relPath: "src/foo/z-visible.ts",
+        contentHash: "visible-hash",
+        language: "ts",
+        byteSize: 1,
+        lastIndexedAt: null,
+      };
+      await queries.upsertFileBatch(
+        conn as unknown as import("kuzu").Connection,
+        [...excludedFiles, visibleFile],
+      );
+
+      const withoutExclusions = await queries.getFilesByPrefix(
+        conn as unknown as import("kuzu").Connection,
+        repoId,
+        "src/foo/",
+        1,
+        [],
+      );
+      assert.strictEqual(withoutExclusions[0]?.fileId, "excluded-000");
+
+      const withExclusions = await queries.getFilesByPrefix(
+        conn as unknown as import("kuzu").Connection,
+        repoId,
+        "src/foo/",
+        1,
+        excludedFiles.map(({ fileId }) => fileId),
+      );
+      assert.deepStrictEqual(
+        withExclusions.map(({ fileId, relPath }) => [fileId, relPath]),
+        [["visible-file", "src/foo/z-visible.ts"]],
+      );
+    },
+  );
+
+  it(
     "deleteFilesByIds cascades to symbols/edges/metrics",
     { skip: !ladybugAvailable },
     async () => {

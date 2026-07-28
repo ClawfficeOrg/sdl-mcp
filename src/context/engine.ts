@@ -515,18 +515,16 @@ export async function resolveFocusPaths(
       continue;
     }
 
-    // Query one row beyond the maximum number of touched rows we may filter.
     const durablePrefixFiles = await queries.getFilesByPrefix(
       conn,
       repoId,
       directoryPrefix,
-      overlaySnapshot.touchedFileIds.size + 1,
+      1,
+      Array.from(overlaySnapshot.touchedFileIds),
     );
     if (
-      durablePrefixFiles.some(
-        (file) =>
-          file.relPath.startsWith(directoryPrefix) &&
-          !overlaySnapshot.touchedFileIds.has(file.fileId),
+      durablePrefixFiles.some((file) =>
+        file.relPath.startsWith(directoryPrefix),
       )
     ) {
       directoryPrefixes.add(normalized);

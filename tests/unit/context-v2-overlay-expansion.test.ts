@@ -201,32 +201,48 @@ describe("resolveFocusPaths", () => {
     });
   });
 
-  it("looks past tombstoned durable descendants within a bounded query", async () => {
-    const { snapshot, file } = durableFixture("src/foo/deleted-0.ts");
-    const files = Array.from({ length: 5 }, (_, index) => ({
+  it("passes 200 tombstones into a one-row durable prefix query", async () => {
+    const { snapshot, file } = durableFixture("src/foo/deleted-000.ts");
+    const files = Array.from({ length: 201 }, (_, index) => ({
       ...file,
-      fileId: `durable-${index}`,
+      fileId: `durable-${String(index).padStart(3, "0")}`,
       relPath:
-        index < 4
-          ? `src/foo/deleted-${index}.ts`
+        index < 200
+          ? `src/foo/deleted-${String(index).padStart(3, "0")}.ts`
           : "src/foo/visible.ts",
     }));
-    for (const tombstoned of files.slice(0, 4)) {
-      snapshot.touchedFileIds.add(tombstoned.fileId);
+    const tombstonedFileIds = files
+      .slice(0, 200)
+      .map(({ fileId }) => fileId);
+    for (const fileId of tombstonedFileIds) {
+      snapshot.touchedFileIds.add(fileId);
     }
+    const testConn = {} as Connection;
     let symbolCalls = 0;
 
     const result = await resolveFocusPaths(
-      {} as Connection,
+      testConn,
       "repo",
       ["src/foo"],
       snapshot,
       {
         getFileByRepoPath: async () => null,
-        getFilesByPrefix: async (_conn, _repoId, prefix, limit) => {
+        getFilesByPrefix: async (
+          actualConn,
+          actualRepoId,
+          prefix,
+          limit,
+          excludedFileIds = [],
+        ) => {
+          assert.strictEqual(actualConn, testConn);
+          assert.equal(actualRepoId, "repo");
           assert.equal(prefix, "src/foo/");
-          assert.equal(limit, 5);
-          return files.slice(0, limit);
+          assert.equal(limit, 1);
+          assert.deepEqual(excludedFileIds, tombstonedFileIds);
+          const excluded = new Set(excludedFileIds);
+          return files
+            .filter(({ fileId }) => !excluded.has(fileId))
+            .slice(0, limit);
         },
         getSymbolsByFile: async () => {
           symbolCalls += 1;

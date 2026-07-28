@@ -554,13 +554,14 @@ export async function getFileByRepoPath(
 
 /**
  * Find files under a directory prefix (e.g. "src/code/").
- * Returns up to `limit` files ordered by relPath, then fileId.
+ * Excludes file IDs before returning up to `limit` files ordered by relPath, then fileId.
  */
 export async function getFilesByPrefix(
   conn: Connection,
   repoId: string,
   prefix: string,
   limit: number = 50,
+  excludedFileIds: readonly string[] = [],
 ): Promise<FileRow[]> {
   const normalizedPrefix = prefix === "" ? "" : normalizePath(prefix);
   const safeLimitVal = Math.max(1, Math.min(limit, 200));
@@ -568,6 +569,7 @@ export async function getFilesByPrefix(
     conn,
     `MATCH (r:Repo {repoId: $repoId})<-[:FILE_IN_REPO]-(f:File)
      WHERE f.relPath STARTS WITH $prefix
+       AND NOT (f.fileId IN $excludedFileIds)
      RETURN f.fileId AS fileId,
             f.relPath AS relPath,
             f.contentHash AS contentHash,
@@ -577,7 +579,12 @@ export async function getFilesByPrefix(
             f.directory AS directory
      ORDER BY f.relPath ASC, f.fileId ASC
      LIMIT $lim`,
-    { repoId, prefix: normalizedPrefix, lim: safeLimitVal },
+    {
+      repoId,
+      prefix: normalizedPrefix,
+      excludedFileIds: Array.from(excludedFileIds),
+      lim: safeLimitVal,
+    },
   );
 
   return rows.map((row) => ({
