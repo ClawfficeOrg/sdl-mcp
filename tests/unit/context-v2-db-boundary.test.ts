@@ -172,7 +172,7 @@ describe("Context V2 database boundary", () => {
     );
   });
 
-  it("passes pins and exact candidates into shared fusion without local reorder", () => {
+  it("passes focus partitioning and exact pins into shared fusion without local reorder", () => {
     const defaultRetrieveSource =
       engineSource.match(
         /async function defaultRetrieve[\s\S]*?async function defaultExpand/,
@@ -180,7 +180,19 @@ describe("Context V2 database boundary", () => {
 
     assert.match(defaultRetrieveSource, /pinnedSymbolIds:/);
     assert.match(defaultRetrieveSource, /exactIdentifierSymbolIds:/);
+    assert.match(
+      defaultRetrieveSource,
+      /focusPathPrefixes:\s*pathResolution\.directoryPrefixes/,
+    );
+    assert.match(
+      defaultRetrieveSource,
+      /candidateResult\.rows\.map\(\s*\(row, index\)\s*=>\s*\(\{[\s\S]*rank:\s*index \+ 1/,
+    );
     assert.match(defaultRetrieveSource, /tier: row\.tier/);
+    assert.doesNotMatch(
+      defaultRetrieveSource,
+      /candidateResult\.rows[\s\S]*?\.sort\(/,
+    );
     assert.doesNotMatch(defaultRetrieveSource, /mergeCandidates\(/);
     assert.doesNotMatch(defaultRetrieveSource, /buildMetadataCandidates\(/);
   });

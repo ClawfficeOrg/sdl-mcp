@@ -12,6 +12,7 @@ import {
   type OverlaySnapshot,
 } from "../live-index/overlay-reader.js";
 import { logger } from "../util/logger.js";
+import { normalizePath } from "../util/paths.js";
 import { isTestLikePath } from "./task-query-ranking.js";
 import {
   rrfFuseContextCandidates,
@@ -46,7 +47,9 @@ export interface ContextCandidateSearchOptions {
   symbolsPerFileSummary: number;
   chatMentions?: string[];
   includeEvidence?: boolean;
-  /** Resolved exact/focus candidates that must sort before the fused pool. */
+  /** Resolved directory prefixes that softly prioritize the bounded fused pool. */
+  focusPathPrefixes?: readonly string[];
+  /** Resolved exact candidates that must sort before the fused pool. */
   pinnedSymbolIds?: readonly string[];
   /** Resolved exact candidates that participate in the same weighted fusion. */
   exactIdentifierSymbolIds?: readonly string[];
@@ -66,6 +69,44 @@ export interface ContextCandidateSearchResult {
   rows: ContextCandidateSearchRow[];
   capabilities: RetrievalCapabilities;
   evidence?: RetrievalEvidence;
+}
+
+/** Stable-partitions bounded fused rows without changing their contents. */
+export function prioritizeContextCandidateRowsByFocus(
+  rows: readonly ContextCandidateSearchRow[],
+  focusPathPrefixes: readonly string[],
+): ContextCandidateSearchRow[] {
+  const normalizedPrefixes = [
+    ...new Set(
+      focusPathPrefixes
+        .filter(Boolean)
+        .map((prefix) =>
+          normalizePath(prefix).replace(/^\.\//, "").replace(/\/+$/, ""),
+        )
+        .filter((prefix) => prefix !== "."),
+    ),
+  ];
+  if (normalizedPrefixes.length === 0) return [...rows];
+
+  const pinned: ContextCandidateSearchRow[] = [];
+  const focused: ContextCandidateSearchRow[] = [];
+  const remaining: ContextCandidateSearchRow[] = [];
+  for (const row of rows) {
+    if (row.tier === 0) {
+      pinned.push(row);
+      continue;
+    }
+    const normalizedPath = normalizePath(row.filePath).replace(/^\.\//, "");
+    const destination = normalizedPrefixes.some(
+      (prefix) =>
+        normalizedPath === prefix ||
+        normalizedPath.startsWith(`${prefix}/`),
+    )
+      ? focused
+      : remaining;
+    destination.push(row);
+  }
+  return [...pinned, ...focused, ...remaining];
 }
 
 async function mapFileSummariesToSymbols(
@@ -425,14 +466,18 @@ export async function searchContextCandidates(
       provenance: item.provenance,
     });
   }
-  return {
+  const orderedRows = prioritizeContextCandidateRowsByFocus(
     rows,
+    options.focusPathPrefixes ?? [],
+  );
+  return {
+    rows: orderedRows,
     capabilities: collection.capabilities,
     ...(options.includeEvidence
       ? {
           evidence: buildContextCandidateEvidence(
             filteredRankings,
-            rows,
+            orderedRows,
             collection.fusionLatencyMs,
           ),
         }

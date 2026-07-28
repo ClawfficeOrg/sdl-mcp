@@ -68,7 +68,6 @@ import type {
 } from "./types.js";
 
 const CANDIDATE_LIMIT = 48;
-const FOCUS_PATH_FILE_LIMIT = 4;
 const FOCUS_PATH_SYMBOL_LIMIT = 16;
 const SYMBOLS_PER_FILE_SUMMARY = 2;
 const EXPANSION_SEED_LIMIT = 16;
@@ -560,81 +559,6 @@ export async function resolveFocusPaths(
   };
 }
 
-export async function resolveFocusPathSymbolHits(
-  conn: Connection,
-  repoId: string,
-  focusPaths: readonly string[],
-  overlaySnapshot: OverlaySnapshot,
-  queries: FocusPathReadQueries = DEFAULT_FOCUS_PATH_READ_QUERIES,
-): Promise<FocusPathSymbolHit[]> {
-  const files = new Map<
-    string,
-    NonNullable<Awaited<ReturnType<typeof ladybugDb.getFileByRepoPath>>>
-  >();
-  for (const focusPath of uniqueStrings(focusPaths).sort()) {
-    const normalized = normalizePath(focusPath)
-      .replace(/^\.\//, "")
-      .replace(/\/+$/, "");
-    const overlayFiles = [...overlaySnapshot.filesById.values()].filter(
-      (file) =>
-        file.repoId === repoId &&
-        (file.relPath === normalized ||
-          file.relPath.startsWith(`${normalized}/`)),
-    );
-    const overlayExact = overlayFiles.find(
-      (file) => file.relPath === normalized,
-    );
-    const exact =
-      overlayExact ??
-      (await queries.getFileByRepoPath(conn, repoId, normalized));
-    const matches = exact
-      ? [exact]
-      : [
-          ...overlayFiles,
-          ...(await queries.getFilesByPrefix(
-            conn,
-            repoId,
-            normalized,
-            FOCUS_PATH_FILE_LIMIT,
-          )),
-        ];
-    for (const file of matches.sort((left, right) =>
-      left.relPath.localeCompare(right.relPath),
-    )) {
-      if (
-        overlaySnapshot.touchedFileIds.has(file.fileId) &&
-        !overlaySnapshot.filesById.has(file.fileId)
-      ) {
-        continue;
-      }
-      files.set(
-        file.fileId,
-        overlaySnapshot.filesById.get(file.fileId) ?? file,
-      );
-    }
-  }
-
-  const hits: FocusPathSymbolHit[] = [];
-  for (const file of files.values()) {
-    const overlaySymbols = [...overlaySnapshot.symbolsById.values()].filter(
-      (symbol) => symbol.fileId === file.fileId,
-    );
-    const symbols = (overlaySnapshot.filesById.has(file.fileId)
-      ? overlaySymbols
-      : await queries.getSymbolsByFile(conn, file.fileId)
-    )
-      .filter((symbol) => symbol.external !== true)
-      .sort(compareSymbolRows);
-    for (const symbol of symbols) {
-      hits.push({
-        path: file.relPath,
-        symbolId: symbol.symbolId,
-      });
-    }
-  }
-  return hits;
-}
-
 async function buildMetadataCandidates(
   conn: Connection,
   repoId: string,
@@ -929,14 +853,14 @@ async function defaultRetrieve(
   const tierZeroMentions = tierZeroMentionsForRequest(request);
   const derivedTierOneMentions =
     derivedTierOneMentionsForRequest(request);
-  const [resolved, derivedResolved, pathSymbolHits] = await Promise.all([
+  const [resolved, derivedResolved, pathResolution] = await Promise.all([
     resolveSeedSymbols(conn, request.repoId, tierZeroMentions),
     resolveSeedSymbols(
       conn,
       request.repoId,
       derivedTierOneMentions,
     ),
-    resolveFocusPathSymbolHits(
+    resolveFocusPaths(
       conn,
       request.repoId,
       request.focusPaths ?? [],
@@ -955,7 +879,7 @@ async function defaultRetrieve(
   );
   const explicitTier0Set = new Set(explicitTier0Ids);
   const pathAllocation = allocateFocusPathSymbols(
-    pathSymbolHits.filter(
+    pathResolution.exactFileSymbolHits.filter(
       (hit) => !explicitTier0Set.has(hit.symbolId),
     ),
     focusPathTierZeroCapacity({
@@ -983,6 +907,7 @@ async function defaultRetrieve(
       symbolsPerFileSummary: SYMBOLS_PER_FILE_SUMMARY,
       chatMentions: mentions,
       pinnedSymbolIds: tier0Ids,
+      focusPathPrefixes: pathResolution.directoryPrefixes,
       exactIdentifierSymbolIds: uniqueStrings([
         ...tier0Ids,
         ...derivedResolved.evidence.resolved,

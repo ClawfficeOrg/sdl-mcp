@@ -371,7 +371,7 @@ describe("Context V2 captured overlay expansion", () => {
     );
     const resolvePaths = Reflect.get(
       contextEngine,
-      "resolveFocusPathSymbolHits",
+      "resolveFocusPaths",
     );
     assert.equal(typeof resolveMentions, "function");
     assert.equal(typeof resolvePaths, "function");
@@ -386,7 +386,7 @@ describe("Context V2 captured overlay expansion", () => {
       resolveMentions(snapshot, ["overlay-focus", "OverlayFocus"]),
       ["overlay-focus"],
     );
-    const hits = await resolvePaths(
+    const resolution = await resolvePaths(
       {} as Connection,
       "repo",
       ["src/overlay-focus.ts"],
@@ -397,7 +397,7 @@ describe("Context V2 captured overlay expansion", () => {
         getSymbolsByFile: async () => [],
       },
     );
-    assert.deepEqual(hits, [
+    assert.deepEqual(resolution.exactFileSymbolHits, [
       {
         path: "src/overlay-focus.ts",
         symbolId: "overlay-focus",

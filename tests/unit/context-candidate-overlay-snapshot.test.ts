@@ -4,6 +4,99 @@ import { it } from "node:test";
 import type { Connection } from "kuzu";
 import type { ContextCandidateFusionItem } from "../../src/retrieval/fusion.js";
 
+it("stable-partitions candidate rows into pins, focused rows, and the remainder", async () => {
+  const { prioritizeContextCandidateRowsByFocus } = await import(
+    "../../dist/retrieval/context-candidate-search.js"
+  );
+  const makeRow = (
+    symbolId: string,
+    filePath: string,
+    tier: 0 | 1,
+    rank: number,
+  ) => {
+    const sourceRanks = { fts: rank };
+    const provenance = { symbol: { fts: rank } };
+    return {
+      symbolId,
+      filePath,
+      score: 100 - rank,
+      source: "fts" as const,
+      tier,
+      sourceRanks,
+      provenance,
+    };
+  };
+  const outsideOne = makeRow("outside-one", "src/outside-one.ts", 1, 1);
+  const pinnedOne = makeRow("pinned-one", "src/pinned-one.ts", 0, 2);
+  const insideOne = makeRow("inside-one", "tests/inside-one.ts", 1, 3);
+  const pinnedTwo = makeRow("pinned-two", "tests/pinned-two.ts", 0, 4);
+  const insideTwo = makeRow("inside-two", "tests/inside-two.ts", 1, 5);
+  const outsideTwo = makeRow("outside-two", "src/outside-two.ts", 1, 6);
+  const rows = [
+    outsideOne,
+    pinnedOne,
+    insideOne,
+    pinnedTwo,
+    insideTwo,
+    outsideTwo,
+  ];
+
+  const result = prioritizeContextCandidateRowsByFocus(rows, ["tests"]);
+
+  assert.deepEqual(
+    result.map((row) => row.symbolId),
+    [
+      "pinned-one",
+      "pinned-two",
+      "inside-one",
+      "inside-two",
+      "outside-one",
+      "outside-two",
+    ],
+  );
+  assert.equal(result.length, rows.length);
+  for (const row of rows) {
+    const reordered = result.find(
+      (candidate) => candidate.symbolId === row.symbolId,
+    );
+    assert.strictEqual(reordered, row);
+    assert.equal(reordered?.score, row.score);
+    assert.strictEqual(reordered?.sourceRanks, row.sourceRanks);
+    assert.strictEqual(reordered?.provenance, row.provenance);
+  }
+});
+
+it("treats focus prefixes as a path-boundary union and preserves empty focus order", async () => {
+  const { prioritizeContextCandidateRowsByFocus } = await import(
+    "../../dist/retrieval/context-candidate-search.js"
+  );
+  const makeRow = (symbolId: string, filePath: string) => ({
+    symbolId,
+    filePath,
+    score: 1,
+    source: "fts" as const,
+    tier: 1 as const,
+    sourceRanks: { fts: 1 },
+    provenance: { symbol: { fts: 1 } },
+  });
+  const testsOther = makeRow("tests-other", "tests-other/unit.ts");
+  const source = makeRow("source", "src/source.ts");
+  const testsExact = makeRow("tests-exact", "tests");
+  const testsNested = makeRow("tests-nested", "tests/unit/nested.ts");
+  const docs = makeRow("docs", "docs/readme.ts");
+  const rows = [testsOther, source, testsExact, testsNested, docs];
+
+  const union = prioritizeContextCandidateRowsByFocus(rows, ["tests", "src"]);
+  assert.deepEqual(
+    union.map((row) => row.symbolId),
+    ["source", "tests-exact", "tests-nested", "tests-other", "docs"],
+  );
+
+  const unchanged = prioritizeContextCandidateRowsByFocus(rows, []);
+  assert.equal(JSON.stringify(unchanged), JSON.stringify(rows));
+  unchanged.forEach((row, index) => assert.strictEqual(row, rows[index]));
+});
+
 it("logs and keeps unboosted candidates when context PPR fails", async (t) => {
   const seedResolver = await import("../../dist/retrieval/seed-resolver.js");
   const { logger } = await import("../../dist/util/logger.js");
@@ -422,4 +515,165 @@ it("bounds FileSummary symbol materialization before candidate mapping", async (
     ["file-c", 1],
     ["file-d", 1],
   ]);
+});
+
+it("reports source positions from the focus-partitioned candidate order", async (t) => {
+  const orchestrator = await import("../../dist/retrieval/orchestrator.js");
+  const ladybugQueries = await import("../../dist/db/ladybug-queries.js");
+  const fusion = await import("../../dist/retrieval/fusion.js");
+  const fused: ContextCandidateFusionItem[] = [
+    {
+      symbolId: "outside-one",
+      score: 4,
+      source: "fts",
+      sourceRanks: { fts: 1 },
+      provenance: { symbol: { fts: 1 } },
+    },
+    {
+      symbolId: "inside-two",
+      score: 3,
+      source: "vector:nomic",
+      sourceRanks: { "vector:nomic": 1 },
+      provenance: { symbol: { "vector:nomic": 1 } },
+    },
+    {
+      symbolId: "inside-one",
+      score: 2,
+      source: "fts",
+      sourceRanks: { fts: 2 },
+      provenance: { symbol: { fts: 2 } },
+    },
+    {
+      symbolId: "outside-two",
+      score: 1,
+      source: "vector:nomic",
+      sourceRanks: { "vector:nomic": 2 },
+      provenance: { symbol: { "vector:nomic": 2 } },
+    },
+  ];
+  const filePaths = new Map([
+    ["outside-one", "src/outside-one.ts"],
+    ["inside-two", "focused/inside-two.ts"],
+    ["inside-one", "focused/inside-one.ts"],
+    ["outside-two", "src/outside-two.ts"],
+  ]);
+
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      ...orchestrator,
+      collectEntitySourceRankings: async () => ({
+        conn: {} as Connection,
+        rankings: [
+          {
+            source: "fts",
+            entityType: "symbol",
+            ranks: new Map([
+              ["outside-one", 1],
+              ["inside-one", 2],
+            ]),
+            candidateCount: 2,
+          },
+          {
+            source: "vector:nomic",
+            entityType: "symbol",
+            ranks: new Map([
+              ["inside-two", 1],
+              ["outside-two", 2],
+            ]),
+            candidateCount: 2,
+          },
+        ],
+        capabilities: {
+          fts: true,
+          fileSummaryFts: false,
+          vectorNomic: true,
+          vectorJinaCode: false,
+          coveragePermille: {
+            symbolVector: 1_000,
+            fileSummaryVector: 0,
+          },
+        },
+        rrfK: 60,
+        limit: 4,
+        config: {
+          fusion: {
+            weights: {
+              fts: 1,
+              vector: 1,
+              overlay: 1,
+            },
+          },
+        },
+        fusionLatencyMs: 0,
+      }),
+    },
+  });
+  t.mock.module("../../dist/retrieval/fusion.js", {
+    namedExports: {
+      ...fusion,
+      rrfFuseContextCandidates: () => fused,
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      ...ladybugQueries,
+      getSearchableSymbolsByIds: async () =>
+        new Map(
+          [...filePaths].map(([symbolId]) => [
+            symbolId,
+            { symbolId, fileId: `file-${symbolId}` },
+          ]),
+        ),
+      getFilesByIds: async (_conn: Connection, fileIds: string[]) =>
+        new Map(
+          fileIds.map((fileId) => {
+            const symbolId = fileId.replace(/^file-/, "");
+            return [
+              fileId,
+              { fileId, relPath: filePaths.get(symbolId) as string },
+            ];
+          }),
+        ),
+    },
+  });
+
+  const { searchContextCandidates } = await import(
+    "../../dist/retrieval/context-candidate-search.js?focus-evidence-order"
+  );
+  const result = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "focus candidate ordering",
+      limit: 4,
+      includeFileSummary: false,
+      includeTests: true,
+      symbolsPerFileSummary: 1,
+      includeEvidence: true,
+      focusPathPrefixes: ["focused"],
+    },
+    {
+      connection: {} as Connection,
+      laneOutcomes: new Map(),
+      healthPromises: new Map(),
+      embeddingPromises: new Map(),
+    },
+    {
+      repoId: "repo",
+      touchedFileIds: new Set(),
+      symbolsById: new Map(),
+      filesById: new Map(),
+      outgoingEdgesBySymbolId: new Map(),
+      contentByFileId: new Map(),
+    },
+  );
+
+  assert.deepEqual(
+    result.rows.map((row) => row.symbolId),
+    ["inside-two", "inside-one", "outside-one", "outside-two"],
+  );
+  assert.deepEqual(result.evidence?.topRanksPerSource, {
+    fts: [2, 3],
+    "vector:nomic": [1, 4],
+  });
 });
