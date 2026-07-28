@@ -542,8 +542,11 @@ describe("ContextEngineV2 pure contracts", () => {
         ["MCPServer", ["card"]],
       ],
     );
-    assert.ok(
-      result.omitted.some((item) => item.symbolId === "expensive"),
+    assert.deepEqual(
+      result.omitted
+        .filter((item) => item.symbolId === "expensive")
+        .map((item) => item.rung),
+      ["card", "skeleton"],
     );
   });
 
@@ -591,7 +594,57 @@ describe("ContextEngineV2 pure contracts", () => {
     assert.ok(result.omitted.every((item) => item.symbolId === "normal"));
   });
 
-  it("uses deterministic value-per-token ordering and symbol IDs as ties", () => {
+  it("prioritizes candidate rank over Tier 1 bundle density", () => {
+    const rankOne = candidate(
+      "a".repeat(64),
+      1,
+      1,
+      CONTEXT_RUNG_TOKEN_LIMITS,
+    );
+    rankOne.path = "tests/unit/tool-registration.test.ts";
+    rankOne.lanes = [
+      "symbolFts",
+      "symbolVec",
+      "fileSummaryFts",
+      "fileSummaryVec",
+    ];
+    const rankThirtyFive = candidate(
+      "b".repeat(64),
+      35,
+      1,
+      CONTEXT_RUNG_TOKEN_LIMITS,
+    );
+    rankThirtyFive.path = "native/index.d.ts";
+    rankThirtyFive.lanes = ["symbolFts"];
+    const availableTokens = ["card", "hotPath"].reduce(
+      (total, rung) =>
+        total +
+        expectedRungTokens(rankOne, rung as "card" | "hotPath"),
+      0,
+    );
+
+    const result = selectContextBundles({
+      candidates: [rankOne, rankThirtyFive],
+      profile: getTaskProfile("debug"),
+      availableTokens,
+    });
+
+    assert.deepEqual(
+      result.selected.map(({ candidate: item, rungs }) => [
+        item.symbolId,
+        rungs,
+      ]),
+      [[rankOne.symbolId, ["card", "hotPath"]]],
+    );
+    assert.deepEqual(
+      result.omitted
+        .filter((item) => item.symbolId === rankThirtyFive.symbolId)
+        .map((item) => item.rung),
+      ["card", "hotPath"],
+    );
+  });
+
+  it("uses symbol IDs as deterministic ties for equal-rank bundles", () => {
     const candidates = [
       candidate("z", 1, 1, { card: 160, skeleton: 420 }),
       candidate("a", 1, 1, { card: 160, skeleton: 420 }),

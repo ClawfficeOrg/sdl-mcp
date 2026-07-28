@@ -195,30 +195,6 @@ function completeProfileCost(
   );
 }
 
-function compareBundleValuePerToken(
-  profile: TaskProfile,
-): (left: ContextCandidate, right: ContextCandidate) => number {
-  return (left, right) => {
-    const leftTokens = completeProfileCost(left, profile);
-    const rightTokens = completeProfileCost(right, profile);
-    const rankWeight = (candidate: ContextCandidate): number =>
-      Math.max(1, 1_000 - candidate.rank);
-    const rungValue = profile.rungPreference.reduce(
-      (total, rung) => total + RUNG_VALUE[rung],
-      0,
-    );
-    const leftDensity = Math.round(
-      (rungValue * rankWeight(left) * 1_000) / leftTokens,
-    );
-    const rightDensity = Math.round(
-      (rungValue * rankWeight(right) * 1_000) / rightTokens,
-    );
-    return (
-      rightDensity - leftDensity || compareCandidate(left, right)
-    );
-  };
-}
-
 function omittedRungs(
   candidate: ContextCandidate,
   rungs: readonly ContextRung[],
@@ -419,7 +395,7 @@ function selectTierOne(
       (candidate) =>
         !candidate.lanes.includes("exactIdentifier"),
     )
-    .sort(compareBundleValuePerToken(profile));
+    .sort(compareCandidate);
   for (const candidate of completeCandidates) {
     const cost = completeProfileCost(candidate, profile);
     if (usedTokens + cost <= remainingTokens) {
