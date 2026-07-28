@@ -47,6 +47,14 @@ export class IndexError extends Error {
   }
 }
 
+/** The graph integrity gate rejected a retrieval request. */
+export class GraphRetrievalUnavailableError extends IndexError {
+  constructor(message: string) {
+    super(message);
+    this.name = "GraphRetrievalUnavailableError";
+  }
+}
+
 /** A destructive full refresh was refused on an active populated database. */
 export class SafeRebuildRequiredError extends IndexError {
   constructor(message: string) {

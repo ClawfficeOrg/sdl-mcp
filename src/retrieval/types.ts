@@ -6,6 +6,8 @@
  * surface; Stage 1 fills in the runtime implementation.
  */
 
+import type { Connection } from "kuzu";
+
 // ---------------------------------------------------------------------------
 // Retrieval source discriminator
 // ---------------------------------------------------------------------------
@@ -136,10 +138,22 @@ export interface DegradationReason {
 
 /** Options for the hybrid search orchestrator. */
 export interface RetrievalQueryContext {
+  /** Checked-out connection used for every durable read in this request. */
+  connection?: Connection;
+  /** Request-local backend outcomes; empty success and failure stay distinct. */
+  laneOutcomes: Map<string, RetrievalLaneOutcome>;
   /** One strict health inspection promise per repository for this request. */
   healthPromises: Map<string, Promise<RetrievalCapabilities>>;
   /** One embedding promise per model and fully-prefixed query for this request. */
   embeddingPromises: Map<string, Promise<number[]>>;
+}
+
+export interface RetrievalLaneOutcome {
+  /** Effective request-level availability after config and health checks. */
+  available?: boolean;
+  attempted: boolean;
+  succeeded: boolean;
+  failed: boolean;
 }
 
 export interface HybridSearchOptions {

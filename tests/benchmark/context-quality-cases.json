@@ -656,6 +656,11 @@
     ],
     "primarySymbol": "SDL_MCP_SERVER_INSTRUCTIONS",
     "requiredSymbols": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+    "v2HardFloor": {
+      "prioritySymbols": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+      "unrelatedSymbols": ["Mode", "sdlMcp"],
+      "codeBearingSymbols": ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"]
+    },
     "usefulSymbols": [
       "buildCodeModeToolDescriptors",
       "registerActionSearchTool"

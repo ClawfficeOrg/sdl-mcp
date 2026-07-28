@@ -35,6 +35,7 @@ it("preserves overlay context and provenance through the hybrid adapter", async 
         getSnapshotVersion: () => 1,
         listDrafts: () => [
           {
+            content: "export function NeedOverlay() {}",
             parseResult: {
               file: {
                 fileId: "overlay-file",

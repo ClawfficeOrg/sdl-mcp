@@ -85,7 +85,8 @@ export async function buildSlice(
   const cacheConfig = config.cache;
   const cacheEnabled = cacheConfig?.enabled ?? true;
   const overlaySnapshot = getOverlaySnapshot(request.repoId);
-  const canUseCache = cacheEnabled && overlaySnapshot === null;
+  const hasTouchedOverlay = overlaySnapshot.touchedFileIds.size > 0;
+  const canUseCache = cacheEnabled && !hasTouchedOverlay;
 
   if (cacheConfig) {
     configureSliceCache({
@@ -128,7 +129,9 @@ export async function buildSlice(
   // -----------------------------------------------------------------------
   // Try in-memory graph snapshot path first (zero DB calls during traversal)
   // -----------------------------------------------------------------------
-  const cachedGraph = getGraphSnapshot(request.repoId);
+  const cachedGraph = hasTouchedOverlay
+    ? null
+    : getGraphSnapshot(request.repoId);
 
   const queryContext =
     request.queryContext ?? createRetrievalQueryContext();
@@ -137,6 +140,7 @@ export async function buildSlice(
     request.repoId,
     request,
     queryContext,
+    overlaySnapshot,
   );
   const startNodes = startNodeResult.startNodes;
   const { retrievalEvidence, hybridSearchItems } = startNodeResult;
@@ -287,6 +291,7 @@ export async function buildSlice(
       minConfidence,
       request.signal,
       traceCollector,
+      overlaySnapshot,
     );
     sliceCards = result.sliceCards;
     frontier = result.frontier;

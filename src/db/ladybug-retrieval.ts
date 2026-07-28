@@ -35,6 +35,7 @@ export async function findRetrievalSeedSymbolsByIdPrefix(
     `MATCH (s:Symbol)
      WHERE s.repoId = $repoId AND s.symbolId STARTS WITH $prefix
      RETURN s.symbolId AS symbolId
+     ORDER BY s.symbolId
      LIMIT 2`,
     { repoId, prefix },
   );
@@ -54,6 +55,7 @@ export async function findRetrievalSeedSymbolsByName(
     `MATCH (s:Symbol)
      WHERE s.repoId = $repoId AND ${predicate}
      RETURN s.symbolId AS symbolId, 1.0 AS score
+     ORDER BY s.symbolId
      LIMIT 2`,
     { repoId, name },
   );

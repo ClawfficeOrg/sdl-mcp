@@ -32,6 +32,8 @@ export interface OverlaySnapshot {
   symbolsById: Map<string, SymbolRow>;
   filesById: Map<string, FileRow>;
   outgoingEdgesBySymbolId: Map<string, EdgeForSlice[]>;
+  /** Draft bytes captured with the parsed symbol/file rows for this version. */
+  contentByFileId?: Map<string, string>;
 }
 
 export type OverlaySymbolReadQueries = Pick<
@@ -102,6 +104,7 @@ export function getOverlaySnapshot(repoId: string): OverlaySnapshot {
   const symbolsById = new Map<string, SymbolRow>();
   const filesById = new Map<string, FileRow>();
   const outgoingEdgesBySymbolId = new Map<string, EdgeForSlice[]>();
+  const contentByFileId = new Map<string, string>();
 
   for (const entry of draftEntriesWithParse(repoId)) {
     const parseResult = entry.parseResult;
@@ -110,9 +113,18 @@ export function getOverlaySnapshot(repoId: string): OverlaySnapshot {
     }
     touchedFileIds.add(parseResult.file.fileId);
     filesById.set(parseResult.file.fileId, parseResult.file);
+    contentByFileId.set(
+      parseResult.file.fileId,
+      entry.content.replace(/\r\n/g, "\n"),
+    );
 
     for (const symbol of parseResult.symbols) {
       symbolsById.set(symbol.symbolId, symbol);
+      // Key presence is authoritative: an empty draft edge set must shadow
+      // stale durable edges for the same captured symbol.
+      if (!outgoingEdgesBySymbolId.has(symbol.symbolId)) {
+        outgoingEdgesBySymbolId.set(symbol.symbolId, []);
+      }
     }
 
     for (const edge of parseResult.edges) {
@@ -128,6 +140,7 @@ export function getOverlaySnapshot(repoId: string): OverlaySnapshot {
     symbolsById,
     filesById,
     outgoingEdgesBySymbolId,
+    contentByFileId,
   };
   if (snapshotCache.size >= MAX_SNAPSHOT_CACHE_SIZE) {
     const oldest = snapshotCache.keys().next().value;
@@ -362,11 +375,69 @@ export async function searchSymbolsWithOverlay(
   return mergeSearchResults(durableSearchRows, overlayRows, query, limit);
 }
 
-/**
- * Hybrid-aware overlay search. Uses hybrid retrieval (FTS + vector + RRF)
- * for durable symbols and lexical matching for overlay (draft) symbols.
- * Overlay symbols take precedence when the same symbolId exists in both.
- */
+/** Rank the captured draft overlay without issuing another durable search. */
+export function rankOverlaySymbolsForQuery(
+  snapshot: OverlaySnapshot,
+  repoId: string,
+  query: string,
+  durableSymbolIds: ReadonlySet<string> = new Set(),
+): OverlaySearchResult[] {
+  const loweredQuery = query.trim().toLowerCase();
+  const terms = loweredQuery.includes(" ")
+    ? loweredQuery.split(/\s+/).filter((term) => term.length > 0)
+    : [loweredQuery];
+  const isMultiTerm = terms.length > 1;
+  const overlayRows: OverlaySearchResult[] = [];
+
+  for (const symbol of snapshot.symbolsById.values()) {
+    if (symbol.repoId !== repoId) continue;
+    const haystack = [
+      symbol.name,
+      symbol.summary ?? "",
+      symbol.searchText ?? "",
+    ]
+      .join(" ")
+      .toLowerCase();
+    const matchCount = isMultiTerm
+      ? terms.filter((term) => haystack.includes(term)).length
+      : haystack.includes(loweredQuery)
+        ? 1
+        : 0;
+    if (matchCount === 0) continue;
+    const file = snapshot.filesById.get(symbol.fileId);
+    if (!file) continue;
+    overlayRows.push({
+      symbolId: symbol.symbolId,
+      name: symbol.name,
+      fileId: symbol.fileId,
+      file: file.relPath,
+      kind: symbol.kind,
+      exported: symbol.exported,
+      filePath: file.relPath,
+      summary: symbol.summary,
+      searchText: symbol.searchText,
+      matchedTermCount: matchCount,
+      overlayOnly: !durableSymbolIds.has(symbol.symbolId),
+    });
+    getOverlayEmbeddingCache()
+      .computeAndCacheSymbol(symbol)
+      .catch((err) => {
+        logger.debug(
+          `[overlay-embedding-cache] Fire-and-forget embed failed for ${symbol.symbolId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+  }
+
+  return mergeSearchResults([], overlayRows, query, overlayRows.length).map(
+    (row, index) => ({
+      ...row,
+      sourceRanks: { ...row.sourceRanks, overlay: index + 1 },
+    }),
+  );
+}
+
 export async function searchSymbolsHybridWithOverlay(
   conn: Connection,
   repoId: string,
@@ -384,9 +455,11 @@ export async function searchSymbolsHybridWithOverlay(
     pprWeight?: number;
     excludeExternal?: boolean;
     queryContext?: RetrievalQueryContext;
+    overlaySnapshot?: OverlaySnapshot;
   },
 ): Promise<{ rows: OverlaySearchResult[]; evidence?: RetrievalEvidence }> {
-  const snapshot = getOverlaySnapshot(repoId);
+  const snapshot =
+    hybridOptions.overlaySnapshot ?? getOverlaySnapshot(repoId);
 
   // 1. Run hybrid search for durable symbols
   const hybridResult = await hybridSearch({

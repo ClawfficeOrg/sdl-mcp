@@ -1,10 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  lstatSync,
-  readFileSync,
-  readlinkSync,
-  readdirSync,
-} from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 export type ExternalBenchmarkCacheMode = "cold" | "warm";
@@ -146,6 +141,7 @@ export type ExternalBenchmarkFailureBoundary =
   | "preflight-between-repeats"
   | "child-spawn"
   | "child-stream"
+  | "child-timeout"
   | "child-exit"
   | "raw-result-missing"
   | "raw-result-invalid"
@@ -192,9 +188,7 @@ export function normalizeArtifactPath(input: string): string {
     normalized.startsWith("/") ||
     segments.some(
       (segment) =>
-        segment === "." ||
-        segment === ".." ||
-        /^[A-Za-z]:/u.test(segment),
+        segment === "." || segment === ".." || /^[A-Za-z]:/u.test(segment),
     )
   ) {
     throw new Error("Artifact path must be a safe relative path: " + input);
@@ -234,9 +228,7 @@ export function serializeRunManifest(
       : {
           files: [...input.inputs.warmSnapshot.files]
             .map(normalizeHashedFile)
-            .sort((left, right) =>
-              compareArtifactPath(left.path, right.path),
-            ),
+            .sort((left, right) => compareArtifactPath(left.path, right.path)),
         };
 
   const repeats = [...input.repeats]
@@ -249,10 +241,8 @@ export function serializeRunManifest(
         .map(normalizeInitialDbFile)
         .sort(
           (left, right) =>
-            compareArtifactPath(
-              left.destinationPath,
-              right.destinationPath,
-            ) || compareArtifactPath(left.sourcePath, right.sourcePath),
+            compareArtifactPath(left.destinationPath, right.destinationPath) ||
+            compareArtifactPath(left.sourcePath, right.sourcePath),
         ),
       command: [...repeat.command],
     }))
@@ -279,9 +269,7 @@ export function serializeRunManifest(
       sdlMcpVersion: input.runner.sdlMcpVersion,
       sdlMcpCommit: input.runner.sdlMcpCommit,
       sdlMcpSourceDirty: input.runner.sdlMcpSourceDirty,
-      sdlMcpBuildTreeSha256: validateSha256(
-        input.runner.sdlMcpBuildTreeSha256,
-      ),
+      sdlMcpBuildTreeSha256: validateSha256(input.runner.sdlMcpBuildTreeSha256),
       launcherPath: "scripts/external-benchmark-runner.mjs",
       launcherSha256: validateSha256(input.runner.launcherSha256),
       nodeVersion: input.runner.nodeVersion,
@@ -350,9 +338,10 @@ export function fingerprintFiles(
   };
 }
 
-export function fingerprintDirectory(
-  rootPath: string,
-): { files: HashedArtifactFile[]; sha256: string } {
+export function fingerprintDirectory(rootPath: string): {
+  files: HashedArtifactFile[];
+  sha256: string;
+} {
   const relativePaths: string[] = [];
 
   const walk = (directoryPath: string, prefix: string): void => {
@@ -487,8 +476,7 @@ function missingRepeat(
     exitCode: null,
     failureBoundary,
     durationMs: 0,
-    benchmarkResultPath:
-      `raw/repeat-${String(repeat).padStart(3, "0")}.benchmark.json`,
+    benchmarkResultPath: `raw/repeat-${String(repeat).padStart(3, "0")}.benchmark.json`,
     benchmarkResultSha256: null,
     metrics: null,
     thresholds: [],
@@ -594,26 +582,24 @@ export function serializeExternalBenchmarkResults(
     repeats: [...input.repeats]
       .sort((left, right) => left.repeat - right.repeat)
       .map((repeat) => ({
-      repeat: repeat.repeat,
-      exitCode: repeat.exitCode,
-      failureBoundary: repeat.failureBoundary,
-      durationMs: repeat.durationMs,
-      benchmarkResultPath: normalizeArtifactPath(
-        repeat.benchmarkResultPath,
-      ),
-      benchmarkResultSha256:
-        repeat.benchmarkResultSha256 === null
-          ? null
-          : validateSha256(repeat.benchmarkResultSha256),
-      metrics:
-        repeat.metrics === null
-          ? null
-          : normalizeMetricEvidence(repeat.metrics),
-      thresholds: [...repeat.thresholds]
-        .map(normalizeThresholdEvidence)
-        .sort(thresholdOrder),
-      passed: repeat.passed,
-    })),
+        repeat: repeat.repeat,
+        exitCode: repeat.exitCode,
+        failureBoundary: repeat.failureBoundary,
+        durationMs: repeat.durationMs,
+        benchmarkResultPath: normalizeArtifactPath(repeat.benchmarkResultPath),
+        benchmarkResultSha256:
+          repeat.benchmarkResultSha256 === null
+            ? null
+            : validateSha256(repeat.benchmarkResultSha256),
+        metrics:
+          repeat.metrics === null
+            ? null
+            : normalizeMetricEvidence(repeat.metrics),
+        thresholds: [...repeat.thresholds]
+          .map(normalizeThresholdEvidence)
+          .sort(thresholdOrder),
+        passed: repeat.passed,
+      })),
   };
 
   return JSON.stringify(results, null, 2) + "\n";

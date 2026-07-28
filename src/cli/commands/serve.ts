@@ -344,7 +344,9 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
           return;
         }
         for (const model of warmupModels) {
-          const provider = getEmbeddingProvider("local", model);
+          const provider = getEmbeddingProvider("local", model, {
+            deterministic: true,
+          });
           await provider.embed(["sdl-mcp warmup"]);
         }
         logger.debug("[serve] embeddings sessions pre-warmed", {

@@ -110,9 +110,51 @@ describe("OverlayStore", () => {
       dirty: false,
       timestamp: "2026-03-07T12:00:00.000Z",
     });
+    const versionBeforeRemove = store.getSnapshotVersion("demo-repo");
 
     store.removeDraft("demo-repo", "src/example.ts");
 
     assert.strictEqual(store.getDraft("demo-repo", "src/example.ts"), null);
+    assert.ok(
+      store.getSnapshotVersion("demo-repo") > versionBeforeRemove,
+    );
+  });
+
+  it("keeps snapshot versions monotonic across repo and store clears", () => {
+    const store = new OverlayStore();
+    store.upsertDraft({
+      repoId: "demo-repo",
+      eventType: "change",
+      filePath: "src/example.ts",
+      content: "export const value = 1;",
+      language: "typescript",
+      version: 1,
+      dirty: true,
+      timestamp: "2026-03-07T12:00:00.000Z",
+    });
+    const versionBeforeRepoClear = store.getSnapshotVersion("demo-repo");
+
+    store.clearRepo("demo-repo");
+    const versionAfterRepoClear = store.getSnapshotVersion("demo-repo");
+
+    assert.ok(versionAfterRepoClear > versionBeforeRepoClear);
+    store.upsertDraft({
+      repoId: "demo-repo",
+      eventType: "change",
+      filePath: "src/example.ts",
+      content: "export const value = 2;",
+      language: "typescript",
+      version: 1,
+      dirty: true,
+      timestamp: "2026-03-07T12:01:00.000Z",
+    });
+    const versionBeforeStoreClear = store.getSnapshotVersion("demo-repo");
+
+    store.clearAll();
+
+    assert.ok(
+      store.getSnapshotVersion("demo-repo") > versionBeforeStoreClear,
+    );
+    assert.deepEqual(store.listDrafts("demo-repo"), []);
   });
 });

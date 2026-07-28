@@ -5,7 +5,7 @@ import {
   graphIntegrityIsAvailableForVersion,
 } from "../db/ladybug-derived-state.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
-import { IndexError } from "../domain/errors.js";
+import { GraphRetrievalUnavailableError } from "../domain/errors.js";
 
 /**
  * Fail graph retrieval closed until the latest Version has an established
@@ -33,7 +33,7 @@ export async function assertGraphRetrievalAvailable(
     return;
   }
 
-  throw new IndexError(
+  throw new GraphRetrievalUnavailableError(
     `Graph retrieval is unavailable for repository ${repoId} because integrity is not established for the latest version. For a new unindexed repository, run one incremental refresh. For a populated graph, stop SDL-MCP and run \`sdl-mcp index --force --safe-rebuild <absolute-new-path>\`.`,
   );
 }

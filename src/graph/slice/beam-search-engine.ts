@@ -74,6 +74,10 @@ import {
 import { logger } from "../../util/logger.js";
 import { findPackageRoot } from "../../util/findPackageRoot.js";
 import { tokenize } from "../../util/tokenize.js";
+import {
+  mergeEdgeMapWithOverlay,
+  type OverlaySnapshot,
+} from "../../live-index/overlay-reader.js";
 
 import type { Graph } from "../buildGraph.js";
 import { MinHeap } from "../minHeap.js";
@@ -255,6 +259,10 @@ export interface BeamSearchRequest {
   failingTestPath?: string;
   editedFiles?: string[];
   minCallConfidence?: number;
+  /** Current profile contract: outgoing traversal. */
+  direction?: "out";
+  /** Current profile contract: unbounded traversal depth. */
+  maxDepth?: null;
   clusterContext?: {
     entryClusterIds: string[];
     relatedClusterIds: string[];
@@ -1017,6 +1025,7 @@ export async function beamSearchLadybug(
   minConfidence: number,
   signal?: AbortSignal,
   traceCollector?: BeamTraceCollector | null,
+  overlaySnapshot?: OverlaySnapshot,
 ): Promise<BeamSearchResult> {
   const state = createBeamCoreState(budget, request, startNodes, minConfidence);
   if (traceCollector) state.traceCollector = traceCollector;
@@ -1025,6 +1034,25 @@ export async function beamSearchLadybug(
   const fileCache = new Map<string, ladybugDb.FileRow>();
   const metricsCache = new Map<SymbolId, ladybugDb.MetricsRow | null>();
   const outgoingEdgesCache = new Map<SymbolId, ladybugDb.EdgeForSlice[]>();
+  for (const [fileId, file] of overlaySnapshot?.filesById ?? []) {
+    if (file.repoId === repoId) fileCache.set(fileId, file);
+  }
+  for (const [symbolId, symbol] of overlaySnapshot?.symbolsById ?? []) {
+    if (symbol.repoId === repoId) symbolCache.set(symbolId, symbol);
+  }
+  const cacheDurableSymbols = (
+    rows: ReadonlyMap<SymbolId, ladybugDb.SymbolRow>,
+  ): void => {
+    for (const [symbolId, symbol] of rows) {
+      if (
+        symbol.repoId === repoId &&
+        (!overlaySnapshot?.touchedFileIds.has(symbol.fileId) ||
+          overlaySnapshot.symbolsById.has(symbolId))
+      ) {
+        symbolCache.set(symbolId, symbol);
+      }
+    }
+  };
 
   const entryClusterIds = new Set<string>(
     request.clusterContext?.entryClusterIds ?? [],
@@ -1053,18 +1081,22 @@ export async function beamSearchLadybug(
     // Step 1: Batch-fetch symbols + edges for all frontier candidates sequentially
     // (LadybugDB connections are not safe for concurrent execute() calls)
     const symbolsMap = await ladybugDb.getSymbolsByIds(conn, idsToFetch);
-    const edgesMap = await ladybugDb.getEdgesFromSymbolsForSlice(
+    const durableEdgesMap = await ladybugDb.getEdgesFromSymbolsForSlice(
       conn,
       idsToFetch,
       { minCallConfidence: request.minCallConfidence },
     );
+    const edgesMap = overlaySnapshot
+      ? mergeEdgeMapWithOverlay(
+          overlaySnapshot,
+          idsToFetch,
+          durableEdgesMap,
+          request.minCallConfidence,
+        )
+      : durableEdgesMap;
 
     // Populate symbol + edge caches
-    for (const [symbolId, symbol] of symbolsMap) {
-      if (symbol.repoId === repoId) {
-        symbolCache.set(symbolId, symbol);
-      }
-    }
+    cacheDurableSymbols(symbolsMap);
     for (const [symbolId, edges] of edgesMap) {
       const sorted = [...edges].sort((a, b) => {
         const toDiff = a.toSymbolId.localeCompare(b.toSymbolId);
@@ -1104,9 +1136,10 @@ export async function beamSearchLadybug(
 
     // Populate neighbour caches
     const fileIds = new Set<string>();
-    for (const [symbolId, symbol] of neighborSymbols) {
-      if (symbol.repoId === repoId) {
-        symbolCache.set(symbolId, symbol);
+    cacheDurableSymbols(neighborSymbols);
+    for (const symbolId of neighborIdList) {
+      const symbol = symbolCache.get(symbolId);
+      if (symbol?.repoId === repoId) {
         fileIds.add(symbol.fileId);
       }
     }
@@ -1161,7 +1194,12 @@ export async function beamSearchLadybug(
 
     const map = await ladybugDb.getSymbolsByIds(conn, [symbolId]);
     const symbol = map.get(symbolId) ?? null;
-    if (!symbol || symbol.repoId !== repoId) {
+    if (
+      !symbol ||
+      symbol.repoId !== repoId ||
+      (overlaySnapshot?.touchedFileIds.has(symbol.fileId) &&
+        !overlaySnapshot.symbolsById.has(symbolId))
+    ) {
       return null;
     }
 
@@ -1185,9 +1223,17 @@ export async function beamSearchLadybug(
     const cached = outgoingEdgesCache.get(symbolId);
     if (cached) return cached;
 
-    const map = await ladybugDb.getEdgesFromSymbolsForSlice(conn, [symbolId], {
+    const durableMap = await ladybugDb.getEdgesFromSymbolsForSlice(conn, [symbolId], {
       minCallConfidence: request.minCallConfidence,
     });
+    const map = overlaySnapshot
+      ? mergeEdgeMapWithOverlay(
+          overlaySnapshot,
+          [symbolId],
+          durableMap,
+          request.minCallConfidence,
+        )
+      : durableMap;
     const edges = map.get(symbolId) ?? [];
 
     edges.sort((a, b) => {
@@ -1203,12 +1249,14 @@ export async function beamSearchLadybug(
   // Warm start-node caches before seeding the frontier
   const startNodeIds = Array.from(new Set(startNodes.map((n) => n.symbolId)));
   if (startNodeIds.length > 0) {
-    const startSymbols = await ladybugDb.getSymbolsByIds(conn, startNodeIds);
-    for (const [symbolId, symbol] of startSymbols) {
-      if (symbol.repoId === repoId) {
-        symbolCache.set(symbolId, symbol);
-      }
-    }
+    const missingStartNodeIds = startNodeIds.filter(
+      (symbolId) => !symbolCache.has(symbolId),
+    );
+    const startSymbols =
+      missingStartNodeIds.length > 0
+        ? await ladybugDb.getSymbolsByIds(conn, missingStartNodeIds)
+        : new Map();
+    cacheDurableSymbols(startSymbols);
     await getClusters(startNodeIds);
   }
 
@@ -1314,11 +1362,7 @@ export async function beamSearchLadybug(
           conn,
           missingNeighborIds,
         );
-        for (const [neighborId, symbol] of neighborSymbolsMap) {
-          if (symbol.repoId === repoId) {
-            symbolCache.set(neighborId, symbol);
-          }
-        }
+        cacheDurableSymbols(neighborSymbolsMap);
       }
 
       const validNeighborIds: SymbolId[] = [];

@@ -29,6 +29,7 @@ import { getLadybugConn } from "../db/ladybug.js";
 import { IndexError } from "../domain/errors.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
 import { loadConfig } from "../config/loadConfig.js";
+import { resolveSemanticEmbeddingModelPlan } from "../config/semantic-embedding-model-plan.js";
 import {
   SYMBOL_SEARCH_MAX_QUERY_TOKENS,
   SYMBOL_SEARCH_MIN_QUERY_TOKEN_LENGTH,
@@ -51,10 +52,16 @@ import {
   getGraphSnapshotCreatedAt,
   loadAndCacheGraphSnapshot,
 } from "../graph/graphSnapshotCache.js";
-import type { SemanticRetrievalConfig } from "../config/types.js";
+import type {
+  SemanticConfig,
+  SemanticRetrievalConfig,
+} from "../config/types.js";
 import { logger } from "../util/logger.js";
 import { getObservabilityTap } from "../observability/event-tap.js";
-import { getEmbeddingProvider } from "../indexer/embeddings.js";
+import {
+  getEmbeddingProvider,
+  type EmbeddingProvider,
+} from "../indexer/embeddings.js";
 import { applyQueryPrefix } from "../indexer/model-registry.js";
 import { EMBEDDING_MODELS } from "./model-mapping.js";
 import { ENTITY_FTS_INDEX_NAMES } from "./index-lifecycle.js";
@@ -207,11 +214,64 @@ function cypherNumberArray(values: readonly number[]): string {
 
 
 /** Create an isolated cache for one top-level retrieval request. */
-export function createRetrievalQueryContext(): RetrievalQueryContext {
+export function createRetrievalQueryContext(
+  initial: Pick<RetrievalQueryContext, "connection"> &
+    Partial<Pick<RetrievalQueryContext, "embeddingPromises">> = {},
+): RetrievalQueryContext {
   return {
+    ...initial,
+    laneOutcomes: new Map(),
     healthPromises: new Map(),
-    embeddingPromises: new Map(),
+    embeddingPromises: initial.embeddingPromises ?? new Map(),
   };
+}
+
+function markLaneAttempt(
+  context: RetrievalQueryContext | undefined,
+  lane: string,
+): void {
+  if (!context) return;
+  const current = context.laneOutcomes.get(lane);
+  context.laneOutcomes.set(lane, {
+    ...(current?.available === undefined
+      ? {}
+      : { available: current.available }),
+    attempted: true,
+    succeeded: current?.succeeded ?? false,
+    failed: current?.failed ?? false,
+  });
+}
+
+function markLaneResult(
+  context: RetrievalQueryContext | undefined,
+  lane: string,
+  succeeded: boolean,
+): void {
+  if (!context) return;
+  const current = context.laneOutcomes.get(lane);
+  context.laneOutcomes.set(lane, {
+    ...(current?.available === undefined
+      ? {}
+      : { available: current.available }),
+    attempted: true,
+    succeeded: (current?.succeeded ?? false) || succeeded,
+    failed: (current?.failed ?? false) || !succeeded,
+  });
+}
+
+function markLaneAvailability(
+  context: RetrievalQueryContext | undefined,
+  lane: string,
+  available: boolean,
+): void {
+  if (!context) return;
+  const current = context.laneOutcomes.get(lane);
+  context.laneOutcomes.set(lane, {
+    available,
+    attempted: current?.attempted ?? false,
+    succeeded: current?.succeeded ?? false,
+    failed: current?.failed ?? false,
+  });
 }
 
 /** Cache before deferred work starts so concurrent lanes share one health read. */
@@ -258,6 +318,131 @@ export function getOrCreateEmbeddingPromise(
   const created = Promise.resolve().then(factory);
   context.embeddingPromises.set(key, created);
   return created;
+}
+
+interface RetrievalEmbeddingPrewarmDependencies {
+  loadSemanticConfig: () => SemanticConfig | undefined;
+  getEmbeddingProvider: (
+    provider: "api" | "local" | "mock",
+    model: string,
+  ) => EmbeddingProvider;
+}
+
+const DEFAULT_EMBEDDING_PREWARM_DEPENDENCIES: RetrievalEmbeddingPrewarmDependencies =
+  {
+    loadSemanticConfig: () => {
+      try {
+        return loadConfig().semantic;
+      } catch {
+        return undefined;
+      }
+    },
+    // Query vectors are contract data: isolate them from throughput-oriented
+    // GPU/parallel sessions so identical requests remain byte-stable.
+    getEmbeddingProvider: (provider, model) =>
+      getEmbeddingProvider(provider, model, { deterministic: true }),
+  };
+
+function configuredEmbeddingModels(
+  semanticConfig: SemanticConfig | undefined,
+  includeFileSummary: boolean,
+): string[] {
+  if (
+    semanticConfig?.enabled === false ||
+    semanticConfig?.retrieval?.vector.enabled === false
+  ) {
+    return [];
+  }
+  const plan = resolveSemanticEmbeddingModelPlan(semanticConfig);
+  return [
+    ...new Set([
+      ...plan.symbolEmbeddingModels,
+      ...(includeFileSummary ? plan.fileSummaryEmbeddingModels : []),
+    ]),
+  ];
+}
+
+function embeddingFactory(
+  dependencies: RetrievalEmbeddingPrewarmDependencies,
+  providerType: "api" | "local" | "mock",
+  modelName: string,
+  prefixedQuery: string,
+): () => Promise<number[]> {
+  return async () => {
+    const provider = dependencies.getEmbeddingProvider(
+      providerType,
+      modelName,
+    );
+    if (provider.isMockFallback?.()) {
+      throw new Error(
+        `Embedding provider for '${modelName}' is a mock fallback`,
+      );
+    }
+    return (await provider.embed([prefixedQuery]))[0] ?? [];
+  };
+}
+
+/**
+ * Start and settle every configured query embedding after graph admission but
+ * before the read transaction. The settled promises are retained so retrieval
+ * lanes observe the same value or failure without running model inference in a
+ * DB transaction.
+ */
+export async function prewarmRetrievalEmbeddingPromises(
+  query: string,
+  options: { includeFileSummary: boolean },
+  dependencies: RetrievalEmbeddingPrewarmDependencies =
+    DEFAULT_EMBEDDING_PREWARM_DEPENDENCIES,
+): Promise<Map<string, Promise<number[]>>> {
+  const semanticConfig = dependencies.loadSemanticConfig();
+  const providerType = semanticConfig?.provider ?? "local";
+  const context = createRetrievalQueryContext();
+
+  for (const modelName of configuredEmbeddingModels(
+    semanticConfig,
+    options.includeFileSummary,
+  )) {
+    const prefixedQuery = applyQueryPrefix(modelName, query);
+    const promise = getOrCreateEmbeddingPromise(
+      context,
+      modelName,
+      prefixedQuery,
+      embeddingFactory(
+        dependencies,
+        providerType,
+        modelName,
+        prefixedQuery,
+      ),
+    );
+    // Keep rejection observable to the consuming lane without risking an
+    // unhandled rejection if graph admission fails before retrieval starts.
+    void promise.catch(() => undefined);
+  }
+
+  await Promise.allSettled(context.embeddingPromises.values());
+  return context.embeddingPromises;
+}
+
+/**
+ * Record vector work before observing its shared embedding. Empty and rejected
+ * embeddings are execution failures, not successful empty vector searches.
+ */
+export async function awaitVectorEmbeddingForLanes(
+  context: RetrievalQueryContext | undefined,
+  lanes: readonly string[],
+  promise: Promise<number[]>,
+): Promise<number[]> {
+  for (const lane of lanes) markLaneAttempt(context, lane);
+  try {
+    const embedding = await promise;
+    if (embedding.length === 0) {
+      for (const lane of lanes) markLaneResult(context, lane, false);
+    }
+    return embedding;
+  } catch (error) {
+    for (const lane of lanes) markLaneResult(context, lane, false);
+    throw error;
+  }
 }
 
 function quantizedFtsScore(row: FtsRawRow): number {
@@ -354,6 +539,7 @@ async function queryFts(
   query: string,
   topK: number,
   conjunctive: boolean,
+  onResult?: (succeeded: boolean) => void,
 ): Promise<FtsRawRow[]> {
   try {
     assertIndexName(indexName);
@@ -368,8 +554,10 @@ async function queryFts(
         conjunctive,
       ),
     );
+    onResult?.(true);
     return rows;
   } catch (err) {
+    onResult?.(false);
     logger.warn(
       `[hybrid-search] FTS query failed (extension/index may be unavailable): ${
         err instanceof Error ? err.message : String(err)
@@ -408,6 +596,7 @@ async function queryVectorIndex(
   indexName: string,
   embedding: number[],
   topK: number,
+  onResult?: (succeeded: boolean) => void,
 ): Promise<{ symbolId: string; score: number }[]> {
   try {
     assertIndexName(indexName);
@@ -417,7 +606,7 @@ async function queryVectorIndex(
       conn,
       `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${vectorLiteral}, ${k}) RETURN node, distance`,
     );
-    return sortVectorRowsByDistance(rows).map((r) => ({
+    const results = sortVectorRowsByDistance(rows).map((r) => ({
       symbolId: vectorRowId(r),
       // Kuzu vector index returns distance; convert to a similarity score.
       // Lower distance = more similar, so score = 1 / (1 + distance).
@@ -428,7 +617,10 @@ async function queryVectorIndex(
             ? 1 / (1 + Number(r.distance ?? r._distance))
             : 0,
     }));
+    onResult?.(true);
+    return results;
   } catch (err) {
+    onResult?.(false);
     logger.warn(
       `[hybrid-search] Vector query failed (extension/index may be unavailable): ${
         err instanceof Error ? err.message : String(err)
@@ -534,7 +726,7 @@ export async function hybridSearch(
   const config = resolveConfig();
   let conn: Connection;
   try {
-    conn = await getLadybugConn();
+    conn = queryContext?.connection ?? (await getLadybugConn());
   } catch (err) {
     logger.warn(
       `[hybrid-search] Failed to obtain DB connection: ${
@@ -574,6 +766,18 @@ export async function hybridSearch(
   const candidateLimit =
     options.candidateLimit ?? config.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT;
   const limit = Math.min(options.limit, candidateLimit);
+  markLaneAvailability(
+    queryContext,
+    "symbol:fts",
+    ftsEnabled && caps.fts,
+  );
+  if (!vectorEnabled) {
+    markLaneAvailability(
+      queryContext,
+      "symbol:vector:configured",
+      false,
+    );
+  }
 
   // If the system should fall back to legacy, return empty with reason.
   if (shouldFallbackToLegacy(caps, config)) {
@@ -612,12 +816,15 @@ export async function hybridSearch(
     const ftsConjunctive = config.fts.conjunctive ?? false;
 
     const ftsStartedAt = performance.now();
+    markLaneAttempt(queryContext, "symbol:fts");
     const ftsRows = await queryFts(
       conn,
       ftsIndexName,
       options.query,
       ftsTopK,
       ftsConjunctive,
+      (succeeded) =>
+        markLaneResult(queryContext, "symbol:fts", succeeded),
     );
     recordRetrievalTiming(diagnosticTimings, "fts", ftsStartedAt);
 
@@ -645,20 +852,33 @@ export async function hybridSearch(
   if (vectorEnabled) {
     const providerType = resolveEmbeddingProviderType();
     const vectorTopK = config.vector.topK ?? DEFAULT_VECTOR_TOP_K;
+    const configuredSymbolModels = new Set(
+      configuredEmbeddingModels(
+        DEFAULT_EMBEDDING_PREWARM_DEPENDENCIES.loadSemanticConfig(),
+        false,
+      ),
+    );
 
     // Prioritize Jina for Symbol retrieval, then Nomic
-    const sortedModels = Object.entries(EMBEDDING_MODELS).sort(([a], [b]) => {
-      // Jina-code first for symbol search, then nomic
-      const priority = (m: string) =>
-        m.includes("jina") ? 0 : m.includes("nomic") ? 1 : 2;
-      return priority(a) - priority(b);
-    });
+    const sortedModels = Object.entries(EMBEDDING_MODELS)
+      .filter(([modelName]) => configuredSymbolModels.has(modelName))
+      .sort(([a], [b]) => {
+        // Jina-code first for symbol search, then nomic
+        const priority = (m: string) =>
+          m.includes("jina") ? 0 : m.includes("nomic") ? 1 : 2;
+        return priority(a) - priority(b);
+      });
     for (const [modelName, modelInfo] of sortedModels) {
       // Check capability for this specific model.
       const source = vectorSourceForModel(modelName);
       const capAvailable =
         (source === "vector:nomic" && caps.vectorNomic) ||
         (source === "vector:jinacode" && caps.vectorJinaCode);
+      markLaneAvailability(
+        queryContext,
+        `symbol:${source}`,
+        capAvailable,
+      );
 
       if (!capAvailable) {
         logger.debug(
@@ -671,41 +891,31 @@ export async function hybridSearch(
       const configIndexEntry = config.vector.indexes?.[modelName];
       const indexName = configIndexEntry?.indexName ?? modelInfo.indexName;
 
-      // Obtain an embedding provider and check for mock fallback.
-      let provider;
-      try {
-        provider = getEmbeddingProvider(providerType, modelName);
-      } catch (err) {
-        logger.debug(
-          `[hybrid-search] Failed to get embedding provider for '${modelName}': ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-        continue;
-      }
-
-      if (provider.isMockFallback?.()) {
-        logger.debug(
-          `[hybrid-search] Skipping vector model '${modelName}' -- provider is mock fallback`,
-        );
-        continue;
-      }
-
       // Generate query embedding.
       let queryEmbedding: number[];
       const embedStartedAt = performance.now();
+      const lane = `symbol:${vectorSourceForModel(modelName)}`;
       try {
         const prefixedQuery = applyQueryPrefix(modelName, options.query);
-        const embeddingFactory = async () =>
-          (await provider.embed([prefixedQuery]))[0] ?? [];
-        queryEmbedding = queryContext
-          ? await getOrCreateEmbeddingPromise(
+        const createEmbedding = embeddingFactory(
+          DEFAULT_EMBEDDING_PREWARM_DEPENDENCIES,
+          providerType,
+          modelName,
+          prefixedQuery,
+        );
+        const promise = queryContext
+          ? getOrCreateEmbeddingPromise(
               queryContext,
               modelName,
               prefixedQuery,
-              embeddingFactory,
+              createEmbedding,
             )
-          : await embeddingFactory();
+          : createEmbedding();
+        queryEmbedding = await awaitVectorEmbeddingForLanes(
+          queryContext,
+          [lane],
+          promise,
+        );
         if (!queryEmbedding || queryEmbedding.length === 0) {
           logger.debug(
             `[hybrid-search] Empty embedding returned for model '${modelName}'; skipping`,
@@ -735,6 +945,7 @@ export async function hybridSearch(
         indexName,
         queryEmbedding,
         vectorTopK,
+        (succeeded) => markLaneResult(queryContext, lane, succeeded),
       );
       recordRetrievalTiming(diagnosticTimings, "vector", vectorStartedAt);
       recordRetrievalTiming(
@@ -955,18 +1166,32 @@ const ENTITY_VECTOR_CONFIG: Partial<
  * Per-source ranked list for entity search — parallel to SourceRanking but
  * keyed by entityId (not symbolId) and tagged with the entity type.
  */
-export async function entitySearch(
+export interface EntitySourceRankingCollection {
+  conn: Connection;
+  capabilities: RetrievalCapabilities;
+  config: SemanticRetrievalConfig;
+  rankings: EntitySourceRanking[];
+  rrfK: number;
+  limit: number;
+  fusionLatencyMs: number;
+}
+
+async function runEntitySearch<T = never>(
   options: EntitySearchOptions,
   queryContext?: RetrievalQueryContext,
-): Promise<EntitySearchResult> {
+  consumeRankings?: (
+    collection: EntitySourceRankingCollection,
+  ) => Promise<T>,
+): Promise<EntitySearchResult | T> {
   /* sdl.context: entity-search telemetry */
   const entitySearchStart = Date.now();
   const diagnosticTimings = new Map<string, number>();
   const config = resolveConfig();
   let conn: Connection;
   try {
-    conn = await getLadybugConn();
+    conn = queryContext?.connection ?? (await getLadybugConn());
   } catch (err) {
+    if (consumeRankings) throw err;
     logger.info("Entity search", {
       eventType: "entity_search", timestamp: new Date().toISOString(),
       repoId: options.repoId, latencyMs: Date.now() - entitySearchStart,
@@ -1027,8 +1252,28 @@ export async function entitySearch(
   ];
   const entityTypes = options.entityTypes ?? ALL_ENTITY_TYPES;
   const ftsQuery = options.ftsQuery?.trim() || options.query;
+  for (const entityType of entityTypes) {
+    if (!ENTITY_FTS_CONFIG[entityType]) continue;
+    const physicallyAvailable =
+      entityType === "fileSummary" ? caps.fileSummaryFts : caps.fts;
+    markLaneAvailability(
+      queryContext,
+      `${entityType}:fts`,
+      ftsEnabled && physicallyAvailable,
+    );
+  }
+  if (!vectorEnabled) {
+    for (const entityType of ["symbol", "fileSummary"] as const) {
+      if (!entityTypes.includes(entityType)) continue;
+      markLaneAvailability(
+        queryContext,
+        `${entityType}:vector:configured`,
+        false,
+      );
+    }
+  }
 
-  if (shouldFallbackToLegacy(caps, config)) {
+  if (!consumeRankings && shouldFallbackToLegacy(caps, config)) {
     const fallbackReason = "fallback-to-legacy: " + (caps.degradationReasons?.map((r) => r.message).join("; ") ?? "retrieval unavailable");
     logger.info("Entity search", {
       eventType: "entity_search", timestamp: new Date().toISOString(),
@@ -1082,6 +1327,8 @@ export async function entitySearch(
 
       let ftsRows: FtsRawRow[] = [];
       const ftsStartedAt = performance.now();
+      const ftsLane = `${entityType}:fts`;
+      markLaneAttempt(queryContext, ftsLane);
       try {
         assertTableName(entityCfg.tableName);
         ftsRows = await queryStoredProcAll<FtsRawRow>(
@@ -1094,7 +1341,9 @@ export async function entitySearch(
             ftsConjunctive,
           ),
         );
+        markLaneResult(queryContext, ftsLane, true);
       } catch (err) {
+        markLaneResult(queryContext, ftsLane, false);
         logger.warn(
           `[entity-search] FTS query failed for '${entityType}' (index may be unavailable): ${
             err instanceof Error ? err.message : String(err)
@@ -1134,28 +1383,51 @@ export async function entitySearch(
   if (vectorEnabled) {
     const providerType = resolveEmbeddingProviderType();
     const vectorTopK = config.vector.topK ?? DEFAULT_VECTOR_TOP_K;
+    const semanticConfig =
+      DEFAULT_EMBEDDING_PREWARM_DEPENDENCIES.loadSemanticConfig();
+    const modelPlan = resolveSemanticEmbeddingModelPlan(semanticConfig);
+    const configuredEntityModels = new Set<string>();
+    if (semanticConfig?.enabled !== false) {
+      if (entityTypes.includes("symbol")) {
+        for (const model of modelPlan.symbolEmbeddingModels) {
+          configuredEntityModels.add(model);
+        }
+      }
+      if (entityTypes.includes("fileSummary")) {
+        for (const model of modelPlan.fileSummaryEmbeddingModels) {
+          configuredEntityModels.add(model);
+        }
+      }
+    }
 
-    for (const [modelName, modelInfo] of Object.entries(EMBEDDING_MODELS)) {
+    for (const [modelName, modelInfo] of Object.entries(
+      EMBEDDING_MODELS,
+    ).filter(([name]) => configuredEntityModels.has(name))) {
       const source = vectorSourceForModel(modelName);
       const legacyModelAvailable =
         (source === "vector:nomic" && caps.vectorNomic) ||
         (source === "vector:jinacode" && caps.vectorJinaCode);
       const vectorEntityTypes = entityTypes.filter((entityType) => {
         if (!ENTITY_VECTOR_CONFIG[entityType]?.[modelName]) return false;
+        let available = legacyModelAvailable;
         if (entityType === "symbol") {
           const symbolAvailability = caps.vectorByEntityModel?.symbol;
-          return symbolAvailability
+          available = symbolAvailability
             ? symbolAvailability[modelName] === true
             : legacyModelAvailable;
-        }
-        if (entityType === "fileSummary") {
+        } else if (entityType === "fileSummary") {
           const fileSummaryAvailability =
             caps.vectorByEntityModel?.fileSummary;
-          return fileSummaryAvailability
+          available = fileSummaryAvailability
             ? fileSummaryAvailability[modelName] === true
             : legacyModelAvailable;
         }
-        return legacyModelAvailable;
+        markLaneAvailability(
+          queryContext,
+          `${entityType}:vector:${modelName}`,
+          available,
+        );
+        return available;
       });
 
       if (vectorEntityTypes.length === 0) {
@@ -1165,40 +1437,33 @@ export async function entitySearch(
         continue;
       }
 
-      // Obtain a shared query embedding for this model (reuse across entity types).
-      let provider;
-      try {
-        provider = getEmbeddingProvider(providerType, modelName);
-      } catch (err) {
-        logger.debug(
-          `[entity-search] Failed to get embedding provider for '${modelName}': ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-        continue;
-      }
-
-      if (provider.isMockFallback?.()) {
-        logger.debug(
-          `[entity-search] Skipping vector model '${modelName}' -- provider is mock fallback`,
-        );
-        continue;
-      }
-
       let queryEmbedding: number[];
       const entityEmbedStartedAt = performance.now();
+      const vectorLanes = vectorEntityTypes.map(
+        (entityType) =>
+          `${entityType}:${vectorSourceForModel(modelName)}`,
+      );
       try {
         const prefixedQuery = applyQueryPrefix(modelName, options.query);
-        const embeddingFactory = async () =>
-          (await provider.embed([prefixedQuery]))[0] ?? [];
-        queryEmbedding = queryContext
-          ? await getOrCreateEmbeddingPromise(
+        const createEmbedding = embeddingFactory(
+          DEFAULT_EMBEDDING_PREWARM_DEPENDENCIES,
+          providerType,
+          modelName,
+          prefixedQuery,
+        );
+        const promise = queryContext
+          ? getOrCreateEmbeddingPromise(
               queryContext,
               modelName,
               prefixedQuery,
-              embeddingFactory,
+              createEmbedding,
             )
-          : await embeddingFactory();
+          : createEmbedding();
+        queryEmbedding = await awaitVectorEmbeddingForLanes(
+          queryContext,
+          vectorLanes,
+          promise,
+        );
         if (!queryEmbedding || queryEmbedding.length === 0) {
           logger.debug(
             `[entity-search] Empty embedding returned for model '${modelName}'; skipping`,
@@ -1239,6 +1504,7 @@ export async function entitySearch(
         const entityFtsCfg = ENTITY_FTS_CONFIG[entityType];
         if (!entityFtsCfg) continue; // skip unknown entity types in vector path
         const vectorQueryStartedAt = performance.now();
+        const vectorLane = `${entityType}:${vectorSourceForModel(modelName)}`;
         try {
           assertTableName(entityFtsCfg.tableName);
           assertIndexName(indexName);
@@ -1270,7 +1536,9 @@ export async function entitySearch(
                   : 0;
             return { symbolId: entityId, score };
           });
+          markLaneResult(queryContext, vectorLane, true);
         } catch (err) {
+          markLaneResult(queryContext, vectorLane, false);
           logger.warn(
             `[entity-search] Vector query failed for '${entityType}' model '${modelName}': ${
               err instanceof Error ? err.message : String(err)
@@ -1305,6 +1573,17 @@ export async function entitySearch(
   }
 
   const fusionLatencyMs = Math.round(performance.now() - fusionStart);
+  if (consumeRankings) {
+    return consumeRankings({
+      conn,
+      capabilities: caps,
+      config,
+      rankings,
+      rrfK,
+      limit,
+      fusionLatencyMs,
+    });
+  }
 
   if (rankings.length === 0) {
     const reason =
@@ -1497,6 +1776,24 @@ export async function entitySearch(
   const timingRecord = retrievalTimingsToRecord(diagnosticTimings);
   if (timingRecord) evidence.diagnosticTimings = timingRecord;
   return { results: pprAdjusted, evidence };
+}
+
+export async function entitySearch(
+  options: EntitySearchOptions,
+  queryContext?: RetrievalQueryContext,
+): Promise<EntitySearchResult> {
+  return runEntitySearch(options, queryContext) as Promise<EntitySearchResult>;
+}
+
+export async function collectEntitySourceRankings(
+  options: EntitySearchOptions,
+  queryContext: RetrievalQueryContext,
+): Promise<EntitySourceRankingCollection> {
+  return runEntitySearch(
+    options,
+    queryContext,
+    async (collection) => collection,
+  ) as Promise<EntitySourceRankingCollection>;
 }
 
 /**

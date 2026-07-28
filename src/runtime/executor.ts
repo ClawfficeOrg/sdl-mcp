@@ -35,7 +35,7 @@ export function killProcessTree(pid: number): void {
   }
   if (IS_WINDOWS) {
     try {
-      execFileSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
         windowsHide: true,
         stdio: "ignore",
         timeout: 10_000, // 10s cap to prevent event loop freeze

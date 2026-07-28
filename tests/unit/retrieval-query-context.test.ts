@@ -9,6 +9,8 @@ import {
   runAfterGraphRetrievalAdmission,
   sortVectorRowsByDistance,
 } from "../../dist/retrieval/orchestrator.js";
+import * as retrievalOrchestrator from "../../dist/retrieval/orchestrator.js";
+import { buildRetrievalState } from "../../dist/context/engine.js";
 import type { RetrievalCapabilities } from "../../dist/retrieval/types.js";
 
 const healthy: RetrievalCapabilities = {
@@ -23,6 +25,15 @@ const healthy: RetrievalCapabilities = {
 };
 
 describe("request-scoped retrieval work", () => {
+  it("preserves the checked-out connection and initializes backend outcomes", () => {
+    const connection = {} as unknown as Connection;
+
+    const context = createRetrievalQueryContext({ connection });
+
+    assert.strictEqual(context.connection, connection);
+    assert.equal(context.laneOutcomes.size, 0);
+  });
+
   it("shares one pending health promise per repository", async () => {
     const context = createRetrievalQueryContext();
     let calls = 0;
@@ -88,6 +99,121 @@ describe("request-scoped retrieval work", () => {
       [3],
     ]);
     assert.equal(calls, 3);
+  });
+
+  it("prewarms only the configured model and fully-prefixed query promises", async () => {
+    const prewarm = Reflect.get(
+      retrievalOrchestrator,
+      "prewarmRetrievalEmbeddingPromises",
+    );
+    assert.equal(typeof prewarm, "function");
+    if (typeof prewarm !== "function") return;
+
+    const embedded = new Map<string, string>();
+    const promises = await prewarm(
+      "review ContextEngineV2",
+      { includeFileSummary: true },
+      {
+        loadSemanticConfig: () => ({
+          enabled: true,
+          provider: "local",
+          symbolEmbeddingModels: ["jina-embeddings-v2-base-code"],
+          fileSummaryEmbeddingModels: ["nomic-embed-text-v1.5"],
+        }),
+        getEmbeddingProvider: (_provider: string, model: string) => ({
+          embed: async ([text]: string[]) => {
+            embedded.set(model, text ?? "");
+            return [[model.length]];
+          },
+          getDimension: () => 1,
+          isMockFallback: () => false,
+        }),
+      },
+    );
+
+    assert.equal(promises.size, 2);
+    assert.deepEqual([...embedded.keys()].sort(), [
+      "jina-embeddings-v2-base-code",
+      "nomic-embed-text-v1.5",
+    ]);
+    for (const [model, prefixedQuery] of embedded) {
+      assert.ok(
+        promises.has(`${model}\u0000${prefixedQuery}`),
+        `${model} must be cached under its exact prefixed query`,
+      );
+    }
+  });
+
+  it("does not prewarm models when the vector lane is configured off", async () => {
+    const prewarm = Reflect.get(
+      retrievalOrchestrator,
+      "prewarmRetrievalEmbeddingPromises",
+    );
+    assert.equal(typeof prewarm, "function");
+    if (typeof prewarm !== "function") return;
+
+    let providerCalls = 0;
+    const promises = await prewarm(
+      "review ContextEngineV2",
+      { includeFileSummary: true },
+      {
+        loadSemanticConfig: () => ({
+          enabled: true,
+          provider: "local",
+          retrieval: { vector: { enabled: false } },
+        }),
+        getEmbeddingProvider: () => {
+          providerCalls += 1;
+          return {
+            embed: async () => [[1]],
+            getDimension: () => 1,
+            isMockFallback: () => false,
+          };
+        },
+      },
+    );
+
+    assert.equal(promises.size, 0);
+    assert.equal(providerCalls, 0);
+  });
+
+  it("records rejected and empty embeddings as failed vector attempts", async () => {
+    const awaitEmbedding = Reflect.get(
+      retrievalOrchestrator,
+      "awaitVectorEmbeddingForLanes",
+    );
+    assert.equal(typeof awaitEmbedding, "function");
+    if (typeof awaitEmbedding !== "function") return;
+
+    for (const [name, embeddingPromise] of [
+      ["rejected", Promise.reject(new Error("embedding failed"))],
+      ["empty", Promise.resolve([])],
+    ] as const) {
+      const context = createRetrievalQueryContext();
+      const lanes = ["symbol:vector:jinacode"];
+      if (name === "rejected") {
+        await assert.rejects(
+          awaitEmbedding(context, lanes, embeddingPromise),
+          /embedding failed/,
+        );
+      } else {
+        assert.deepEqual(
+          await awaitEmbedding(context, lanes, embeddingPromise),
+          [],
+        );
+      }
+
+      assert.deepEqual(context.laneOutcomes.get(lanes[0]), {
+        attempted: true,
+        succeeded: false,
+        failed: true,
+      });
+      assert.equal(
+        buildRetrievalState(healthy, [], context.laneOutcomes).level,
+        "insufficient",
+        `${name} embedding cannot report hybrid or successful empty retrieval`,
+      );
+    }
   });
 
   it("sorts raw HNSW rows by numeric distance then stable ID", () => {

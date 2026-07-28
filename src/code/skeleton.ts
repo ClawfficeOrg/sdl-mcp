@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { readFile, stat } from "fs/promises";
 
+import type { Connection } from "kuzu";
 import type Parser from "tree-sitter";
 
 import type { RepoId, SymbolId } from "../domain/types.js";
@@ -16,6 +17,10 @@ import {
 import { getLadybugConn } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
 import { getParser as getGrammarParser } from "../indexer/treesitter/grammarLoader.js";
+import {
+  getOverlaySymbol,
+  type OverlaySnapshot,
+} from "../live-index/overlay-reader.js";
 import { logger } from "../util/logger.js";
 import { getAbsolutePathFromRepoRoot } from "../util/paths.js";
 import { estimateTokens as estimateTokenCount } from "../util/tokenize.js";
@@ -869,12 +874,51 @@ function resolveVariableSkeletonBoundary(
     : declaration;
 }
 
-export async function generateSymbolSkeleton(
+export interface PreparedSymbolSkeleton {
+  readonly symbol: NonNullable<
+    Awaited<ReturnType<typeof ladybugDb.getSymbol>>
+  >;
+  readonly filePath: string;
+  readonly relativePath: string;
+  readonly extension: string;
+  readonly sourceKind: "durable" | "overlay";
+  readonly capturedContentHash: string;
+  readonly capturedContent?: string;
+}
+
+function hashCapturedSource(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** Capture every source input needed before source parsing begins. */
+export async function prepareSymbolSkeleton(
+  conn: Connection,
   repoId: RepoId,
   symbolId: SymbolId,
-  options: SkeletonOptions = {},
-): Promise<SkeletonResult | null> {
-  const conn = await getLadybugConn();
+  overlaySnapshot?: OverlaySnapshot,
+  requireIndexedContentHash = true,
+): Promise<PreparedSymbolSkeleton | null> {
+  const overlay = overlaySnapshot
+    ? getOverlaySymbol(overlaySnapshot, symbolId)
+    : null;
+  const overlayContent = overlaySnapshot?.contentByFileId?.get(
+    overlay?.file.fileId ?? "",
+  );
+  if (
+    overlay &&
+    overlay.symbol.repoId === repoId &&
+    overlayContent !== undefined
+  ) {
+    return Object.freeze({
+      symbol: overlay.symbol,
+      filePath: overlay.file.relPath,
+      relativePath: overlay.file.relPath,
+      extension: overlay.file.relPath.split(".").pop() || "",
+      sourceKind: "overlay" as const,
+      capturedContentHash: hashCapturedSource(overlayContent),
+      capturedContent: overlayContent,
+    });
+  }
   const symbol = await ladybugDb.getSymbol(conn, symbolId);
   if (!symbol) return null;
 
@@ -889,26 +933,84 @@ export async function generateSymbolSkeleton(
 
   const filePath = getAbsolutePathFromRepoRoot(repo.rootPath, file.relPath);
   const extension = file.relPath.split(".").pop() || "";
-
+  let capturedContent: string;
   try {
     const fileStat = await stat(filePath);
-    if (fileStat.size > MAX_FILE_BYTES) {
+    if (fileStat.size > MAX_FILE_BYTES) return null;
+    const rawContent = await readFile(filePath, "utf-8");
+    // The source bytes must still represent the File row captured by the
+    // surrounding read transaction before we prepare any evidence from them.
+    if (
+      requireIndexedContentHash &&
+      hashCapturedSource(rawContent) !== file.contentHash
+    ) {
       return null;
     }
-  } catch (error) {
-    logger.debug("Failed to stat file during symbol skeleton generation", {
-      file: file.relPath,
-      symbolId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
-
-  let content: string;
-  try {
-    content = (await readFile(filePath, "utf-8")).replace(/\r\n/g, "\n");
+    capturedContent = rawContent.replace(/\r\n/g, "\n");
   } catch {
     return null;
+  }
+  return Object.freeze({
+    symbol,
+    filePath,
+    relativePath: file.relPath,
+    extension,
+    sourceKind: "durable" as const,
+    capturedContentHash: hashCapturedSource(capturedContent),
+  });
+}
+
+export async function generateSymbolSkeleton(
+  repoId: RepoId,
+  symbolId: SymbolId,
+  options: SkeletonOptions = {},
+): Promise<SkeletonResult | null> {
+  const conn = await getLadybugConn();
+  const prepared = await prepareSymbolSkeleton(
+    conn,
+    repoId,
+    symbolId,
+    undefined,
+    false,
+  );
+  return prepared
+    ? renderPreparedSymbolSkeleton(prepared, options)
+    : null;
+}
+
+/** Parse and render source using metadata captured by prepareSymbolSkeleton. */
+export async function renderPreparedSymbolSkeleton(
+  prepared: PreparedSymbolSkeleton,
+  options: SkeletonOptions = {},
+): Promise<SkeletonResult | null> {
+  const { symbol, filePath, extension } = prepared;
+  const file = { relPath: prepared.relativePath };
+  const symbolId = symbol.symbolId;
+  let content: string;
+  if (prepared.sourceKind === "overlay") {
+    if (prepared.capturedContent === undefined) return null;
+    content = prepared.capturedContent;
+  } else {
+    try {
+      const fileStat = await stat(filePath);
+      if (fileStat.size > MAX_FILE_BYTES) {
+        return null;
+      }
+      content = (await readFile(filePath, "utf-8")).replace(
+        /\r\n/g,
+        "\n",
+      );
+    } catch (error) {
+      logger.debug("Failed to read file during symbol skeleton generation", {
+        file: file.relPath,
+        symbolId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+    if (hashCapturedSource(content) !== prepared.capturedContentHash) {
+      return null;
+    }
   }
   const tree = parseFile(content, `.${extension}`);
 

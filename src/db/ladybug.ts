@@ -238,6 +238,7 @@ let writeConn: LadybugConnection | null = null;
 let writeLimiter: ConcurrencyLimiter | null = null;
 let dbClosePromise: Promise<void> | null = null;
 let preserveCloseHooksForCurrentClose = false;
+let strictCloseForCurrentClose = false;
 const activeExclusiveReadLeases = new Set<Promise<void>>();
 const sessionWriteBodyLimiters = new WeakMap<
   LadybugConnection,
@@ -701,6 +702,7 @@ async function loadExtensionsAfterWalCheckpoint(
 async function checkpointWal(
   conn: LadybugConnection,
   phase: string,
+  onFailure?: (error: unknown) => void,
 ): Promise<boolean> {
   const startedAt = Date.now();
   try {
@@ -711,6 +713,7 @@ async function checkpointWal(
     });
     return true;
   } catch (err) {
+    onFailure?.(err);
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`LadybugDB CHECKPOINT failed (best-effort)`, {
       phase,
@@ -1194,6 +1197,11 @@ export function hasDeferredIndexes(): boolean {
 
 export interface CloseLadybugDbOptions {
   preserveCloseHooks?: boolean;
+  /**
+   * Propagate an AggregateError after all checkpoint and close cleanup has
+   * been attempted. Normal shutdown remains best-effort.
+   */
+  strict?: boolean;
 }
 
 type DeferredIndexTimingRecorder = (
@@ -1429,19 +1437,27 @@ export function closeLadybugDb(
 ): Promise<void> {
   if (!dbClosePromise) {
     preserveCloseHooksForCurrentClose = options.preserveCloseHooks === true;
+    strictCloseForCurrentClose = options.strict === true;
     dbClosePromise = closeLadybugDbImpl().finally(() => {
       dbClosePromise = null;
       preserveCloseHooksForCurrentClose = false;
+      strictCloseForCurrentClose = false;
     });
-  } else if (!options.preserveCloseHooks) {
-    // Concurrent close callers share one operation. Clearing wins so a caller
-    // cannot accidentally retain hooks requested for disposal by another.
-    preserveCloseHooksForCurrentClose = false;
+  } else {
+    if (!options.preserveCloseHooks) {
+      // Concurrent close callers share one operation. Clearing wins so a caller
+      // cannot accidentally retain hooks requested for disposal by another.
+      preserveCloseHooksForCurrentClose = false;
+    }
+    // Strict propagation wins for a shared close so validation cannot report
+    // success when any part of the shared cleanup failed.
+    if (options.strict) strictCloseForCurrentClose = true;
   }
   return dbClosePromise;
 }
 
 async function closeLadybugDbImpl(): Promise<void> {
+  const closeFailures: unknown[] = [];
   await Promise.allSettled([...activeExclusiveReadLeases]);
 
   // Best-effort flush of any audit events queued by the post-index buffer
@@ -1513,7 +1529,7 @@ async function closeLadybugDbImpl(): Promise<void> {
   const shutdownError = new DatabaseError(
     "LadybugDB is closing, per-conn queue cleared",
   );
-  await Promise.allSettled(
+  const readDrainResults = await Promise.allSettled(
     readPool.map((conn) =>
       drainConnMutex(
         conn,
@@ -1522,8 +1538,18 @@ async function closeLadybugDbImpl(): Promise<void> {
       ),
     ),
   );
+  for (const result of readDrainResults) {
+    if (result.status === "rejected") closeFailures.push(result.reason);
+  }
 
-  await flushStaleFinalizers();
+  try {
+    await flushStaleFinalizers();
+  } catch (err) {
+    closeFailures.push(err);
+    logger.warn("Error flushing LadybugDB finalizers during close", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // Synchronously capture and clear the read pool so concurrent readers
   // immediately see "not initialized" instead of accessing closing connections.
@@ -1537,6 +1563,7 @@ async function closeLadybugDbImpl(): Promise<void> {
     try {
       await conn.close();
     } catch (err) {
+      closeFailures.push(err);
       logger.warn("Error closing LadybugDB read connection", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1555,7 +1582,8 @@ async function closeLadybugDbImpl(): Promise<void> {
         DB_SHUTDOWN_DRAIN_TIMEOUT_MS,
         shutdownError,
       );
-    } catch {
+    } catch (err) {
+      closeFailures.push(err);
       // Best-effort drain — proceed with close regardless.
       writeConnDrained = false;
     }
@@ -1563,8 +1591,15 @@ async function closeLadybugDbImpl(): Promise<void> {
       // Force CHECKPOINT on the way out so the next startup opens a clean WAL.
       // Prevents the Kuzu 0.15.2 UNREACHABLE_CODE crash in wal_record.cpp:76
       // when `LOAD EXTENSION fts` replays an uncheckpointed WAL.
-      await checkpointWal(writeConn, "pre-close");
+      await checkpointWal(writeConn, "pre-close", (error) => {
+        closeFailures.push(error);
+      });
     } else {
+      closeFailures.push(
+        new Error(
+          "LadybugDB write connection did not drain before shutdown checkpoint",
+        ),
+      );
       logger.warn("Skipping LadybugDB shutdown checkpoint", {
         reason: "write connection did not drain before shutdown timeout",
         timeoutMs: DB_SHUTDOWN_DRAIN_TIMEOUT_MS,
@@ -1573,6 +1608,7 @@ async function closeLadybugDbImpl(): Promise<void> {
     try {
       await writeConn.close();
     } catch (err) {
+      closeFailures.push(err);
       logger.warn("Error closing LadybugDB write connection", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1584,6 +1620,7 @@ async function closeLadybugDbImpl(): Promise<void> {
     try {
       await dbInstance.close();
     } catch (err) {
+      closeFailures.push(err);
       logger.warn("Error closing LadybugDB database", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1601,6 +1638,7 @@ async function closeLadybugDbImpl(): Promise<void> {
     try {
       hook();
     } catch (err) {
+      closeFailures.push(err);
       logger.warn("Error in DB close hook", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1610,6 +1648,12 @@ async function closeLadybugDbImpl(): Promise<void> {
     closeHooks.length = 0;
   }
   logger.debug("LadybugDB closed");
+  if (strictCloseForCurrentClose && closeFailures.length > 0) {
+    throw new AggregateError(
+      closeFailures,
+      "LadybugDB strict close failed after cleanup",
+    );
+  }
 }
 
 /**

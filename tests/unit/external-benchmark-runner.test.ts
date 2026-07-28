@@ -20,6 +20,7 @@ import {
   fingerprintFiles,
   type ExternalBenchmarkRunManifest,
 } from "../../dist/benchmark/external-manifest.js";
+import { RUNTIME_SIGKILL_GRACE_MS } from "../../dist/config/constants.js";
 import {
   assertCanonicalPathContained,
   assertCanonicalPathEqual,
@@ -48,6 +49,7 @@ import {
   verifyExternalBenchmarkEvidence,
   writeDbFamilyFingerprintFile,
 } from "../../dist/benchmark/external-runner.js";
+import * as externalRunner from "../../dist/benchmark/external-runner.js";
 
 const tempRoots: string[] = [];
 
@@ -137,6 +139,148 @@ describe("external benchmark runner preflight", () => {
       contentChanged.files.map(({ path }) => path),
     );
     assert.notEqual(membershipChanged.sha256, contentChanged.sha256);
+  });
+});
+
+describe("verified database family cache", () => {
+  it("copies and fingerprints every regular database-family member", () => {
+    const copyDbFamilyVerified = Reflect.get(
+      externalRunner,
+      "copyDbFamilyVerified",
+    );
+    assert.equal(typeof copyDbFamilyVerified, "function");
+    if (typeof copyDbFamilyVerified !== "function") return;
+
+    const root = makeTempRoot();
+    const source = join(root, "source", "context.lbug");
+    const destination = join(root, "cache", "context.lbug");
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, "primary");
+    writeFileSync(source + ".metadata", "metadata");
+    writeFileSync(source + ".wal", "wal");
+    writeFileSync(source + "-unrelated", "ignored");
+
+    const fingerprint = copyDbFamilyVerified(source, destination);
+
+    assert.deepEqual(
+      collectDbFamilyFiles(destination).map((filePath) => basename(filePath)),
+      ["context.lbug", "context.lbug.metadata", "context.lbug.wal"],
+    );
+    assert.deepEqual(fingerprint, fingerprintDbFamily(destination));
+    assert.equal(existsSync(destination + "-unrelated"), false);
+  });
+
+  it("revalidates the copied family before writing the ready marker last", async () => {
+    const publishVerifiedDbFamilyCache = Reflect.get(
+      externalRunner,
+      "publishVerifiedDbFamilyCache",
+    );
+    assert.equal(typeof publishVerifiedDbFamilyCache, "function");
+    if (typeof publishVerifiedDbFamilyCache !== "function") return;
+
+    const root = makeTempRoot();
+    const source = join(root, "source", "context.lbug");
+    const destination = join(root, "cache", "context.lbug");
+    const marker = join(root, "cache", "ready.json");
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, "primary");
+    writeFileSync(source + ".wal", "wal");
+
+    const result = await publishVerifiedDbFamilyCache({
+      sourcePrimaryPath: source,
+      destinationPrimaryPath: destination,
+      readyMarkerPath: marker,
+      validateCopiedFamily: async (copiedPath: string) => {
+        assert.equal(copiedPath, destination);
+        assert.equal(existsSync(destination), true);
+        assert.equal(existsSync(destination + ".wal"), true);
+        assert.equal(existsSync(marker), false);
+        // LadybugDB may checkpoint the copied family while reopening/closing.
+        writeFileSync(destination + ".wal", "wal-after-reopen");
+        return { repoId: "fixture", graphVersionId: "v1" };
+      },
+    });
+
+    assert.equal(existsSync(marker), true);
+    assert.deepEqual(JSON.parse(fs.readFileSync(marker, "utf8")), result);
+    assert.deepEqual(result.validation, {
+      repoId: "fixture",
+      graphVersionId: "v1",
+    });
+
+    const failedDestination = join(root, "failed", "context.lbug");
+    const failedMarker = join(root, "failed", "ready.json");
+    await assert.rejects(
+      publishVerifiedDbFamilyCache({
+        sourcePrimaryPath: source,
+        destinationPrimaryPath: failedDestination,
+        readyMarkerPath: failedMarker,
+        validateCopiedFamily: async () => {
+          throw new AggregateError(
+            [new Error("injected connection close failure")],
+            "strict LadybugDB close failed after cleanup",
+          );
+        },
+      }),
+      /strict LadybugDB close failed after cleanup/,
+    );
+    assert.equal(existsSync(failedMarker), false);
+  });
+
+  it("copies and revalidates a cache hit before returning it", async () => {
+    const publishVerifiedDbFamilyCache = Reflect.get(
+      externalRunner,
+      "publishVerifiedDbFamilyCache",
+    );
+    const restoreVerifiedDbFamilyCache = Reflect.get(
+      externalRunner,
+      "restoreVerifiedDbFamilyCache",
+    );
+    assert.equal(typeof publishVerifiedDbFamilyCache, "function");
+    assert.equal(typeof restoreVerifiedDbFamilyCache, "function");
+    if (
+      typeof publishVerifiedDbFamilyCache !== "function" ||
+      typeof restoreVerifiedDbFamilyCache !== "function"
+    ) {
+      return;
+    }
+
+    const root = makeTempRoot();
+    const source = join(root, "source", "context.lbug");
+    const cached = join(root, "cache", "context.lbug");
+    const marker = join(root, "cache", "ready.json");
+    const working = join(root, "working", "context.lbug");
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, "primary");
+    writeFileSync(source + ".wal", "wal");
+
+    await publishVerifiedDbFamilyCache({
+      sourcePrimaryPath: source,
+      destinationPrimaryPath: cached,
+      readyMarkerPath: marker,
+      validateCopiedFamily: async () => ({
+        repoId: "fixture",
+        graphVersionId: "v1",
+      }),
+    });
+
+    let validations = 0;
+    const restored = await restoreVerifiedDbFamilyCache({
+      cachedPrimaryPath: cached,
+      readyMarkerPath: marker,
+      workingPrimaryPath: working,
+      validateCopiedFamily: async (copiedPath: string) => {
+        validations += 1;
+        assert.equal(copiedPath, working);
+        writeFileSync(working + ".wal", "wal-after-reopen");
+        return { repoId: "fixture", graphVersionId: "v1" };
+      },
+    });
+
+    assert.equal(validations, 1);
+    assert.equal(existsSync(working), true);
+    assert.equal(existsSync(working + ".wal"), true);
+    assert.deepEqual(restored.family, fingerprintDbFamily(cached));
   });
 });
 
@@ -244,7 +388,10 @@ describe("warm repeat isolation", () => {
       () => stageWarmSnapshot(first.sourcePrimary, first.root),
       /already exists|EEXIST/u,
     );
-    assert.equal(fs.readFileSync(join(warmDirectory, "sentinel"), "utf8"), "keep");
+    assert.equal(
+      fs.readFileSync(join(warmDirectory, "sentinel"), "utf8"),
+      "keep",
+    );
 
     const second = makeWarmFixture();
     const snapshot = stageWarmSnapshot(second.sourcePrimary, second.root);
@@ -294,8 +441,14 @@ describe("warm repeat isolation", () => {
   });
 
   for (const [label, mutate] of [
-    ["changed", (primary: string) => writeFileSync(primary + ".wal", "changed")],
-    ["added", (primary: string) => writeFileSync(primary + ".metadata", "added")],
+    [
+      "changed",
+      (primary: string) => writeFileSync(primary + ".wal", "changed"),
+    ],
+    [
+      "added",
+      (primary: string) => writeFileSync(primary + ".metadata", "added"),
+    ],
     ["removed", (primary: string) => fs.unlinkSync(primary + ".wal")],
   ] as const) {
     it(`rejects ${label} warm source sidecars after staging without cleanup`, (t) => {
@@ -480,10 +633,7 @@ describe("canonical paths and child environment", () => {
 
     assert.throws(
       () =>
-        assertCanonicalPathContained(
-          root,
-          join(link, "db", "repeat-001.lbug"),
-        ),
+        assertCanonicalPathContained(root, join(link, "db", "repeat-001.lbug")),
       /contained/u,
     );
   });
@@ -537,7 +687,10 @@ describe("canonical paths and child environment", () => {
       [{ ...valid, SDL_CONFIG: undefined }, new Set()],
       [{ ...valid, SDL_CONFIG: join(outside, "other.json") }, new Set()],
       [{ ...valid, SDL_GRAPH_DB_PATH: undefined }, new Set()],
-      [{ ...valid, SDL_GRAPH_DB_PATH: join(outside, "escape.lbug") }, new Set()],
+      [
+        { ...valid, SDL_GRAPH_DB_PATH: join(outside, "escape.lbug") },
+        new Set(),
+      ],
       [{ ...valid, SDL_DB_PATH: join(root, "db", "other.lbug") }, new Set()],
       [valid, new Set([canonicalizePath(database)])],
     ];
@@ -610,8 +763,8 @@ describe("target baseline and threshold validation", () => {
     const badAbsolute = structuredClone(validThresholdConfig());
     badAbsolute.thresholds.indexing.indexTimePerFile.maxMs = Number.NaN;
     const badAllowance = structuredClone(validThresholdConfig());
-    badAllowance.thresholds.tokenEfficiency.avgCardTokens
-      .allowableIncreasePercent = Number.POSITIVE_INFINITY;
+    badAllowance.thresholds.tokenEfficiency.avgCardTokens.allowableIncreasePercent =
+      Number.POSITIVE_INFINITY;
     const extraCategory = structuredClone(validThresholdConfig());
     extraCategory.thresholds.coverage = {};
     const extraMetric = structuredClone(validThresholdConfig());
@@ -814,13 +967,7 @@ describe("target and runner git snapshots", () => {
       { file: "git", args: ["-C", root, "rev-parse", "HEAD"] },
       {
         file: "git",
-        args: [
-          "-C",
-          root,
-          "status",
-          "--porcelain=v1",
-          "--untracked-files=all",
-        ],
+        args: ["-C", root, "status", "--porcelain=v1", "--untracked-files=all"],
       },
       {
         file: "git",
@@ -856,25 +1003,27 @@ describe("target and runner git snapshots", () => {
       throw new Error("unexpected git command: " + command);
     };
 
-    const snapshot = assertTargetRef(
-      root,
-      { ref: "locked", cloneUrl },
-      exec,
+    const snapshot = assertTargetRef(root, { ref: "locked", cloneUrl }, exec);
+    assertGitSnapshot(
+      snapshot,
+      {
+        commit,
+        dirty: false,
+        treeSha256: fingerprintFiles(root, ["tracked.txt"]).sha256,
+      },
+      "target",
     );
-    assertGitSnapshot(snapshot, {
-      commit,
-      dirty: false,
-      treeSha256: fingerprintFiles(root, ["tracked.txt"]).sha256,
-    }, "target");
     assert.ok(
       calls.some(
-        (args) => args.join(" ") ===
+        (args) =>
+          args.join(" ") ===
           ["-C", root, "rev-parse", "--verify", "locked^{commit}"].join(" "),
       ),
     );
     assert.ok(
       calls.some(
-        (args) => args.join(" ") ===
+        (args) =>
+          args.join(" ") ===
           ["-C", root, "remote", "get-url", "origin"].join(" "),
       ),
     );
@@ -892,8 +1041,9 @@ describe("target and runner git snapshots", () => {
     );
     const manifest = makePreflightManifest();
     manifest.runner.sdlMcpCommit = "2".repeat(40);
-    manifest.runner.sdlMcpBuildTreeSha256 =
-      fingerprintDirectory(join(root, "dist")).sha256;
+    manifest.runner.sdlMcpBuildTreeSha256 = fingerprintDirectory(
+      join(root, "dist"),
+    ).sha256;
     manifest.runner.launcherSha256 = sha256("launcher");
     const exec = (_file: string, args: readonly string[]) => {
       const command = args.slice(2).join(" ");
@@ -930,7 +1080,8 @@ describe("target and runner git snapshots", () => {
       if (command === "ls-files --cached --others --exclude-standard -z") {
         return "tracked.txt\0";
       }
-      if (command === "rev-parse --verify locked^{commit}") return "2".repeat(40);
+      if (command === "rev-parse --verify locked^{commit}")
+        return "2".repeat(40);
       if (command === "remote get-url origin") {
         return "https://example.invalid/repo.git";
       }
@@ -997,7 +1148,6 @@ describe("target and runner git snapshots", () => {
   });
 });
 
-
 describe("external benchmark CLI and artifact preflight", () => {
   it("parses required options and deterministic defaults", () => {
     assert.deepStrictEqual(
@@ -1035,7 +1185,14 @@ describe("external benchmark CLI and artifact preflight", () => {
       ["--repo-id", "scip-io", "--out-dir", "artifacts", "--repeats", "0"],
       ["--repo-id", "scip-io", "--out-dir", "artifacts", "--repeats", "21"],
       ["--repo-id", "scip-io", "--out-dir", "artifacts", "--repeats", "1.5"],
-      ["--repo-id", "scip-io", "--out-dir", "artifacts", "--cache-mode", "warm"],
+      [
+        "--repo-id",
+        "scip-io",
+        "--out-dir",
+        "artifacts",
+        "--cache-mode",
+        "warm",
+      ],
       [
         "--repo-id",
         "scip-io",
@@ -1079,12 +1236,7 @@ describe("external benchmark CLI and artifact preflight", () => {
     writeFileSync(join(outDir, "sentinel"), "keep");
 
     await assert.rejects(
-      runExternalBenchmarkCli([
-        "--repo-id",
-        "scip-io",
-        "--out-dir",
-        outDir,
-      ]),
+      runExternalBenchmarkCli(["--repo-id", "scip-io", "--out-dir", outDir]),
       /artifact root.*absent|already exists/iu,
     );
     assert.deepStrictEqual(fs.readdirSync(outDir), ["sentinel"]);
@@ -1107,11 +1259,14 @@ describe("external benchmark CLI and artifact preflight", () => {
     ]);
 
     assert.equal(exitCode, 1);
-    assert.equal(canonicalizePath(outDir), canonicalizePath(join(parent, "failed")));
-    assert.deepStrictEqual(
-      fs.readdirSync(outDir).sort(),
-      ["preflight-error.json", "preflight.log"],
+    assert.equal(
+      canonicalizePath(outDir),
+      canonicalizePath(join(parent, "failed")),
     );
+    assert.deepStrictEqual(fs.readdirSync(outDir).sort(), [
+      "preflight-error.json",
+      "preflight.log",
+    ]);
     assert.deepStrictEqual(
       JSON.parse(fs.readFileSync(join(outDir, "preflight-error.json"), "utf8")),
       {
@@ -1125,7 +1280,6 @@ describe("external benchmark CLI and artifact preflight", () => {
     assert.equal(existsSync(join(outDir, "results.json")), false);
   });
 });
-
 
 interface ExternalFixture {
   args: string[];
@@ -1158,13 +1312,15 @@ function createExternalFixture(repeats = 1): ExternalFixture {
   writeFileSync(
     lockPath,
     JSON.stringify({
-      repos: [{
-        repoId: "fixture",
-        cloneUrl,
-        ref: commit,
-        languages: ["ts"],
-        ignore: [],
-      }],
+      repos: [
+        {
+          repoId: "fixture",
+          cloneUrl,
+          ref: commit,
+          languages: ["ts"],
+          ignore: [],
+        },
+      ],
     }),
   );
   writeFileSync(
@@ -1177,12 +1333,14 @@ function createExternalFixture(repeats = 1): ExternalFixture {
   writeFileSync(
     externalConfigPath,
     JSON.stringify({
-      repos: [{
-        repoId: "fixture",
-        rootPath: target,
-        languages: ["ts"],
-        ignore: [],
-      }],
+      repos: [
+        {
+          repoId: "fixture",
+          rootPath: target,
+          languages: ["ts"],
+          ignore: [],
+        },
+      ],
     }),
   );
   writeFileSync(
@@ -1236,7 +1394,10 @@ describe("external benchmark manifest and staged input preflight", () => {
     const exitCode = await runExternalBenchmarkCli(
       fixture.args,
       async (next) => {
-        assert.equal(existsSync(join(fixture.outDir, "run-manifest.json")), true);
+        assert.equal(
+          existsSync(join(fixture.outDir, "run-manifest.json")),
+          true,
+        );
         request = next;
         throw new Error("stop-after-manifest");
       },
@@ -1278,7 +1439,10 @@ describe("external benchmark manifest and staged input preflight", () => {
         };
       }),
     );
-    assert.equal(manifest.inputs.thresholdSha256, sha256(fs.readFileSync(fixture.thresholdPath, "utf8")));
+    assert.equal(
+      manifest.inputs.thresholdSha256,
+      sha256(fs.readFileSync(fixture.thresholdPath, "utf8")),
+    );
     assert.equal(
       manifest.runner.launcherSha256,
       sha256(fs.readFileSync("scripts/external-benchmark-runner.mjs", "utf8")),
@@ -1287,7 +1451,10 @@ describe("external benchmark manifest and staged input preflight", () => {
       fs.readFileSync(join(fixture.outDir, "inputs", "threshold.json"), "utf8"),
       fs.readFileSync(fixture.thresholdPath, "utf8"),
     );
-    assert.equal(existsSync(join(fixture.outDir, "preflight-error.json")), false);
+    assert.equal(
+      existsSync(join(fixture.outDir, "preflight-error.json")),
+      false,
+    );
     assert.ok(request);
     assert.deepStrictEqual(request.command, manifest.repeats[0]?.command);
     assert.equal(
@@ -1308,27 +1475,26 @@ describe("external benchmark manifest and staged input preflight", () => {
     );
     assert.equal(request.env.SDL_DB_PATH, request.env.SDL_GRAPH_DB_PATH);
     assert.equal(request.env.SDL_GRAPH_DB_DIR, undefined);
-    assert.equal(request.command.filter((value) => value === "--out-exclusive").length, 1);
+    assert.equal(
+      request.command.filter((value) => value === "--out-exclusive").length,
+      1,
+    );
   });
 
   it("revalidates source and staged threshold bytes before every child", async () => {
     const fixture = createExternalFixture(2);
     let calls = 0;
 
-    const exitCode = await runExternalBenchmarkCli(
-      fixture.args,
-      async () => {
-        calls += 1;
-        writeFileSync(fixture.thresholdPath, "changed");
-        return { exitCode: 0, durationMs: 1 };
-      },
-    );
+    const exitCode = await runExternalBenchmarkCli(fixture.args, async () => {
+      calls += 1;
+      writeFileSync(fixture.thresholdPath, "changed");
+      return { exitCode: 0, durationMs: 1 };
+    });
 
     assert.equal(exitCode, 1);
     assert.equal(calls, 1);
   });
 });
-
 
 it("accepts the live 12-rule threshold schema and rejects structural drift", () => {
   const live = JSON.parse(
@@ -1366,7 +1532,8 @@ it("accepts the live 12-rule threshold schema and rejects structural drift", () 
     })(),
     (() => {
       const value = structuredClone(live);
-      value.thresholds.coverage.extra = value.thresholds.coverage.callEdgeCoverage;
+      value.thresholds.coverage.extra =
+        value.thresholds.coverage.callEdgeCoverage;
       return value;
     })(),
     (() => {
@@ -1385,11 +1552,9 @@ it("accepts the live 12-rule threshold schema and rejects structural drift", () 
   }
 });
 
-
 it("parses and documents the internal out-exclusive option exactly once", async () => {
-  const { parseBenchmarkOptions } = await import(
-    "../../dist/cli/argParsing.js"
-  );
+  const { parseBenchmarkOptions } =
+    await import("../../dist/cli/argParsing.js");
   assert.equal(
     parseBenchmarkOptions(["--out-exclusive"], {}, {}).outExclusive,
     true,
@@ -1401,7 +1566,6 @@ it("parses and documents the internal out-exclusive option exactly once", async 
   );
   assert.equal(help.match(/--out-exclusive/gu)?.length, 1);
 });
-
 
 const RAW_THRESHOLD_PAIRS = [
   ["coverage", "callEdgeCoverage"],
@@ -1492,15 +1656,27 @@ function controlledLogStream() {
   };
 }
 
-function startControlledBenchmarkChild() {
+function startControlledBenchmarkChild(
+  timeout: { timeoutMs?: number; processDeathTimeoutMs?: number } = {},
+  lifecycle?: {
+    platform: NodeJS.Platform;
+    killProcessTree: (pid: number) => void;
+    isProcessAlive: (pid: number) => boolean;
+    processDeathPollMs?: number;
+    processDeathTimeoutMs?: number;
+  },
+) {
   const stdoutPipe = new PassThrough();
   const stderrPipe = new PassThrough();
   let killed = false;
+  const killSignals: Array<NodeJS.Signals | number | undefined> = [];
   const child = Object.assign(new EventEmitter(), {
+    pid: 42_424,
     stdout: stdoutPipe,
     stderr: stderrPipe,
-    kill() {
+    kill(signal?: NodeJS.Signals | number) {
       killed = true;
+      killSignals.push(signal);
       return true;
     },
   }) as unknown as ReturnType<typeof childProcess.spawn>;
@@ -1522,14 +1698,29 @@ function startControlledBenchmarkChild() {
 
   let promise: ReturnType<typeof runBenchmarkChild>;
   try {
-    promise = runBenchmarkChild({
-      command: ["node", "-e", ""],
-      cwd: process.cwd(),
-      env: { ...process.env },
-      stdoutPath: "unused-stdout.log",
-      stderrPath: "unused-stderr.log",
-      rawResultPath: "unused-result.json",
-    });
+    const runWithLifecycle = runBenchmarkChild as unknown as (
+      request: Parameters<typeof runBenchmarkChild>[0],
+      injectedLifecycle?: typeof lifecycle,
+    ) => ReturnType<typeof runBenchmarkChild>;
+    promise = runWithLifecycle(
+      {
+        command: ["node", "-e", ""],
+        cwd: process.cwd(),
+        env: { ...process.env },
+        stdoutPath: "unused-stdout.log",
+        stderrPath: "unused-stderr.log",
+        rawResultPath: "unused-result.json",
+        ...timeout,
+      },
+      lifecycle ?? {
+        platform: "linux",
+        killProcessTree: () => {
+          child.kill("SIGTERM");
+          child.kill("SIGKILL");
+        },
+        isProcessAlive: () => false,
+      },
+    );
   } finally {
     Object.defineProperty(fs, "createWriteStream", {
       configurable: true,
@@ -1549,6 +1740,7 @@ function startControlledBenchmarkChild() {
     stdoutLog,
     stderrLog,
     killed: () => killed,
+    killSignals,
     promise,
   };
 }
@@ -1595,6 +1787,331 @@ async function assertStreamFailureWaitsForCleanup(
 }
 
 describe("external benchmark child execution and complete repeat count", () => {
+  it("waits for timed-out child close before the next owner or artifact publication", async () => {
+    const state = startControlledBenchmarkChild({
+      timeoutMs: 5,
+      processDeathTimeoutMs: 5,
+    });
+    const outputDir = mkdtempSync(join(tmpdir(), "sdl-child-timeout-"));
+    const pendingPath = join(outputDir, "result.json.pending");
+    const finalPath = join(outputDir, "result.json");
+    writeFileSync(pendingPath, "ready", "utf8");
+    let settled = false;
+    let nextOwnerStarted = false;
+    const publication = state.promise.then(
+      () => {
+        settled = true;
+        nextOwnerStarted = true;
+        fs.renameSync(pendingPath, finalPath);
+        return new Error("Expected child timeout");
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+
+    try {
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 25),
+      );
+      assert.equal(state.killed(), true);
+      assert.ok(state.killSignals.includes("SIGTERM"));
+      assert.ok(state.killSignals.includes("SIGKILL"));
+      assert.equal(settled, false);
+      assert.equal(nextOwnerStarted, false);
+      assert.equal(existsSync(finalPath), false);
+
+      state.child.emit("close", null);
+      await nextEventLoopTurn();
+      assert.equal(settled, false);
+
+      state.stdoutLog.close();
+      await nextEventLoopTurn();
+      assert.equal(settled, false);
+
+      state.stderrLog.close();
+      const error = await publication;
+      assert.match(
+        error instanceof Error ? error.message : String(error),
+        /child timeout/iu,
+      );
+      assert.equal(nextOwnerStarted, false);
+      assert.equal(existsSync(finalPath), false);
+      assert.equal(existsSync(pendingPath), true);
+    } catch (error) {
+      if (!state.killed()) {
+        state.stdoutPipe.emit("error", new Error("test cleanup"));
+      }
+      state.child.emit("close", null);
+      state.stdoutLog.close();
+      state.stderrLog.close();
+      await publication;
+      throw error;
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the Windows tree owner and confirms PID death before publication", async () => {
+    const taskkillCalls: Array<{
+      command: string;
+      args: string[];
+      windowsHide: boolean;
+    }> = [];
+    const aliveChecks: number[] = [];
+    let alive = true;
+    const state = startControlledBenchmarkChild(
+      { timeoutMs: 5, processDeathTimeoutMs: 5 },
+      {
+        platform: "win32",
+        killProcessTree: (pid) => {
+          taskkillCalls.push({
+            command: "taskkill",
+            args: ["/PID", String(pid), "/T", "/F"],
+            windowsHide: true,
+          });
+        },
+        isProcessAlive: (pid) => {
+          aliveChecks.push(pid);
+          return alive;
+        },
+        processDeathPollMs: 1,
+        processDeathTimeoutMs: 100,
+      },
+    );
+    const outputDir = mkdtempSync(join(tmpdir(), "sdl-windows-tree-timeout-"));
+    const pendingPath = join(outputDir, "result.json.pending");
+    const finalPath = join(outputDir, "result.json");
+    writeFileSync(pendingPath, "ready", "utf8");
+    let settled = false;
+    let nextOwnerStarted = false;
+    const publication = state.promise.then(
+      () => {
+        settled = true;
+        nextOwnerStarted = true;
+        fs.renameSync(pendingPath, finalPath);
+        return new Error("Expected child timeout");
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+
+    try {
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 25),
+      );
+      assert.deepEqual(taskkillCalls, [
+        {
+          command: "taskkill",
+          args: ["/PID", "42424", "/T", "/F"],
+          windowsHide: true,
+        },
+      ]);
+      assert.ok(aliveChecks.length > 0);
+      assert.equal(settled, false);
+      assert.equal(nextOwnerStarted, false);
+      assert.equal(existsSync(finalPath), false);
+
+      alive = false;
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 5),
+      );
+      assert.ok(aliveChecks.length > 1);
+      assert.equal(settled, false);
+
+      state.child.emit("close", null);
+      await nextEventLoopTurn();
+      assert.equal(settled, false);
+
+      state.stdoutLog.close();
+      await nextEventLoopTurn();
+      assert.equal(settled, false);
+
+      state.stderrLog.close();
+      const error = await publication;
+      assert.match(
+        error instanceof Error ? error.message : String(error),
+        /child timeout/iu,
+      );
+      assert.equal(nextOwnerStarted, false);
+      assert.equal(existsSync(finalPath), false);
+      assert.equal(existsSync(pendingPath), true);
+    } catch (error) {
+      alive = false;
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 5),
+      );
+      state.child.emit("close", null);
+      state.stdoutLog.close();
+      state.stderrLog.close();
+      await publication;
+      throw error;
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for POSIX process-group death after the detached leader exits", async () => {
+    const livenessChecks: number[] = [];
+    const killPhases: string[] = [];
+    let leaderAlive = true;
+    let groupAlive = true;
+    let childClosed = false;
+    let logsClosed = false;
+    const state = startControlledBenchmarkChild(
+      { timeoutMs: 5, processDeathTimeoutMs: 100 },
+      {
+        platform: "linux",
+        killProcessTree: () => {
+          killPhases.push("SIGTERM");
+          leaderAlive = false;
+          setTimeout(() => {
+            killPhases.push("SIGKILL");
+            groupAlive = false;
+          }, 30);
+        },
+        isProcessAlive: (target) => {
+          livenessChecks.push(target);
+          if (target === 42_424) return leaderAlive;
+          if (target === -42_424) return groupAlive;
+          throw new Error(`Unexpected process target ${target}`);
+        },
+        processDeathPollMs: 1,
+        processDeathTimeoutMs: 100,
+      },
+    );
+    const outputDir = mkdtempSync(join(tmpdir(), "sdl-posix-group-timeout-"));
+    const pendingPath = join(outputDir, "result.json.pending");
+    const finalPath = join(outputDir, "result.json");
+    writeFileSync(pendingPath, "ready", "utf8");
+    let settled = false;
+    let nextOwnerStarted = false;
+    const publication = state.promise.then(
+      () => {
+        settled = true;
+        nextOwnerStarted = true;
+        fs.renameSync(pendingPath, finalPath);
+        return new Error("Expected child timeout");
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    const closeLeaderBoundary = () => {
+      if (!childClosed) {
+        childClosed = true;
+        state.child.emit("close", null);
+      }
+      if (!logsClosed) {
+        logsClosed = true;
+        state.stdoutLog.close();
+        state.stderrLog.close();
+      }
+    };
+
+    try {
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 15),
+      );
+      assert.deepEqual(killPhases, ["SIGTERM"]);
+      closeLeaderBoundary();
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 5),
+      );
+
+      assert.equal(groupAlive, true);
+      assert.equal(settled, false);
+      assert.equal(nextOwnerStarted, false);
+      assert.equal(existsSync(finalPath), false);
+
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 25),
+      );
+      const error = await publication;
+      assert.deepEqual(killPhases, ["SIGTERM", "SIGKILL"]);
+      assert.ok(livenessChecks.includes(-42_424));
+      assert.match(
+        error instanceof Error ? error.message : String(error),
+        /child timeout/iu,
+      );
+      assert.equal(nextOwnerStarted, false);
+      assert.equal(existsSync(finalPath), false);
+      assert.equal(existsSync(pendingPath), true);
+    } catch (error) {
+      closeLeaderBoundary();
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 35),
+      );
+      await publication;
+      throw error;
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it(
+    "confirms POSIX group death after the real delayed SIGKILL boundary",
+    { timeout: RUNTIME_SIGKILL_GRACE_MS + 2_000 },
+    async () => {
+      const killPhases: string[] = [];
+      let groupAlive = true;
+      const state = startControlledBenchmarkChild(
+        { timeoutMs: 5 },
+        {
+          platform: "linux",
+          killProcessTree: () => {
+            killPhases.push("SIGTERM");
+            setTimeout(() => {
+              killPhases.push("SIGKILL");
+              groupAlive = false;
+            }, RUNTIME_SIGKILL_GRACE_MS);
+          },
+          isProcessAlive: (target) => {
+            assert.equal(target, -42_424);
+            return groupAlive;
+          },
+          processDeathPollMs: 250,
+        },
+      );
+      const rejection = state.promise.then(
+        () => new Error("Expected child timeout"),
+        (error: unknown) => error,
+      );
+
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 15),
+      );
+      state.child.emit("close", null);
+      state.stdoutLog.close();
+      state.stderrLog.close();
+
+      const observed = await Promise.race([
+        rejection.then((error) => ({ status: "settled" as const, error })),
+        new Promise<{ status: "deadline" }>((resolvePromise) =>
+          setTimeout(
+            () => resolvePromise({ status: "deadline" }),
+            RUNTIME_SIGKILL_GRACE_MS + 750,
+          ),
+        ),
+      ]);
+
+      assert.equal(observed.status, "settled");
+      assert.deepEqual(killPhases, ["SIGTERM", "SIGKILL"]);
+      if (observed.status === "settled") {
+        assert.match(
+          observed.error instanceof Error
+            ? observed.error.message
+            : String(observed.error),
+          /child timeout/iu,
+        );
+      }
+    },
+  );
+
   it("continues after a valid threshold failure and persists every repeat", async () => {
     const fixture = createExternalFixture(2);
     let calls = 0;
@@ -1818,7 +2335,10 @@ describe("external benchmark child execution and complete repeat count", () => {
 
   it("waits for child and log closes after a writable log failure", async () => {
     await assertStreamFailureWaitsForCleanup((state) => {
-      state.stdoutLog.stream.emit("error", new Error("forced writable failure"));
+      state.stdoutLog.stream.emit(
+        "error",
+        new Error("forced writable failure"),
+      );
     });
   });
 
@@ -1857,7 +2377,6 @@ describe("external benchmark child execution and complete repeat count", () => {
     assert.equal(fs.readFileSync(stdoutPath, "utf8"), "out");
   });
 });
-
 
 function makeRawPayload(passed = true) {
   const evaluations = RAW_THRESHOLD_PAIRS.map(([category, metricName]) => ({
@@ -1987,10 +2506,9 @@ describe("strict thresholdResult evidence and verifier", () => {
       files: fingerprintDbFamily(primary).files,
       sha256: fingerprintDbFamily(primary).sha256,
     });
-    assert.throws(
-      () => writeDbFamilyFingerprintFile(primary, output),
-      { code: "EEXIST" },
-    );
+    assert.throws(() => writeDbFamilyFingerprintFile(primary, output), {
+      code: "EEXIST",
+    });
 
     const absentOutput = join(root, "absent.json");
     writeDbFamilyFingerprintFile(join(root, "absent.lbug"), absentOutput);

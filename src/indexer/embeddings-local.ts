@@ -81,6 +81,10 @@ export interface OnnxEmbeddingSession {
   dispose(): void;
 }
 
+export interface OnnxEmbeddingSessionOptions {
+  deterministic?: boolean;
+}
+
 // ── Runtime detection ────────────────────────────────────────────────────────
 
 let cachedRuntime: LocalEmbeddingRuntime | null = null;
@@ -153,19 +157,27 @@ const INFERENCE_BATCH_SIZE = 32;
  */
 export async function createOnnxSession(
   modelName: string,
+  options: OnnxEmbeddingSessionOptions = {},
 ): Promise<OnnxEmbeddingSession> {
-  const existing = sessionCache.get(modelName);
+  const cacheKey = `${modelName}\u0000${
+    options.deterministic === true ? "deterministic" : "throughput"
+  }`;
+  const existing = sessionCache.get(cacheKey);
   if (existing) {
     return existing;
   }
 
-  const sessionPromise = createOnnxSessionInternal(modelName);
-  sessionCache.set(modelName, sessionPromise);
+  const sessionPromise = createOnnxSessionInternal(
+    modelName,
+    cacheKey,
+    options,
+  );
+  sessionCache.set(cacheKey, sessionPromise);
 
   try {
     return await sessionPromise;
   } catch (error) {
-    sessionCache.delete(modelName);
+    sessionCache.delete(cacheKey);
     throw error;
   }
 }
@@ -247,8 +259,59 @@ export function resolveExecutionProviders(
   return result;
 }
 
+export function resolveEmbeddingSessionOptions({
+  requestedProviders,
+  onnxConfig,
+  deterministic,
+  autoThreads = availableParallelism(),
+  platformOverride,
+}: {
+  requestedProviders: readonly string[] | undefined;
+  onnxConfig:
+    | {
+        intraOpNumThreads?: number;
+        interOpNumThreads?: number;
+        executionMode?: "sequential" | "parallel";
+      }
+    | undefined;
+  deterministic: boolean;
+  autoThreads?: number;
+  platformOverride?: readonly string[];
+}): {
+  executionProviders: string[];
+  intraOpNumThreads: number;
+  interOpNumThreads: number;
+  executionMode: "sequential" | "parallel";
+} {
+  if (deterministic) {
+    return {
+      executionProviders: ["cpu"],
+      intraOpNumThreads: 1,
+      interOpNumThreads: 1,
+      executionMode: "sequential",
+    };
+  }
+  return {
+    executionProviders: resolveExecutionProviders(
+      requestedProviders,
+      platformOverride,
+    ),
+    intraOpNumThreads:
+      onnxConfig?.intraOpNumThreads && onnxConfig.intraOpNumThreads > 0
+        ? onnxConfig.intraOpNumThreads
+        : autoThreads,
+    interOpNumThreads:
+      onnxConfig?.interOpNumThreads && onnxConfig.interOpNumThreads > 0
+        ? onnxConfig.interOpNumThreads
+        : 1,
+    executionMode: onnxConfig?.executionMode ?? "sequential",
+  };
+}
+
 async function createOnnxSessionInternal(
   modelName: string,
+  cacheKey: string,
+  options: OnnxEmbeddingSessionOptions,
 ): Promise<OnnxEmbeddingSession> {
   const runtime = await ensureLocalEmbeddingRuntime();
   if (!runtime.available) {
@@ -280,28 +343,18 @@ async function createOnnxSessionInternal(
     Tokenizer: { fromFile(path: string): HfTokenizer };
   };
 
-  // Resolve ORT thread-pool sizing from semantic.onnx config. Default 0
-  // (== "auto") resolves to the visible logical-thread count via
-  // `os.availableParallelism()`. ORT's own default is physical cores, which
-  // leaves SMT lanes idle; on the AMD 9000 X3D series this halves further
-  // because the Provider Driver pins single-process workloads to one CCD.
-  const autoThreads = availableParallelism();
-  const intraOpNumThreads =
-    onnxConfig?.intraOpNumThreads && onnxConfig.intraOpNumThreads > 0
-      ? onnxConfig.intraOpNumThreads
-      : autoThreads;
-  const interOpNumThreads =
-    onnxConfig?.interOpNumThreads && onnxConfig.interOpNumThreads > 0
-      ? onnxConfig.interOpNumThreads
-      : 1;
-  const executionMode = onnxConfig?.executionMode ?? "sequential";
-
-  // Resolve execution providers: filter user list against the platform's
-  // bundled `onnxruntime-node` build, append `"cpu"` as final fallback so
-  // a missing GPU provider can never strand session creation.
-  const executionProviders = resolveExecutionProviders(
-    appConfig.semantic?.executionProviders,
-  );
+  // Retrieval needs byte-stable query vectors; indexing keeps the configured
+  // throughput profile in a separate cached session.
+  const {
+    executionProviders,
+    intraOpNumThreads,
+    interOpNumThreads,
+    executionMode,
+  } = resolveEmbeddingSessionOptions({
+    requestedProviders: appConfig.semantic?.executionProviders,
+    onnxConfig,
+    deterministic: options.deterministic === true,
+  });
 
   logger.info(
     `ONNX session "${modelName}" thread config: intra=${intraOpNumThreads}, inter=${interOpNumThreads}, mode=${executionMode}, providers=[${executionProviders.join(", ")}]`,
@@ -354,7 +407,7 @@ async function createOnnxSessionInternal(
     },
 
     dispose(): void {
-      sessionCache.delete(modelName);
+      sessionCache.delete(cacheKey);
     },
   };
 

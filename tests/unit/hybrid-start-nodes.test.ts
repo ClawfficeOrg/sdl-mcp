@@ -309,4 +309,32 @@ describe("start-node-resolver — hybrid retrieval integration (Stage 2)", () =>
       "should reference retrieval evidence gathering",
     );
   });
+
+  it("routes taskText through the shared candidate core and preserves slice seeds", () => {
+    const ladybugSource = src.slice(
+      src.indexOf("export async function resolveStartNodesLadybug"),
+      src.indexOf("async function collectEntryFirstHopSymbolsLadybug"),
+    );
+    const taskTextBlock =
+      ladybugSource.match(
+        /if \(request\.taskText\) \{[\s\S]*?\/\/ Fallback: if taskText/,
+      )?.[0] ?? "";
+    const explicitEntryReturn = ladybugSource.indexOf(
+      "if ((request.entrySymbols?.length ?? 0) > 0)",
+    );
+    const sharedCoreCall = ladybugSource.indexOf(
+      "searchContextCandidates(",
+    );
+
+    assert.match(taskTextBlock, /searchContextCandidates\(/);
+    assert.doesNotMatch(taskTextBlock, /hybridSearch\(/);
+    assert.ok(explicitEntryReturn >= 0 && explicitEntryReturn < sharedCoreCall);
+    assert.match(ladybugSource, /if \(request\.stackTrace\)/);
+    assert.match(ladybugSource, /if \(request\.failingTestPath\)/);
+    assert.match(ladybugSource, /if \(request\.editedFiles\)/);
+    assert.match(
+      ladybugSource,
+      /return \{ startNodes: sortedNodes, retrievalEvidence, hybridSearchItems \};/,
+    );
+  });
 });

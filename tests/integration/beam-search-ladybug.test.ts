@@ -655,4 +655,181 @@ describe("beamSearchLadybug (integration)", () => {
       );
     },
   );
+
+  it(
+    "does not traverse stale durable edges from a captured zero-edge symbol",
+    { skip: !ladybugAvailable },
+    async () => {
+      const kConn = conn as unknown as import("kuzu").Connection;
+      const now = "2026-07-27T00:00:00.000Z";
+      const repoId = "repo-overlay-beam";
+      const fileId = "overlay-file";
+      const overlaySymbol = (symbolId: string) => ({
+        symbolId,
+        repoId,
+        fileId,
+        kind: "function",
+        name: symbolId,
+        exported: true,
+        visibility: "public",
+        language: "typescript",
+        rangeStartLine: 1,
+        rangeStartCol: 0,
+        rangeEndLine: 3,
+        rangeEndCol: 1,
+        astFingerprint: `${symbolId}-fp`,
+        signatureJson: null,
+        summary: null,
+        invariantsJson: null,
+        sideEffectsJson: null,
+        roleTagsJson: null,
+        searchText: symbolId,
+        updatedAt: now,
+      });
+      const overlayFile = {
+        fileId,
+        repoId,
+        relPath: "src/overlay-beam.ts",
+        contentHash: "overlay-hash",
+        language: "typescript",
+        byteSize: 100,
+        lastIndexedAt: null,
+        directory: "src",
+      };
+      const coordinator = await import(
+        "../../dist/live-index/coordinator.js"
+      );
+      const overlayReader = await import(
+        "../../dist/live-index/overlay-reader.js"
+      );
+      coordinator.resetDefaultLiveIndexCoordinator();
+      overlayReader.clearSnapshotCache();
+      const overlayContent =
+        "export function overlayRoot() { overlayChild(); }\nfunction overlayChild() {}";
+      const overlayStore = coordinator.getDefaultOverlayStore();
+      overlayStore.upsertDraft({
+        repoId,
+        eventType: "change",
+        filePath: overlayFile.relPath,
+        content: overlayContent,
+        language: "typescript",
+        version: 1,
+        dirty: true,
+        timestamp: now,
+      });
+      overlayStore.setParseResult(
+        repoId,
+        overlayFile.relPath,
+        1,
+        {
+          version: 1,
+          file: overlayFile,
+          symbols: [
+            overlaySymbol("overlayRoot"),
+            overlaySymbol("overlayChild"),
+          ],
+          edges: [
+            {
+              repoId,
+              fromSymbolId: "overlayRoot",
+              toSymbolId: "overlayChild",
+              edgeType: "call",
+              weight: 1,
+              confidence: 1,
+              resolution: "exact",
+              resolverId: "pass1-generic",
+              resolutionPhase: "pass1",
+              provenance: "call:overlayChild",
+              createdAt: now,
+            },
+          ],
+          references: [],
+        },
+        now,
+      );
+      const overlaySnapshot = overlayReader.getOverlaySnapshot(repoId);
+
+      await queries.upsertRepo(kConn, {
+        repoId,
+        rootPath: "C:/repo-overlay-beam",
+        configJson: "{}",
+        createdAt: now,
+      });
+      await queries.upsertFile(kConn, {
+        ...overlayFile,
+        contentHash: "durable-hash",
+        lastIndexedAt: now,
+      });
+      await queries.upsertFile(kConn, {
+        ...overlayFile,
+        fileId: "stale-durable-file",
+        relPath: "src/stale-durable.ts",
+        contentHash: "stale-durable-hash",
+        lastIndexedAt: now,
+      });
+      for (const symbolId of [
+        "overlayRoot",
+        "overlayChild",
+        "staleGrandchild",
+      ]) {
+        await queries.upsertSymbol(kConn, {
+          ...overlaySymbol(symbolId),
+          fileId:
+            symbolId === "staleGrandchild"
+              ? "stale-durable-file"
+              : symbolId === "overlayChild"
+                ? "missing-durable-overlay-file"
+                : fileId,
+          name:
+            symbolId === "overlayRoot"
+              ? "DurableRootMismatch"
+              : "DurableChildMismatch",
+        });
+      }
+      await queries.insertEdges(kConn, [
+        {
+          repoId,
+          fromSymbolId: "overlayChild",
+          toSymbolId: "staleGrandchild",
+          edgeType: "call",
+          weight: 1,
+          confidence: 1,
+          resolution: "exact",
+          provenance: "stale-durable",
+          createdAt: now,
+        },
+      ]);
+      assert.deepEqual(
+        overlaySnapshot.outgoingEdgesBySymbolId.get("overlayChild"),
+        [],
+      );
+      const durableChildEdges =
+        await queries.getEdgesFromSymbolsForSlice(kConn, ["overlayChild"]);
+      assert.equal(
+        durableChildEdges.get("overlayChild")?.[0]?.toSymbolId,
+        "staleGrandchild",
+      );
+      const result = await beamSearch.beamSearchLadybug(
+        kConn,
+        repoId,
+        [{ symbolId: "overlayChild", source: "entrySymbol" }],
+        { maxCards: 10, maxEstimatedTokens: 100_000 },
+        {
+          entrySymbols: ["overlayChild"],
+          direction: "out",
+          maxDepth: null,
+        },
+        { call: 1, import: 0.6, config: 0.8 },
+        0,
+        undefined,
+        undefined,
+        overlaySnapshot,
+      );
+
+      assert.ok(result.sliceCards.has("overlayChild"));
+      assert.equal(result.sliceCards.has("staleGrandchild"), false);
+      coordinator.resetDefaultLiveIndexCoordinator();
+      overlayReader.clearSnapshotCache();
+    },
+  );
 });

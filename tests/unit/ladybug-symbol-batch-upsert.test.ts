@@ -578,6 +578,45 @@ describe("upsertSymbolBatch — integration", () => {
   );
 
   it(
+    "getSymbolsByFile enforces deterministic top-K ordering in LadybugDB",
+    { skip: !ladybugAvailable },
+    async () => {
+      const conn_ = conn as unknown as import("kuzu").Connection;
+      await queries.upsertSymbolBatch(conn_, [
+        makeSymbol("nonexported-line-0", repoId, fileId, "nonexportedZero", {
+          exported: false,
+          rangeStartLine: 0,
+        }),
+        makeSymbol("exported-z-line-5", repoId, fileId, "exportedZ", {
+          rangeStartLine: 5,
+        }),
+        makeSymbol("exported-a-line-5", repoId, fileId, "exportedA", {
+          rangeStartLine: 5,
+        }),
+        makeSymbol("exported-line-2", repoId, fileId, "exportedTwo", {
+          rangeStartLine: 2,
+        }),
+        makeSymbol("nonexported-line-1", repoId, fileId, "nonexportedOne", {
+          exported: false,
+          rangeStartLine: 1,
+        }),
+      ]);
+
+      const limited = await queries.getSymbolsByFile(conn_, fileId, 3);
+
+      assert.deepStrictEqual(
+        limited.map((symbol) => symbol.symbolId),
+        ["exported-line-2", "exported-a-line-5", "exported-z-line-5"],
+      );
+      assert.strictEqual(
+        (await queries.getSymbolsByFile(conn_, fileId)).length,
+        5,
+        "omitting the limit must preserve existing unbounded callers",
+      );
+    },
+  );
+
+  it(
     "rollback propagates — symbols not visible after outer transaction aborts",
     { skip: !ladybugAvailable },
     async () => {

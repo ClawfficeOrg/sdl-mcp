@@ -71,6 +71,11 @@ const REQUIRE_PROVIDER_CONTEXT_CARD_INVARIANT =
   process.env.SDL_CONTEXT_QUALITY_REQUIRE_PROVIDER_INVARIANT === "1";
 const RUN_SEMANTIC_ONLY =
   process.env.SDL_CONTEXT_QUALITY_VARIANT === "semantic";
+const RUN_V2_SHADOW = process.env.SDL_CONTEXT_QUALITY_V2_SHADOW === "1";
+const CANONICAL_V2_PROBE_OUTPUT_PATH = process.env
+  .SDL_CONTEXT_QUALITY_CANONICAL_V2_PROBE_OUTPUT
+  ? resolve(process.env.SDL_CONTEXT_QUALITY_CANONICAL_V2_PROBE_OUTPUT)
+  : undefined;
 const CASE_DETAIL_MODE = process.env.SDL_CONTEXT_QUALITY_CASE_DETAILS;
 const INCLUDE_CASE_DETAILS =
   CASE_DETAIL_MODE === "1" || CASE_DETAIL_MODE === "missing";
@@ -91,6 +96,7 @@ const NOISE_RATE_MAX = 10;
 const SCOPED_PRECISE_P95_MAX_MS = 250;
 const PAIRED_LATENCY_WARMUP_RUNS = 1;
 const PAIRED_LATENCY_SAMPLE_RUNS = 3;
+const V1_DEFAULT_CONTEXT_TOKEN_BUDGET = 50_000;
 const REPORT_CASE_IDS = new Set([
   "review-precise-tool-qa-tests",
   "review-broad-sdl-tool-functionality",
@@ -108,6 +114,7 @@ interface BenchmarkCase {
   usefulSymbols?: string[];
   negativeSymbols?: string[];
   negativePaths?: string[];
+  v2HardFloor?: V2HardFloorLabels;
   taskType: "debug" | "explain" | "review" | "implement";
   contextMode: "precise" | "broad";
   taskText: string;
@@ -116,6 +123,12 @@ interface BenchmarkCase {
   requireAnswer: boolean;
   expectedUsefulSymbols?: string[];
   unexpectedSymbols?: string[];
+}
+
+interface V2HardFloorLabels {
+  prioritySymbols: string[];
+  unrelatedSymbols: string[];
+  codeBearingSymbols: string[];
 }
 
 function assertBenchmarkCasesSelected(
@@ -132,6 +145,7 @@ function assertBenchmarkCasesSelected(
 interface Evidence {
   type: string;
   reference: string;
+  path?: string;
   summary: string;
   timestamp: number;
 }
@@ -139,7 +153,9 @@ interface Evidence {
 interface ContextResult {
   finalEvidence?: Evidence[];
   evidence?: unknown[];
+  benchmarkEvidence?: unknown[];
   success: boolean;
+  pureEvidence?: boolean;
   answer?: string;
   actionsTaken?: Array<{
     type: string;
@@ -154,6 +170,8 @@ interface NormalizedCaseMetrics {
   explicitNoiseTokens: number;
   explicitNoiseTokenRatio: number;
   evidenceTokensPerRequiredHit: number | null;
+  rankedSymbols: string[];
+  codeBearingSymbols: string[];
 }
 
 interface RelevanceCaseMetrics extends NormalizedCaseMetrics {
@@ -164,10 +182,25 @@ interface RelevanceCaseMetrics extends NormalizedCaseMetrics {
   usefulSymbols: string[];
   negativeSymbols: string[];
   negativePaths: string[];
+  v2HardFloor: V2HardFloorLabels | null;
 }
 
 interface ContextEngineLike {
   buildContext: (task: unknown) => Promise<ContextResult>;
+}
+
+type ContextV2Request = import("../../dist/context/types.js").ContextV2Request;
+type ContextEngineV2Result =
+  import("../../dist/context/types.js").ContextEngineV2Result;
+type ContextPayload = import("../../dist/context/types.js").ContextPayload;
+type ContextCandidate = import("../../dist/context/types.js").ContextCandidate;
+type RetrievalCapabilities =
+  import("../../dist/retrieval/types.js").RetrievalCapabilities;
+type RetrievalLaneOutcome =
+  import("../../dist/retrieval/types.js").RetrievalLaneOutcome;
+
+interface ContextEngineV2Like {
+  buildContext: (request: ContextV2Request) => Promise<ContextEngineV2Result>;
 }
 
 interface Variant {
@@ -244,6 +277,7 @@ const metrics = {
   repoAvailable: false,
   availabilityReason: "not checked",
   variants: new Map<string, VariantMetrics>(),
+  v2Shadow: createMetrics("v2-shadow"),
   pairedLatency: undefined as
     | Awaited<ReturnType<typeof measurePairedLatency>>
     | undefined,
@@ -264,7 +298,11 @@ const metrics = {
 let allCases: BenchmarkCase[] = [];
 let cases: BenchmarkCase[] = [];
 let contextEngine: ContextEngineLike | undefined;
-let closeLadybugDb: (() => Promise<void>) | undefined;
+let contextEngineV2: ContextEngineLike | undefined;
+let rawContextEngineV2: ContextEngineV2Like | undefined;
+type CloseLadybugDb = (options?: { strict?: boolean }) => Promise<void>;
+
+let closeLadybugDb: CloseLadybugDb | undefined;
 let ladybugClosedBeforeArtifact = false;
 let ladybugConn: LadybugConnection | undefined;
 let ladybugQueries:
@@ -348,16 +386,347 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+const SUCCESSFUL_CONTEXT_RETRIEVAL_LEVELS = [
+  "hybrid",
+  "hybrid-partial",
+  "lexical",
+  "graph-only",
+] as const satisfies readonly ContextPayload["retrieval"]["level"][];
+
+function isContextPayload(
+  result: ContextEngineV2Result,
+): result is ContextPayload {
+  return !("isError" in result);
+}
+
+function stableBenchmarkJson(value: unknown): string {
+  return JSON.stringify(value, (_key, nested) =>
+    isRecord(nested)
+      ? Object.fromEntries(
+          Object.entries(nested).sort(([left], [right]) =>
+            left.localeCompare(right),
+          ),
+        )
+      : nested,
+  );
+}
+
+async function assertCanonicalV2PayloadDeterminism(
+  engine: ContextEngineV2Like,
+  benchmarkCase: BenchmarkCase,
+): Promise<Record<string, string>> {
+  const request: ContextV2Request = {
+    repoId: REPO_ID,
+    taskType: benchmarkCase.taskType,
+    taskText: benchmarkCase.taskText,
+    budget: {
+      maxTokens: benchmarkCase.budgetTokens ?? V1_DEFAULT_CONTEXT_TOKEN_BUDGET,
+    },
+    focusPaths: benchmarkCase.focusPaths,
+    chatMentions: benchmarkCase.chatMentions,
+    includeTests: benchmarkCase.includeTests,
+  };
+  const first = await engine.buildContext(request);
+  const second = await engine.buildContext(request);
+  assert.ok(
+    isContextPayload(first),
+    "first V2 determinism result must be a payload",
+  );
+  assert.ok(
+    isContextPayload(second),
+    "second V2 determinism result must be a payload",
+  );
+
+  const { serializeContextPayload } =
+    await import("../../dist/context/serialize.js");
+  const firstBytes = serializeContextPayload(first);
+  const secondBytes = serializeContextPayload(second);
+  assert.equal(
+    secondBytes,
+    firstBytes,
+    `canonical V2 bytes changed across repeated live ${first.retrieval.level} retrieval`,
+  );
+  return {
+    live: firstBytes,
+    ...(await serializeControlledV2DegradationResults(request)),
+  };
+}
+
+async function serializeControlledV2DegradationResults(
+  request: ContextV2Request,
+): Promise<Record<string, string>> {
+  const { ContextEngineV2, buildRetrievalState } =
+    await import("../../dist/context/engine.js");
+  const { serializeContextPayload } =
+    await import("../../dist/context/serialize.js");
+  const noCapabilities: RetrievalCapabilities = {
+    fts: false,
+    fileSummaryFts: false,
+    vectorNomic: false,
+    vectorJinaCode: false,
+    coveragePermille: {
+      symbolVector: 0,
+      fileSummaryVector: 0,
+    },
+  };
+  const hybridCapabilities: RetrievalCapabilities = {
+    ...noCapabilities,
+    fts: true,
+    vectorNomic: true,
+    coveragePermille: {
+      symbolVector: 1000,
+      fileSummaryVector: 0,
+    },
+  };
+  const succeeded: RetrievalLaneOutcome = {
+    available: true,
+    attempted: true,
+    succeeded: true,
+    failed: false,
+  };
+  const failed: RetrievalLaneOutcome = {
+    available: true,
+    attempted: true,
+    succeeded: false,
+    failed: true,
+  };
+  const exactCandidate: ContextCandidate = {
+    symbolId: "controlled-exact",
+    path: "src/controlled-exact.ts",
+    rank: 1,
+    tier: 0,
+    lanes: ["exactIdentifier"],
+    estimates: { card: 10, skeleton: 20, hotPath: 30 },
+  };
+  const scenarios = [
+    {
+      level: "hybrid",
+      capabilities: hybridCapabilities,
+      candidates: [],
+      outcomes: new Map<string, RetrievalLaneOutcome>([
+        ["symbol:fts", succeeded],
+        ["symbol:vector:nomic", succeeded],
+      ]),
+    },
+    {
+      level: "hybrid-partial",
+      capabilities: hybridCapabilities,
+      candidates: [],
+      outcomes: new Map<string, RetrievalLaneOutcome>([
+        ["symbol:fts", succeeded],
+        ["symbol:vector:nomic", failed],
+      ]),
+    },
+    {
+      level: "lexical",
+      capabilities: { ...noCapabilities, fts: true },
+      candidates: [],
+      outcomes: new Map<string, RetrievalLaneOutcome>([
+        ["symbol:fts", succeeded],
+      ]),
+    },
+    {
+      level: "graph-only",
+      capabilities: noCapabilities,
+      candidates: [exactCandidate],
+      outcomes: new Map<string, RetrievalLaneOutcome>(),
+    },
+    {
+      level: "insufficient",
+      capabilities: { ...noCapabilities, fts: true },
+      candidates: [],
+      outcomes: new Map<string, RetrievalLaneOutcome>([
+        ["symbol:fts", failed],
+      ]),
+    },
+  ] as const;
+  const serialized: Record<string, string> = {};
+
+  for (const scenario of scenarios) {
+    const controlledEngine = new ContextEngineV2({
+      runReadSnapshot: async (_repoId, fn) => fn({}),
+      retrieve: async (_request, profile, runtime) => {
+        const retrieval = buildRetrievalState(
+          scenario.capabilities,
+          scenario.candidates,
+          scenario.outcomes,
+          profile,
+        );
+        assert.equal(retrieval.level, scenario.level);
+        return {
+          ...retrieval,
+          candidates: [...scenario.candidates],
+          runtime,
+        };
+      },
+      expand: async ({ candidates }) => [...candidates],
+      prepareHydration: async ({ selected }) => ({
+        selected: Object.freeze([...selected]),
+        cards: Object.freeze([]),
+        durableEdges: new Map(),
+        skeletons: new Map(),
+        hotPaths: new Map(),
+        overlaySnapshot: {
+          repoId: request.repoId,
+          touchedFileIds: new Set(),
+          symbolsById: new Map(),
+          filesById: new Map(),
+          outgoingEdgesBySymbolId: new Map(),
+        },
+      }),
+      hydrate: async ({ selected }) => ({
+        evidence: selected.flatMap(({ candidate, rungs }) =>
+          rungs.map((rung) => ({
+            rung,
+            symbolId: candidate.symbolId,
+            path: candidate.path,
+            rank: candidate.rank,
+            tier: candidate.tier,
+            lanes: candidate.lanes,
+            content: `controlled ${rung}`,
+          })),
+        ),
+        edges: [],
+        unavailable: [],
+      }),
+    });
+    const first = await controlledEngine.buildContext(request);
+    const second = await controlledEngine.buildContext(request);
+    let firstBytes: string;
+    let secondBytes: string;
+
+    if (scenario.level === "insufficient") {
+      assert.equal(isContextPayload(first), false);
+      assert.equal(isContextPayload(second), false);
+      if (isContextPayload(first) || isContextPayload(second)) {
+        throw new Error("insufficient retrieval returned a successful payload");
+      }
+      assert.equal(first.error.code, "CONTEXT_RETRIEVAL_BACKEND_FAILED");
+      assert.equal(second.error.code, "CONTEXT_RETRIEVAL_BACKEND_FAILED");
+      firstBytes = stableBenchmarkJson(first);
+      secondBytes = stableBenchmarkJson(second);
+    } else {
+      assert.ok(isContextPayload(first));
+      assert.ok(isContextPayload(second));
+      assert.equal(first.retrieval.level, scenario.level);
+      assert.equal(second.retrieval.level, scenario.level);
+      firstBytes = serializeContextPayload(first);
+      secondBytes = serializeContextPayload(second);
+    }
+    assert.equal(
+      secondBytes,
+      firstBytes,
+      `canonical V2 bytes changed across repeated ${scenario.level} retrieval`,
+    );
+    serialized[scenario.level] = firstBytes;
+  }
+  return serialized;
+}
+
+function createV2BenchmarkAdapter(
+  engine: ContextEngineV2Like,
+): ContextEngineLike {
+  return {
+    buildContext: async (task) => {
+      if (!isRecord(task))
+        throw new TypeError("benchmark task must be an object");
+      const options = isRecord(task.options) ? task.options : {};
+      const budget = isRecord(task.budget) ? task.budget : {};
+      if (
+        typeof task.repoId !== "string" ||
+        typeof task.taskText !== "string" ||
+        !["debug", "explain", "review", "implement"].includes(
+          String(task.taskType),
+        )
+      ) {
+        throw new TypeError(
+          "benchmark task is missing required context fields",
+        );
+      }
+      const stringArray = (value: unknown): string[] | undefined =>
+        Array.isArray(value) && value.every((item) => typeof item === "string")
+          ? value
+          : undefined;
+      const request: ContextV2Request = {
+        repoId: task.repoId,
+        taskType: task.taskType as ContextV2Request["taskType"],
+        taskText: task.taskText,
+        budget: {
+          maxTokens:
+            typeof budget.maxTokens === "number"
+              ? budget.maxTokens
+              : V1_DEFAULT_CONTEXT_TOKEN_BUDGET,
+        },
+        ...(stringArray(options.focusPaths)
+          ? { focusPaths: stringArray(options.focusPaths) }
+          : {}),
+        ...(stringArray(options.focusSymbols)
+          ? { focusSymbols: stringArray(options.focusSymbols) }
+          : {}),
+        ...(stringArray(options.chatMentions)
+          ? { chatMentions: stringArray(options.chatMentions) }
+          : {}),
+        ...(typeof options.includeTests === "boolean"
+          ? { includeTests: options.includeTests }
+          : {}),
+      };
+      const v2Result = await engine.buildContext(request);
+      const resultRecord = isRecord(v2Result) ? v2Result : {};
+      const rawEvidence = Array.isArray(resultRecord.evidence)
+        ? resultRecord.evidence
+        : [];
+      const finalEvidence = rawEvidence.flatMap((raw): Evidence[] => {
+        if (!isRecord(raw) || typeof raw.symbolId !== "string") return [];
+        const rung = typeof raw.rung === "string" ? raw.rung : "card";
+        return [
+          {
+            type: rung,
+            reference: `${rung === "hotPath" ? "hotpath" : "symbol"}:${raw.symbolId}`,
+            ...(typeof raw.path === "string" ? { path: raw.path } : {}),
+            summary: JSON.stringify(raw.content) ?? "",
+            timestamp: 0,
+          },
+        ];
+      });
+      const errorRecord = isRecord(resultRecord.error)
+        ? resultRecord.error
+        : {};
+      const rawActions =
+        resultRecord.isError === true
+          ? Array.isArray(errorRecord.recovery)
+            ? errorRecord.recovery
+            : []
+          : Array.isArray(resultRecord.nextActions)
+            ? resultRecord.nextActions
+            : [];
+      const actionsTaken = rawActions.flatMap(
+        (raw): Array<{ type: string }> =>
+          isRecord(raw) && typeof raw.id === "string" ? [{ type: raw.id }] : [],
+      );
+      return {
+        success: resultRecord.isError !== true,
+        pureEvidence: true,
+        evidence: rawEvidence,
+        benchmarkEvidence: rawEvidence,
+        finalEvidence,
+        actionsTaken,
+      };
+    },
+  };
+}
+
 let estimateBenchmarkTokens = (text: string): number =>
   Math.ceil(text.length / 4);
 
 function benchmarkEvidenceItems(input: unknown): Record<string, unknown>[] {
   const result = isRecord(input) ? input : {};
-  const evidence = Array.isArray(result.finalEvidence)
-    ? result.finalEvidence
-    : Array.isArray(result.evidence)
-      ? result.evidence
-      : [];
+  const evidence = Array.isArray(result.benchmarkEvidence)
+    ? result.benchmarkEvidence
+    : Array.isArray(result.finalEvidence)
+      ? result.finalEvidence
+      : Array.isArray(result.evidence)
+        ? result.evidence
+        : [];
   return evidence.map((item) => (isRecord(item) ? item : {}));
 }
 
@@ -389,8 +758,17 @@ function normalizeBenchmarkResult(
       typeof item.symbolId === "string" ? item.symbolId : referenceId;
     const symbolId =
       candidateId && symbolNames.has(candidateId) ? candidateId : null;
+    const rung =
+      typeof item.rung === "string"
+        ? item.rung
+        : typeof item.type === "string"
+          ? item.type
+          : reference.startsWith("hotpath:")
+            ? "hotPath"
+            : null;
     return {
       symbolName: symbolId ? (symbolNames.get(symbolId) ?? null) : null,
+      rung,
       path:
         typeof item.path === "string"
           ? item.path
@@ -416,7 +794,7 @@ async function resolveNormalizedBenchmarkResult(
     symbolIds: string[],
   ) => Promise<ReadonlyMap<string, string>>,
   resolvePaths: (
-    evidence: Array<Pick<Evidence, "reference">>,
+    evidence: Array<Pick<Evidence, "path" | "reference">>,
   ) => Promise<Array<string | undefined>>,
 ) {
   const evidence = benchmarkEvidenceItems(input);
@@ -426,6 +804,7 @@ async function resolveNormalizedBenchmarkResult(
     await resolvePaths(
       evidence.map((item) => ({
         reference: typeof item.reference === "string" ? item.reference : "",
+        ...(typeof item.path === "string" ? { path: item.path } : {}),
       })),
     ),
   );
@@ -469,6 +848,16 @@ function measureNormalizedCase(
     explicitNoiseTokenRatio: explicitNoiseTokens / Math.max(1, evidenceTokens),
     evidenceTokensPerRequiredHit:
       requiredHits > 0 ? evidenceTokens / requiredHits : null,
+    rankedSymbols: result.distinctSymbols,
+    codeBearingSymbols: [
+      ...new Set(
+        result.evidence.flatMap(({ rung, symbolName }) =>
+          symbolName && (rung === "skeleton" || rung === "hotPath")
+            ? [symbolName]
+            : [],
+        ),
+      ),
+    ],
   };
 }
 
@@ -537,10 +926,21 @@ async function measurePairedLatency(
   benchmarkCases: readonly BenchmarkCase[],
   baseline: ContextEngineLike,
   control: ContextEngineLike,
-  options: { warmupRuns: number; sampleRuns: number; now?: () => number },
+  options: {
+    warmupRuns: number;
+    sampleRuns: number;
+    now?: () => number;
+  },
 ) {
   const now = options.now ?? performance.now.bind(performance);
   const samples = { baseline: [] as number[], control: [] as number[] };
+  const issues: Array<{
+    lane: "baseline" | "control";
+    caseId: string;
+    iteration: number;
+    kind: "failure" | "timeout";
+    message: string;
+  }> = [];
   const forward = [
     ["baseline", baseline],
     ["control", control],
@@ -555,10 +955,32 @@ async function measurePairedLatency(
     for (const [name, engine] of order) {
       for (const c of benchmarkCases) {
         const startedAt = now();
-        await engine.buildContext(
-          buildTask(c, { name: "default" }, c.focusPaths.length > 0),
-        );
-        if (iteration >= 0) samples[name].push(now() - startedAt);
+        try {
+          const result = await engine.buildContext(
+            buildTask(c, { name: "default" }, c.focusPaths.length > 0),
+          );
+          if (!result.success) {
+            issues.push({
+              lane: name,
+              caseId: c.id,
+              iteration,
+              kind: "failure",
+              message: "context result reported success=false",
+            });
+          } else if (iteration >= 0) {
+            samples[name].push(now() - startedAt);
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          issues.push({
+            lane: name,
+            caseId: c.id,
+            iteration,
+            kind: "failure",
+            message,
+          });
+        }
       }
     }
   }
@@ -575,6 +997,9 @@ async function measurePairedLatency(
       laneLabels: ["baseline", "control"] as const,
       casesPerLanePerSample: benchmarkCases.length,
     },
+    failures: issues.filter(({ kind }) => kind === "failure").length,
+    timeouts: issues.filter(({ kind }) => kind === "timeout").length,
+    issues,
     baseline: summarize(samples.baseline),
     control: summarize(samples.control),
   };
@@ -618,13 +1043,20 @@ function shouldScopeCase(c: BenchmarkCase, selectedCase: boolean): boolean {
 }
 
 async function resolveEvidencePaths(
-  evidence: Array<Pick<Evidence, "reference">>,
+  evidence: Array<Pick<Evidence, "path" | "reference">>,
 ): Promise<Array<string | undefined>> {
   assert.ok(ladybugConn, "LadybugDB connection must be initialized");
   assert.ok(ladybugQueries, "LadybugDB queries must be initialized");
   assert.ok(normalizeEvidencePath, "Path normalizer must be initialized");
 
-  const references = evidence.map(({ reference }) => {
+  const references: Array<{
+    directPath?: string;
+    fileReference?: string;
+    symbolId?: string;
+  }> = evidence.map(({ path, reference }) => {
+    if (path) {
+      return { directPath: normalizeEvidencePath(path) };
+    }
     if (reference.startsWith("symbol:")) {
       return { symbolId: reference.slice("symbol:".length) };
     }
@@ -668,7 +1100,8 @@ async function resolveEvidencePaths(
   }
   const files = await ladybugQueries.getFilesByIds(ladybugConn, [...fileIds]);
 
-  return references.map(({ symbolId, fileReference }) => {
+  return references.map(({ directPath, symbolId, fileReference }) => {
+    if (directPath) return directPath;
     const resolvedFileId = symbolId
       ? symbols.get(symbolId)?.fileId
       : fileReference
@@ -687,6 +1120,7 @@ function hasResolvablePathReference(evidence: Evidence): boolean {
 }
 
 function hasRequiredAnswer(c: BenchmarkCase, result: ContextResult): boolean {
+  if (result.pureEvidence) return true;
   if (!c.requireAnswer) return true;
   const answer = result.answer?.trim();
   return Boolean(answer && !/\[answer (?:removed|truncated)/i.test(answer));
@@ -731,6 +1165,7 @@ async function measureCaseRelevance(
     usefulSymbols: c.usefulSymbols ?? [],
     negativeSymbols: c.negativeSymbols ?? [],
     negativePaths: c.negativePaths ?? [],
+    v2HardFloor: c.v2HardFloor ?? null,
     ...measureNormalizedCase(c, normalized),
   };
 }
@@ -748,16 +1183,14 @@ async function runCase(
   variant: Variant,
   scoped: boolean,
   target: VariantMetrics,
+  engine: ContextEngineLike | undefined = contextEngine,
 ): Promise<void> {
-  assert.ok(
-    contextEngine,
-    "ContextEngine must be initialized before benchmarking",
-  );
+  assert.ok(engine, "ContextEngine must be initialized before benchmarking");
   const startedAt = performance.now();
   recordCaseTotals(target, c);
   let result: ContextResult;
   try {
-    result = await contextEngine.buildContext(buildTask(c, variant, scoped));
+    result = await engine.buildContext(buildTask(c, variant, scoped));
   } catch (error) {
     const durationMs = performance.now() - startedAt;
     target.failures++;
@@ -810,10 +1243,13 @@ async function runCase(
   target.noiseHits += noiseHits;
   target.durationsMs.push(durationMs);
   const relevance = await measureCaseRelevance(c, result);
-  const resolvedByPosition =
-    INCLUDE_EVIDENCE_DETAILS && REPORT_CASE_IDS.has(c.id)
-      ? await resolveEvidencePaths(evidence)
-      : [];
+  const shouldResolveReferences =
+    INCLUDE_EVIDENCE_DETAILS && REPORT_CASE_IDS.has(c.id);
+  const resolvedByPosition = shouldResolveReferences
+    ? await resolveEvidencePaths(evidence)
+    : evidence.map(({ path }) =>
+        path && normalizeEvidencePath ? normalizeEvidencePath(path) : undefined,
+      );
   const selectedPaths = resolvedByPosition.filter(
     (path): path is string => path !== undefined,
   );
@@ -835,7 +1271,7 @@ async function runCase(
       selectedSymbols: selectedSymbolIds(evidence),
       selectedActions: (result.actionsTaken ?? []).map(({ type }) => type),
       selectedReferences: evidence.map(({ reference }) => reference),
-      unresolvedPathReferences: INCLUDE_EVIDENCE_DETAILS
+      unresolvedPathReferences: shouldResolveReferences
         ? evidence.flatMap((item, index) =>
             hasResolvablePathReference(item) &&
             resolvedByPosition[index] === undefined
@@ -868,9 +1304,9 @@ function noiseRate(m: VariantMetrics): number {
 }
 
 function shouldRunOrdinaryQualityGates(
-  recordBaseline = RECORD_BASELINE,
-  runSemanticOnly = RUN_SEMANTIC_ONLY,
-  selectedCaseId = SELECTED_CASE_ID,
+  recordBaseline: boolean,
+  runSemanticOnly: boolean,
+  selectedCaseId: string | undefined,
 ): boolean {
   return !recordBaseline && !runSemanticOnly && selectedCaseId === undefined;
 }
@@ -1086,6 +1522,31 @@ function caseMetricsForArtifact(result: CaseMetrics): Record<string, unknown> {
 }
 
 function variantMetricsForArtifact(m: VariantMetrics): Record<string, unknown> {
+  const relevance = aggregateRelevanceMetrics(m);
+  return {
+    name: m.name,
+    cases: m.cases,
+    failures: m.failures,
+    expectedTotal: m.expectedTotal,
+    usefulHits: m.usefulHits,
+    recallPercent: recall(m),
+    preciseRecallPercent: preciseRecall(m),
+    broadRecallPercent: broadRecall(m),
+    totalEvidenceItems: m.totalEvidenceItems,
+    noiseHits: m.noiseHits,
+    noiseRatePercent: noiseRate(m),
+    relevance,
+    latencyMs: {
+      p50: percentile(m.durationsMs, 50),
+      p95: percentile(m.durationsMs, 95),
+      max: Math.max(0, ...m.durationsMs),
+      total: m.durationsMs.reduce((sum, durationMs) => sum + durationMs, 0),
+    },
+    caseResults: m.caseResults.map(caseMetricsForArtifact),
+  };
+}
+
+function aggregateRelevanceMetrics(m: VariantMetrics) {
   const labeled = m.caseResults.flatMap(({ relevance }) =>
     relevance ? [relevance] : [],
   );
@@ -1102,41 +1563,102 @@ function variantMetricsForArtifact(m: VariantMetrics): Record<string, unknown> {
     primaryRankTotal += result.primarySymbolReciprocalRank;
   }
   return {
-    name: m.name,
-    cases: m.cases,
-    failures: m.failures,
-    expectedTotal: m.expectedTotal,
-    usefulHits: m.usefulHits,
-    recallPercent: recall(m),
-    preciseRecallPercent: preciseRecall(m),
-    broadRecallPercent: broadRecall(m),
-    totalEvidenceItems: m.totalEvidenceItems,
-    noiseHits: m.noiseHits,
-    noiseRatePercent: noiseRate(m),
-    relevance: {
-      labeledCases: labeled.length,
-      requiredSymbols,
-      requiredHits,
-      requiredSymbolRecallPercent: percentage(requiredHits, requiredSymbols),
-      primarySymbolMrr: primaryRankTotal / Math.max(1, labeled.length),
-      evidenceTokens,
-      explicitNoiseTokens: noiseTokens,
-      explicitNoiseTokenRatio: noiseTokens / Math.max(1, evidenceTokens),
-      evidenceTokensPerRequiredHit:
-        requiredHits > 0 ? evidenceTokens / requiredHits : null,
-    },
-    latencyMs: {
-      p50: percentile(m.durationsMs, 50),
-      p95: percentile(m.durationsMs, 95),
-      max: Math.max(0, ...m.durationsMs),
-      total: m.durationsMs.reduce((sum, durationMs) => sum + durationMs, 0),
-    },
-    caseResults: m.caseResults.map(caseMetricsForArtifact),
+    labeledCases: labeled.length,
+    requiredSymbols,
+    requiredHits,
+    requiredSymbolRecallPercent: percentage(requiredHits, requiredSymbols),
+    primarySymbolMrr: primaryRankTotal / Math.max(1, labeled.length),
+    evidenceTokens,
+    explicitNoiseTokens: noiseTokens,
+    explicitNoiseTokenRatio: noiseTokens / Math.max(1, evidenceTokens),
+    evidenceTokensPerRequiredHit:
+      requiredHits > 0 ? evidenceTokens / requiredHits : null,
   };
+}
+
+function assertV2ShadowQuality(
+  baseline: VariantMetrics,
+  shadow: VariantMetrics,
+  pairedLatency: Awaited<ReturnType<typeof measurePairedLatency>>,
+): void {
+  assert.equal(shadow.failures, 0, "V2 shadow should not fail benchmark cases");
+  assert.equal(
+    pairedLatency.failures,
+    0,
+    `V2 paired latency recorded failures: ${JSON.stringify(pairedLatency.issues)}`,
+  );
+  assert.equal(
+    pairedLatency.timeouts,
+    0,
+    `V2 paired latency recorded timeouts: ${JSON.stringify(pairedLatency.issues)}`,
+  );
+  for (const result of shadow.caseResults) {
+    const v2HardFloor = result.relevance?.v2HardFloor;
+    if (v2HardFloor) {
+      for (const prioritySymbol of v2HardFloor.prioritySymbols) {
+        const priorityRank =
+          result.relevance?.rankedSymbols.indexOf(prioritySymbol) ?? -1;
+        assert.ok(
+          priorityRank >= 0,
+          `V2 hard-floor case ${result.id} omitted priority symbol ${prioritySymbol}`,
+        );
+        for (const unrelatedSymbol of v2HardFloor.unrelatedSymbols) {
+          const unrelatedRank =
+            result.relevance?.rankedSymbols.indexOf(unrelatedSymbol) ?? -1;
+          assert.ok(
+            unrelatedRank < 0 || priorityRank < unrelatedRank,
+            `V2 hard-floor case ${result.id} ranked ${prioritySymbol} behind ${unrelatedSymbol}`,
+          );
+        }
+      }
+      for (const codeBearingSymbol of v2HardFloor.codeBearingSymbols) {
+        assert.ok(
+          result.relevance?.codeBearingSymbols.includes(codeBearingSymbol),
+          `V2 hard-floor case ${result.id} omitted code-bearing evidence for ${codeBearingSymbol}`,
+        );
+      }
+    }
+    if (!result.relevance?.sourcePlanCitations.length) continue;
+    assert.equal(
+      result.relevance.requiredHits,
+      result.relevance.requiredSymbols.length,
+      `V2 hard-floor case ${result.id} missed required symbols`,
+    );
+  }
+
+  const v1 = aggregateRelevanceMetrics(baseline);
+  const v2 = aggregateRelevanceMetrics(shadow);
+  assert.ok(
+    v2.requiredSymbolRecallPercent >= v1.requiredSymbolRecallPercent,
+    `V2 required-symbol recall ${v2.requiredSymbolRecallPercent.toFixed(1)}% regressed below V1 ${v1.requiredSymbolRecallPercent.toFixed(1)}%`,
+  );
+  assert.ok(
+    v2.primarySymbolMrr >= v1.primarySymbolMrr,
+    `V2 primary-symbol MRR ${v2.primarySymbolMrr.toFixed(3)} regressed below V1 ${v1.primarySymbolMrr.toFixed(3)}`,
+  );
+  assert.ok(
+    v2.explicitNoiseTokenRatio <= v1.explicitNoiseTokenRatio,
+    `V2 explicit-noise token ratio ${v2.explicitNoiseTokenRatio.toFixed(3)} exceeded V1 ${v1.explicitNoiseTokenRatio.toFixed(3)}`,
+  );
+  assert.ok(
+    v1.evidenceTokensPerRequiredHit === null ||
+      (v2.evidenceTokensPerRequiredHit !== null &&
+        v2.evidenceTokensPerRequiredHit <= v1.evidenceTokensPerRequiredHit),
+    `V2 evidence tokens per required hit ${String(v2.evidenceTokensPerRequiredHit)} exceeded V1 ${String(v1.evidenceTokensPerRequiredHit)}`,
+  );
+  assert.ok(
+    pairedLatency.control.p95Ms <= pairedLatency.baseline.p95Ms * 1.25,
+    `V2 paired p95 ${pairedLatency.control.p95Ms.toFixed(1)}ms exceeded 1.25x V1 ${pairedLatency.baseline.p95Ms.toFixed(1)}ms`,
+  );
 }
 
 function persistBenchmarkArtifact(): void {
   if (!writeBenchmarkOutput || !shouldPersistBenchmarkArtifact()) return;
+  if (RUN_V2_SHADOW && metrics.v2Shadow.cases === 0) {
+    throw new Error(
+      "V2 shadow was requested but no V2 benchmark cases completed",
+    );
+  }
   mkdirSync(dirname(ARTIFACT_PATH), { recursive: true });
   const artifact = {
     schemaVersion: 2,
@@ -1152,6 +1674,7 @@ function persistBenchmarkArtifact(): void {
     corpusCaseCount: metrics.totalCases,
     selectedCaseId: SELECTED_CASE_ID ?? null,
     baselineRecording: RECORD_BASELINE,
+    v2ShadowEnabled: RUN_V2_SHADOW,
     pairedLatency: metrics.pairedLatency ?? null,
     requestedVariant: RUN_SEMANTIC_ONLY ? "semantic" : "all",
     detailMode: INCLUDE_EVIDENCE_DETAILS
@@ -1167,6 +1690,9 @@ function persistBenchmarkArtifact(): void {
       scopedPreciseP95MaxMs: SCOPED_PRECISE_P95_MAX_MS,
     },
     variants: [...metrics.variants.values()].map(variantMetricsForArtifact),
+    v2Shadow: RUN_V2_SHADOW
+      ? variantMetricsForArtifact(metrics.v2Shadow)
+      : null,
     scopedPrecise:
       metrics.scopedPrecise.cases > 0
         ? variantMetricsForArtifact(metrics.scopedPrecise)
@@ -1179,6 +1705,15 @@ function persistBenchmarkArtifact(): void {
     "overwrite",
   );
   console.log(`[context-quality] artifact: ${ARTIFACT_PATH}`);
+}
+
+async function closeLadybugThenPersistArtifact(
+  close: CloseLadybugDb | undefined = closeLadybugDb,
+  persist: () => void = persistBenchmarkArtifact,
+): Promise<void> {
+  await close?.({ strict: true });
+  ladybugClosedBeforeArtifact = true;
+  persist();
 }
 
 function shouldPersistBenchmarkArtifact(
@@ -1207,6 +1742,7 @@ describe("context quality benchmarks", () => {
         queries,
         paths,
         engine,
+        contextV2,
         benchmarkOutput,
         contextTools,
         symbolTools,
@@ -1223,6 +1759,7 @@ describe("context quality benchmarks", () => {
         import("../../dist/db/ladybug-queries.js"),
         import("../../dist/util/paths.js"),
         import("../../dist/agent/context-engine.js"),
+        import("../../dist/context/engine.js"),
         import("../../dist/benchmark/output-file.js"),
         import("../../dist/mcp/tools/context.js"),
         import("../../dist/mcp/tools/symbol.js"),
@@ -1249,6 +1786,8 @@ describe("context quality benchmarks", () => {
       await initGraphDb(config, configPath);
       closeLadybugDb = ladybug.closeLadybugDb;
       contextEngine = engine.contextEngine;
+      rawContextEngineV2 = new contextV2.ContextEngineV2();
+      contextEngineV2 = createV2BenchmarkAdapter(rawContextEngineV2);
       ladybugQueries = queries;
       normalizeEvidencePath = paths.normalizePath;
       handleAgentContext = contextTools.handleAgentContext;
@@ -1307,12 +1846,41 @@ describe("context quality benchmarks", () => {
   });
 
   after(async () => {
-    await closeLadybugDb?.();
-    ladybugClosedBeforeArtifact = true;
-    persistBenchmarkArtifact();
+    await closeLadybugThenPersistArtifact();
   });
 
   describe("case structure validation", () => {
+    it("does not publish when strict Ladybug close fails", async () => {
+      let published = false;
+      await assert.rejects(
+        () =>
+          closeLadybugThenPersistArtifact(
+            async (options) => {
+              assert.equal(options?.strict, true);
+              throw new Error("injected close failure");
+            },
+            () => {
+              published = true;
+            },
+          ),
+        /injected close failure/u,
+      );
+      assert.equal(published, false);
+    });
+
+    it("executes every V2 degradation level through the real engine", async () => {
+      const serialized = await serializeControlledV2DegradationResults({
+        repoId: "controlled",
+        taskType: "explain",
+        taskText: "verify deterministic degradation responses",
+        budget: { maxTokens: V1_DEFAULT_CONTEXT_TOKEN_BUDGET },
+      });
+      assert.deepEqual(Object.keys(serialized), [
+        ...SUCCESSFUL_CONTEXT_RETRIEVAL_LEVELS,
+        "insufficient",
+      ]);
+    });
+
     it("parses only supported corpus identifiers", () => {
       assert.equal(parseBenchmarkCorpus(undefined), "sdl-mcp");
       assert.equal(parseBenchmarkCorpus("neutral"), "neutral");
@@ -1424,6 +1992,26 @@ describe("context quality benchmarks", () => {
       negativePaths: ["src/noise.ts"],
     };
 
+    it("keeps V1 final evidence authoritative over raw engine evidence", () => {
+      const finalEvidence = [
+        {
+          type: "symbolCard",
+          reference: "symbol:final",
+          summary: "final",
+          timestamp: 0,
+        },
+      ];
+
+      assert.deepEqual(
+        benchmarkEvidenceItems({
+          success: true,
+          evidence: [{ symbolId: "raw" }],
+          finalEvidence,
+        }),
+        finalEvidence,
+      );
+    });
+
     it("normalizes both engine shapes and measures labeled relevance", () => {
       const v1 = normalizeBenchmarkResult(
         {
@@ -1486,6 +2074,86 @@ describe("context quality benchmarks", () => {
         measureNormalizedCase(labels, normalized).primarySymbolReciprocalRank,
         0.5,
       );
+    });
+
+    it("adapts the existing benchmark task and V2 payload without changing either contract", async () => {
+      let capturedRequest: unknown;
+      const payload = {
+        status: "budgetLimited" as const,
+        taskType: "debug" as const,
+        retrieval: {
+          level: "hybrid" as const,
+          lanes: [],
+        },
+        evidence: [
+          {
+            rung: "card" as const,
+            symbolId: "primary-id",
+            path: "src/primary.ts",
+            rank: 1,
+            tier: 0 as const,
+            lanes: ["exactIdentifier" as const],
+            content: { signature: "PrimarySymbol()" },
+          },
+        ],
+        edges: [],
+        omitted: {
+          total: 1,
+          byReason: { budget: 1 },
+          highestRanked: [],
+        },
+        nextActions: [
+          {
+            id: "codeNeedWindow",
+            args: { symbolId: "primary-id" },
+          },
+        ],
+      };
+      const payloadBefore = JSON.stringify(payload);
+      const adapter = createV2BenchmarkAdapter({
+        buildContext: async (request: unknown) => {
+          capturedRequest = request;
+          return payload;
+        },
+      });
+
+      const result = await adapter.buildContext({
+        repoId: "fixture-repo",
+        taskType: "debug",
+        taskText: "debug PrimarySymbol",
+        options: {
+          contextMode: "broad",
+          semantic: true,
+          focusPaths: ["src/primary.ts"],
+          chatMentions: ["PrimarySymbol"],
+          includeTests: true,
+        },
+      });
+
+      assert.deepEqual(capturedRequest, {
+        repoId: "fixture-repo",
+        taskType: "debug",
+        taskText: "debug PrimarySymbol",
+        budget: { maxTokens: 50_000 },
+        focusPaths: ["src/primary.ts"],
+        chatMentions: ["PrimarySymbol"],
+        includeTests: true,
+      });
+      assert.equal(result.success, true);
+      assert.equal(result.pureEvidence, true);
+      assert.deepEqual(result.evidence, payload.evidence);
+      assert.deepEqual(result.benchmarkEvidence, payload.evidence);
+      assert.deepEqual(result.finalEvidence, [
+        {
+          type: "card",
+          reference: "symbol:primary-id",
+          path: "src/primary.ts",
+          summary: '{"signature":"PrimarySymbol()"}',
+          timestamp: 0,
+        },
+      ]);
+      assert.deepEqual(result.actionsTaken, [{ type: "codeNeedWindow" }]);
+      assert.equal(JSON.stringify(payload), payloadBefore);
     });
 
     it("rejects unverified manifests and builds the cache key", () => {
@@ -1741,6 +2409,36 @@ describe("context quality benchmarks", () => {
     });
   });
 
+  it("emits canonical V2 determinism probe bytes", async (t) => {
+    if (!CANONICAL_V2_PROBE_OUTPUT_PATH) {
+      t.skip("canonical V2 probe output was not requested");
+      return;
+    }
+    if (!metrics.repoAvailable) {
+      skipOrFail(metrics.availabilityReason);
+      return;
+    }
+    assert.ok(rawContextEngineV2, "raw V2 context engine must be initialized");
+    assert.ok(
+      writeBenchmarkOutput,
+      "benchmark output writer must be initialized",
+    );
+    const benchmarkCase = allCases.find(
+      ({ id }) => id === "qa-2026-07-26-server-instructions-broad",
+    );
+    assert.ok(benchmarkCase, "canonical V2 probe case must be present");
+    const serialized = await assertCanonicalV2PayloadDeterminism(
+      rawContextEngineV2,
+      benchmarkCase,
+    );
+    mkdirSync(dirname(CANONICAL_V2_PROBE_OUTPUT_PATH), { recursive: true });
+    writeBenchmarkOutput(
+      CANONICAL_V2_PROBE_OUTPUT_PATH,
+      `${JSON.stringify(serialized, null, 2)}\n`,
+      "overwrite",
+    );
+  });
+
   it("runs lexical, confidence-gated default, and semantic retrieval variants", async () => {
     if (!metrics.repoAvailable) {
       skipOrFail(metrics.availabilityReason);
@@ -1769,15 +2467,41 @@ describe("context quality benchmarks", () => {
       }
     }
 
-    if (RECORD_BASELINE && !SELECTED_CASE_ID) {
+    if (RUN_V2_SHADOW) {
+      assert.ok(
+        contextEngineV2,
+        "ContextEngineV2 must be initialized for shadow benchmarking",
+      );
+      metrics.v2Shadow = createMetrics("v2-shadow");
+      for (const c of selectedCases) {
+        const scopedSelectedCase = shouldScopeCase(
+          c,
+          SELECTED_CASE_ID !== undefined,
+        );
+        await runCase(
+          c,
+          { name: "default" },
+          scopedSelectedCase,
+          metrics.v2Shadow,
+          contextEngineV2,
+        );
+      }
+    }
+
+    if ((RECORD_BASELINE || RUN_V2_SHADOW) && !SELECTED_CASE_ID) {
       assert.ok(
         contextEngine,
         "ContextEngine must be initialized for paired latency",
       );
+      const pairedControl = RUN_V2_SHADOW ? contextEngineV2 : contextEngine;
+      assert.ok(
+        pairedControl,
+        "Paired control engine must be initialized for latency measurement",
+      );
       metrics.pairedLatency = await measurePairedLatency(
         selectedCases,
         contextEngine,
-        contextEngine,
+        pairedControl,
         {
           warmupRuns: PAIRED_LATENCY_WARMUP_RUNS,
           sampleRuns: PAIRED_LATENCY_SAMPLE_RUNS,
@@ -1790,8 +2514,12 @@ describe("context quality benchmarks", () => {
     assertSemanticQuality(
       semantic,
       SELECTED_CASE_ID !== undefined,
-      RECORD_BASELINE,
+      RECORD_BASELINE || RUN_V2_SHADOW,
     );
+    if (RUN_V2_SHADOW && !SELECTED_CASE_ID) {
+      assert.ok(metrics.pairedLatency);
+      assertV2ShadowQuality(semantic, metrics.v2Shadow, metrics.pairedLatency);
+    }
     if (
       SELECTED_CASE_ID &&
       INCLUDE_EVIDENCE_DETAILS &&
@@ -1942,7 +2670,13 @@ describe("context quality benchmarks", () => {
   });
 
   it("keeps scoped precise lookups below the latency target", async (t) => {
-    if (!shouldRunOrdinaryQualityGates()) {
+    if (
+      !shouldRunOrdinaryQualityGates(
+        RECORD_BASELINE,
+        RUN_SEMANTIC_ONLY,
+        SELECTED_CASE_ID,
+      )
+    ) {
       t.skip(
         "baseline-recording, semantic-only, and selected-case runs exclude ordinary quality gates",
       );
@@ -1975,7 +2709,13 @@ describe("context quality benchmarks", () => {
       t.skip("SDL-specific regression is outside the neutral corpus");
       return;
     }
-    if (!shouldRunOrdinaryQualityGates()) {
+    if (
+      !shouldRunOrdinaryQualityGates(
+        RECORD_BASELINE,
+        RUN_SEMANTIC_ONLY,
+        SELECTED_CASE_ID,
+      )
+    ) {
       t.skip(
         "baseline-recording, semantic-only, and selected-case runs exclude ordinary quality gates",
       );
@@ -2050,7 +2790,13 @@ describe("context quality benchmarks", () => {
       t.skip("SDL-specific regression is outside the neutral corpus");
       return;
     }
-    if (!shouldRunOrdinaryQualityGates()) {
+    if (
+      !shouldRunOrdinaryQualityGates(
+        RECORD_BASELINE,
+        RUN_SEMANTIC_ONLY,
+        SELECTED_CASE_ID,
+      )
+    ) {
       t.skip(
         "baseline-recording, semantic-only, and selected-case runs exclude ordinary quality gates",
       );

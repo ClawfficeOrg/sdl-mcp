@@ -36,7 +36,15 @@ export interface SourceRanking {
 export const DEFAULT_RRF_K = 60;
 
 
-export type FusionSourceKind = "fts" | "vector" | "legacyFallback" | "overlay";
+export type FusionSourceKind =
+  | "exactIdentifier"
+  | "fts"
+  | "vector"
+  | "legacyFallback"
+  | "overlay";
+
+/** Context-only fusion route; public retrieval evidence remains unchanged. */
+export type ContextCandidateSource = RetrievalSource | "exactIdentifier";
 
 export interface FusionWeights {
   fts: number;
@@ -73,32 +81,38 @@ export interface EntityFusionOptions {
 }
 
 export type SourceRanks = Partial<Record<RetrievalSource, number>>;
-interface FusibleRanking {
-  source: RetrievalSource;
+export type ContextSourceRanks = Partial<
+  Record<ContextCandidateSource, number>
+>;
+interface FusibleRanking<Source extends ContextCandidateSource> {
+  source: Source;
   ranks: Map<string, number>;
 }
-interface Candidate {
+interface Candidate<Source extends ContextCandidateSource> {
   score: number;
   bestContribution: number;
-  bestSource?: RetrievalSource;
-  sourceRanks: Map<RetrievalSource, number>;
+  bestSource?: Source;
+  sourceRanks: Map<Source, number>;
   pinned: boolean;
 }
 
 const SOURCE_KIND_ORDER: readonly FusionSourceKind[] = [
+  "exactIdentifier",
   "fts",
   "vector",
   "overlay",
   "legacyFallback",
 ];
 const SCORE_QUANTIZATION = 1_000_000_000_000;
+const DEFAULT_PINNED_FUSION_SOURCE = "fts" as const;
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function sourceKind(source: RetrievalSource): FusionSourceKind {
+function sourceKind(source: ContextCandidateSource): FusionSourceKind {
   if (
+    source === "exactIdentifier" ||
     source === "fts" ||
     source === "legacyFallback" ||
     source === "overlay"
@@ -112,8 +126,8 @@ function quantizeScore(score: number): number {
   return Math.round(score * SCORE_QUANTIZATION);
 }
 
-function fuseRankings(
-  rankings: FusibleRanking[],
+function fuseRankings<Source extends ContextCandidateSource>(
+  rankings: FusibleRanking<Source>[],
   k: number,
   limit: number,
   weights: Readonly<FusionWeights> | undefined,
@@ -121,11 +135,11 @@ function fuseRankings(
 ): Array<{
   key: string;
   score: number;
-  source: RetrievalSource;
-  sourceRanks: SourceRanks;
+  source: Source | "fts";
+  sourceRanks: Partial<Record<Source, number>>;
 }> {
-  const candidates = new Map<string, Candidate>();
-  const getCandidate = (key: string): Candidate => {
+  const candidates = new Map<string, Candidate<Source>>();
+  const getCandidate = (key: string): Candidate<Source> => {
     let candidate = candidates.get(key);
     if (!candidate) {
       candidate = {
@@ -141,7 +155,7 @@ function fuseRankings(
 
   for (const key of new Set(pinnedKeys)) getCandidate(key).pinned = true;
 
-  const lanes = new Map<FusionSourceKind, FusibleRanking[]>();
+  const lanes = new Map<FusionSourceKind, FusibleRanking<Source>[]>();
   for (const ranking of rankings) {
     if (ranking.ranks.size === 0) continue;
     const kind = sourceKind(ranking.source);
@@ -151,7 +165,13 @@ function fuseRankings(
   }
   const presentKinds = SOURCE_KIND_ORDER.filter((kind) => lanes.has(kind));
   const laneWeights = new Map(
-    presentKinds.map((kind) => [kind, weights?.[kind] ?? 1] as const),
+    presentKinds.map(
+      (kind) =>
+        [
+          kind,
+          kind === "exactIdentifier" ? 1 : (weights?.[kind] ?? 1),
+        ] as const,
+    ),
   );
   const totalWeight = Array.from(laneWeights.values()).reduce(
     (sum, weight) => sum + weight,
@@ -161,7 +181,7 @@ function fuseRankings(
   for (const kind of presentKinds) {
     const bestRanks = new Map<
       string,
-      { rank: number; source: RetrievalSource }
+      { rank: number; source: Source }
     >();
     const laneRankings = [...(lanes.get(kind) ?? [])].sort((a, b) =>
       compareText(a.source, b.source),
@@ -210,10 +230,10 @@ function fuseRankings(
   return Array.from(candidates, ([key, candidate]) => ({
     key,
     score: candidate.score,
-    source: candidate.bestSource ?? "fts",
+    source: candidate.bestSource ?? DEFAULT_PINNED_FUSION_SOURCE,
     sourceRanks: Object.fromEntries(
       [...candidate.sourceRanks].sort(([a], [b]) => compareText(a, b)),
-    ) as SourceRanks,
+    ) as Partial<Record<Source, number>>,
     pinned: candidate.pinned,
   }))
     .sort(
@@ -292,6 +312,178 @@ export interface EntitySourceRanking {
   /** entityId -> 1-based rank */
   ranks: Map<string, number>;
   candidateCount: number;
+}
+
+export interface ContextEntitySourceRanking {
+  source: ContextCandidateSource;
+  entityType: EntityType;
+  /** entityId -> 1-based rank */
+  ranks: Map<string, number>;
+  candidateCount: number;
+}
+
+export interface ContextCandidateProvenance {
+  symbol?: ContextSourceRanks;
+  fileSummary?: ContextSourceRanks;
+}
+
+export interface ContextCandidateFusionItem {
+  symbolId: string;
+  score: number;
+  source: ContextCandidateSource;
+  sourceRanks: ContextSourceRanks;
+  provenance: ContextCandidateProvenance;
+}
+
+export interface ContextCandidateFusionOptions {
+  weights: Readonly<FusionWeights>;
+  coveragePermille: {
+    symbolVector: number;
+    fileSummaryVector: number;
+  };
+  pinnedIds?: readonly string[];
+}
+
+function setMinimumSourceRank(
+  ranks: Map<ContextCandidateSource, number>,
+  source: ContextCandidateSource,
+  rank: number,
+): void {
+  const current = ranks.get(source);
+  if (current === undefined || rank < current) ranks.set(source, rank);
+}
+
+function orderedSourceRanks(
+  ranks: ReadonlyMap<ContextCandidateSource, number>,
+): ContextSourceRanks {
+  return Object.fromEntries(
+    [...ranks].sort(([left], [right]) => compareText(left, right)),
+  ) as ContextSourceRanks;
+}
+
+/**
+ * Map FileSummary source rankings onto their bounded owning symbols, then run
+ * one weighted/collapsed symbol fusion. Route-specific provenance is retained
+ * alongside the canonical per-source minimum ranks.
+ */
+export function rrfFuseContextCandidates(
+  rankings: ContextEntitySourceRanking[],
+  symbolIdsByFileId: ReadonlyMap<string, readonly string[]>,
+  k: number,
+  limit: number,
+  options: ContextCandidateFusionOptions,
+): ContextCandidateFusionItem[] {
+  const provenance = new Map<
+    string,
+    {
+      symbol: Map<ContextCandidateSource, number>;
+      fileSummary: Map<ContextCandidateSource, number>;
+    }
+  >();
+  const mappedRankings: Array<
+    FusibleRanking<ContextCandidateSource> & { candidateCount: number }
+  > = [];
+
+  const getProvenance = (symbolId: string) => {
+    let item = provenance.get(symbolId);
+    if (!item) {
+      item = { symbol: new Map(), fileSummary: new Map() };
+      provenance.set(symbolId, item);
+    }
+    return item;
+  };
+
+  for (const ranking of rankings) {
+    if (
+      ranking.entityType !== "symbol" &&
+      ranking.entityType !== "fileSummary"
+    ) {
+      continue;
+    }
+    const mappedRanks = new Map<string, number>();
+    const orderedEntries = [...ranking.ranks].sort(
+      ([leftId, leftRank], [rightId, rightRank]) =>
+        leftRank - rightRank || compareText(leftId, rightId),
+    );
+    for (const [entityId, rank] of orderedEntries) {
+      const symbolIds =
+        ranking.entityType === "symbol"
+          ? [entityId]
+          : [
+              ...new Set(symbolIdsByFileId.get(entityId) ?? []),
+            ].sort(compareText);
+      for (const symbolId of symbolIds) {
+        const current = mappedRanks.get(symbolId);
+        if (current === undefined || rank < current) {
+          mappedRanks.set(symbolId, rank);
+        }
+        const route = getProvenance(symbolId)[ranking.entityType];
+        setMinimumSourceRank(route, ranking.source, rank);
+      }
+    }
+    mappedRankings.push({
+      source: ranking.source,
+      ranks: mappedRanks,
+      candidateCount: mappedRanks.size,
+    });
+  }
+
+  const activeVectorCoverage = [
+    ...(rankings.some(
+      (ranking) =>
+        ranking.entityType === "symbol" &&
+        ranking.source.startsWith("vector:") &&
+        ranking.ranks.size > 0,
+    )
+      ? [options.coveragePermille.symbolVector]
+      : []),
+    ...(rankings.some(
+      (ranking) =>
+        ranking.entityType === "fileSummary" &&
+        ranking.source.startsWith("vector:") &&
+        ranking.ranks.size > 0,
+    )
+      ? [options.coveragePermille.fileSummaryVector]
+      : []),
+  ];
+  const vectorCoveragePermille =
+    activeVectorCoverage.length > 0
+      ? Math.min(...activeVectorCoverage)
+      : 1000;
+  const fused = fuseRankings(
+    mappedRankings,
+    k,
+    limit,
+    coverageAdjustedFusionWeights(
+      options.weights,
+      vectorCoveragePermille,
+    ),
+    options.pinnedIds ?? [],
+  ).map(({ key, score, source, sourceRanks }) => ({
+    symbolId: key,
+    score,
+    source,
+    sourceRanks,
+  }));
+
+  return fused.map((item) => {
+    const routes = provenance.get(item.symbolId);
+    return {
+      ...item,
+      provenance: {
+        ...(routes && routes.symbol.size > 0
+          ? { symbol: orderedSourceRanks(routes.symbol) }
+          : {}),
+        ...(routes && routes.fileSummary.size > 0
+          ? {
+              fileSummary: orderedSourceRanks(
+                routes.fileSummary,
+              ),
+            }
+          : {}),
+      },
+    };
+  });
 }
 
 /**

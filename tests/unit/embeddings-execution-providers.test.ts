@@ -130,3 +130,59 @@ describe("platformAllowedProviders", () => {
     assert.ok(list.includes("cpu"), "cpu must always be present");
   });
 });
+
+describe("resolveEmbeddingSessionOptions", () => {
+  it("forces deterministic inference onto single-threaded sequential CPU", async () => {
+    const module =
+      await import("../../dist/indexer/embeddings-local.js");
+    const resolver = Reflect.get(module, "resolveEmbeddingSessionOptions");
+    assert.strictEqual(typeof resolver, "function");
+
+    assert.deepStrictEqual(
+      resolver({
+        requestedProviders: ["dml", "cpu"],
+        onnxConfig: {
+          intraOpNumThreads: 4,
+          interOpNumThreads: 2,
+          executionMode: "parallel",
+        },
+        deterministic: true,
+        autoThreads: 32,
+        platformOverride: WIN32,
+      }),
+      {
+        executionProviders: ["cpu"],
+        intraOpNumThreads: 1,
+        interOpNumThreads: 1,
+        executionMode: "sequential",
+      },
+    );
+  });
+
+  it("preserves configured throughput inference settings", async () => {
+    const module =
+      await import("../../dist/indexer/embeddings-local.js");
+    const resolver = Reflect.get(module, "resolveEmbeddingSessionOptions");
+    assert.strictEqual(typeof resolver, "function");
+
+    assert.deepStrictEqual(
+      resolver({
+        requestedProviders: ["dml", "cpu"],
+        onnxConfig: {
+          intraOpNumThreads: 4,
+          interOpNumThreads: 2,
+          executionMode: "parallel",
+        },
+        deterministic: false,
+        autoThreads: 32,
+        platformOverride: WIN32,
+      }),
+      {
+        executionProviders: ["dml", "cpu"],
+        intraOpNumThreads: 4,
+        interOpNumThreads: 2,
+        executionMode: "parallel",
+      },
+    );
+  });
+});

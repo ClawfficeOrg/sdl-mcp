@@ -1,0 +1,338 @@
+import assert from "node:assert/strict";
+import { it } from "node:test";
+
+import type { Connection } from "kuzu";
+
+it("logs and keeps unboosted candidates when context PPR fails", async (t) => {
+  const seedResolver = await import("../../dist/retrieval/seed-resolver.js");
+  const { logger } = await import("../../dist/util/logger.js");
+  const injectedError = new Error("injected PPR seed failure");
+  let logged:
+    | { message: string; meta?: Record<string, unknown> }
+    | undefined;
+  const originalDebug = logger.debug;
+  logger.debug = (message, meta) => {
+    logged = { message, meta };
+  };
+  t.mock.module("../../dist/retrieval/seed-resolver.js", {
+    namedExports: {
+      ...seedResolver,
+      resolveSeedSymbols: async () => {
+        throw injectedError;
+      },
+    },
+  });
+
+  try {
+    const { applyContextPpr } = await import(
+      "../../dist/retrieval/context-candidate-search.js?ppr-fallback"
+    );
+    const candidates = [];
+    const result = await applyContextPpr(
+      {} as Connection,
+      {
+        repoId: "repo",
+        query: "query",
+        limit: 1,
+        includeFileSummary: false,
+        includeTests: true,
+        symbolsPerFileSummary: 1,
+        chatMentions: ["Seed"],
+      },
+      candidates,
+    );
+
+    assert.strictEqual(result, candidates);
+    assert.equal(
+      logged?.message,
+      "Context PPR boost failed; using unboosted candidates",
+    );
+    assert.equal(logged?.meta?.repoId, "repo");
+    assert.strictEqual(logged?.meta?.error, injectedError);
+  } finally {
+    logger.debug = originalDebug;
+  }
+});
+
+it("keeps an overlay-only exact focus symbol pinned at Tier 0", async (t) => {
+  const orchestrator = await import("../../dist/retrieval/orchestrator.js");
+  const ladybugQueries = await import("../../dist/db/ladybug-queries.js");
+  const symbol = {
+    symbolId: "overlay-focus",
+    repoId: "repo",
+    fileId: "overlay-file",
+    kind: "function",
+    name: "OverlayFocus",
+    exported: true,
+    visibility: "public",
+    language: "typescript",
+    rangeStartLine: 1,
+    rangeStartCol: 0,
+    rangeEndLine: 3,
+    rangeEndCol: 1,
+    astFingerprint: "overlay-fingerprint",
+    signatureJson: null,
+    summary: "Captured overlay focus",
+    invariantsJson: null,
+    sideEffectsJson: null,
+    roleTagsJson: null,
+    searchText: "OverlayFocus captured overlay focus",
+    updatedAt: "2026-07-27T00:00:00.000Z",
+  };
+  const file = {
+    fileId: "overlay-file",
+    repoId: "repo",
+    relPath: "src/overlay-focus.ts",
+    contentHash: "overlay-hash",
+    language: "typescript",
+    byteSize: 64,
+    lastIndexedAt: null,
+    directory: "src",
+  };
+
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      ...orchestrator,
+      collectEntitySourceRankings: async () => ({
+        conn: {} as Connection,
+        rankings: [],
+        capabilities: {
+          fts: false,
+          fileSummaryFts: false,
+          vectorNomic: false,
+          vectorJinaCode: false,
+          coveragePermille: {
+            symbolVector: 0,
+            fileSummaryVector: 0,
+          },
+        },
+        rrfK: 60,
+        limit: 10,
+        config: {
+          fusion: {
+            weights: {
+              fts: 1,
+              vector: 1,
+              legacyFallback: 1,
+              overlay: 1,
+            },
+          },
+        },
+        fusionLatencyMs: 0,
+      }),
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      ...ladybugQueries,
+      getSearchableSymbolsByIds: async () => new Map(),
+      getFilesByIds: async () => new Map(),
+      getSymbolsByFile: async () => [],
+    },
+  });
+
+  const { searchContextCandidates } = await import(
+    "../../dist/retrieval/context-candidate-search.js?overlay-exact-focus"
+  );
+  const result = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "unrelated task text",
+      limit: 10,
+      includeFileSummary: false,
+      includeTests: true,
+      symbolsPerFileSummary: 1,
+      pinnedSymbolIds: [symbol.symbolId],
+      exactIdentifierSymbolIds: [symbol.symbolId],
+    },
+    {
+      connection: {} as Connection,
+      laneOutcomes: new Map(),
+      healthPromises: new Map(),
+      embeddingPromises: new Map(),
+    },
+    {
+      repoId: "repo",
+      touchedFileIds: new Set([file.fileId]),
+      symbolsById: new Map([[symbol.symbolId, symbol]]),
+      filesById: new Map([[file.fileId, file]]),
+      outgoingEdgesBySymbolId: new Map(),
+      contentByFileId: new Map([
+        [file.fileId, "export function OverlayFocus() {}"],
+      ]),
+    },
+  );
+
+  assert.deepEqual(
+    result.rows.map(({ symbolId, filePath, tier }) => ({
+      symbolId,
+      filePath,
+      tier,
+    })),
+    [
+      {
+        symbolId: "overlay-focus",
+        filePath: "src/overlay-focus.ts",
+        tier: 0,
+      },
+    ],
+  );
+});
+
+it("bounds FileSummary symbol materialization before candidate mapping", async (t) => {
+  const orchestrator = await import("../../dist/retrieval/orchestrator.js");
+  const ladybugQueries = await import("../../dist/db/ladybug-queries.js");
+  const fileQueryBatches: string[][] = [];
+  const symbolQueryLimits: Array<[fileId: string, limit: number | undefined]> =
+    [];
+  const makeFile = (fileId: string) => ({
+    fileId,
+    repoId: "repo",
+    relPath: `src/${fileId}.ts`,
+    contentHash: `hash-${fileId}`,
+    language: "typescript",
+    byteSize: 64,
+    lastIndexedAt: null,
+    directory: "src",
+  });
+  const makeSymbol = (fileId: string) => ({
+    symbolId: `symbol-${fileId}`,
+    repoId: "repo",
+    fileId,
+    kind: "function",
+    name: `Symbol${fileId}`,
+    exported: true,
+    visibility: "public",
+    language: "typescript",
+    rangeStartLine: 1,
+    rangeStartCol: 0,
+    rangeEndLine: 3,
+    rangeEndCol: 1,
+    astFingerprint: `fingerprint-${fileId}`,
+    signatureJson: null,
+    summary: null,
+    invariantsJson: null,
+    sideEffectsJson: null,
+    roleTagsJson: null,
+    searchText: `Symbol ${fileId}`,
+    updatedAt: "2026-07-27T00:00:00.000Z",
+  });
+
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      ...orchestrator,
+      collectEntitySourceRankings: async () => ({
+        conn: {} as Connection,
+        rankings: [
+          {
+            source: "fts",
+            entityType: "fileSummary",
+            ranks: new Map([
+              ["file-b", 1],
+              ["file-d", 2],
+              ["file-f", 3],
+              ["file-h", 4],
+            ]),
+            candidateCount: 4,
+          },
+          {
+            source: "vector:nomic",
+            entityType: "fileSummary",
+            ranks: new Map([
+              ["file-a", 1],
+              ["file-c", 2],
+              ["file-e", 3],
+              ["file-g", 4],
+            ]),
+            candidateCount: 4,
+          },
+        ],
+        capabilities: {
+          fts: false,
+          fileSummaryFts: true,
+          vectorNomic: true,
+          vectorJinaCode: false,
+          coveragePermille: {
+            symbolVector: 0,
+            fileSummaryVector: 1_000,
+          },
+        },
+        rrfK: 60,
+        limit: 2,
+        config: {
+          fusion: {
+            weights: {
+              fts: 1,
+              vector: 1,
+              legacyFallback: 1,
+              overlay: 1,
+            },
+          },
+        },
+        fusionLatencyMs: 0,
+      }),
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      ...ladybugQueries,
+      getSearchableSymbolsByIds: async () => new Map(),
+      getFilesByIds: async (_conn: Connection, fileIds: string[]) => {
+        fileQueryBatches.push([...fileIds]);
+        return new Map(fileIds.map((fileId) => [fileId, makeFile(fileId)]));
+      },
+      getSymbolsByFile: async (
+        _conn: Connection,
+        fileId: string,
+        limit?: number,
+      ) => {
+        symbolQueryLimits.push([fileId, limit]);
+        return [makeSymbol(fileId)];
+      },
+    },
+  });
+
+  const { searchContextCandidates } = await import(
+    "../../dist/retrieval/context-candidate-search.js?filesummary-db-bound"
+  );
+  await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "bounded file summary symbols",
+      limit: 2,
+      includeFileSummary: true,
+      includeTests: true,
+      symbolsPerFileSummary: 1,
+    },
+    {
+      connection: {} as Connection,
+      laneOutcomes: new Map(),
+      healthPromises: new Map(),
+      embeddingPromises: new Map(),
+    },
+    {
+      repoId: "repo",
+      touchedFileIds: new Set(),
+      symbolsById: new Map(),
+      filesById: new Map(),
+      outgoingEdgesBySymbolId: new Map(),
+      contentByFileId: new Map(),
+    },
+  );
+
+  const candidateFileBatch = fileQueryBatches.find((batch) => batch.length > 0);
+  assert.deepEqual(candidateFileBatch, [
+    "file-a",
+    "file-b",
+    "file-c",
+    "file-d",
+  ]);
+  assert.deepEqual(symbolQueryLimits, [
+    ["file-a", 1],
+    ["file-b", 1],
+    ["file-c", 1],
+    ["file-d", 1],
+  ]);
+});

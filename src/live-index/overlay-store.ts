@@ -197,20 +197,26 @@ export class OverlayStore {
     repo.delete(toStoreKey(filePath));
     if (repo.size === 0) {
       this.repos.delete(repoId);
-      this.repoVersions.delete(repoId);
-    } else {
+    }
+    // Snapshot versions are invalidation generations and must never repeat,
+    // including after the final draft for a repository is removed.
+    this.bumpVersion(repoId);
+  }
+
+  clearAll(): void {
+    const repoIds = new Set([
+      ...this.repos.keys(),
+      ...this.repoVersions.keys(),
+    ]);
+    this.repos.clear();
+    for (const repoId of repoIds) {
       this.bumpVersion(repoId);
     }
   }
 
-  clearAll(): void {
-    this.repos.clear();
-    this.repoVersions.clear();
-  }
-
   clearRepo(repoId: string): void {
     this.repos.delete(repoId);
-    this.repoVersions.delete(repoId);
+    this.bumpVersion(repoId);
   }
 
   getRepoStats(repoId: string): {

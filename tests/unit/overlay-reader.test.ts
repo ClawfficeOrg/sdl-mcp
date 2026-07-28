@@ -19,6 +19,7 @@ import {
   mergeSymbolRowsWithOverlay,
   type OverlaySnapshot,
 } from "../../dist/live-index/overlay-reader.js";
+import { hydrateContextBundles } from "../../dist/context/hydrate.js";
 
 const repoId = "overlay-repo";
 const filePath = "src/overlay.ts";
@@ -82,7 +83,7 @@ function makeEdgeRow(overrides: Partial<EdgeRow> = {}): EdgeRow {
   };
 }
 
-function seedOverlayEntry(): void {
+function seedOverlayEntry(edges: EdgeRow[] = [makeEdgeRow()]): void {
   const store = getDefaultOverlayStore();
   store.upsertDraft({
     repoId,
@@ -102,7 +103,7 @@ function seedOverlayEntry(): void {
       version: 1,
       file: makeFileRow(),
       symbols: [makeSymbolRow()],
-      edges: [makeEdgeRow()],
+      edges,
       references: [],
     },
     "2026-03-18T12:00:01.000Z",
@@ -132,6 +133,52 @@ describe("overlay-reader", () => {
     assert.strictEqual(first, second);
   });
 
+  it("does not reuse a cached snapshot after coordinator reset", () => {
+    seedOverlayEntry();
+    const store = getDefaultOverlayStore();
+    const firstVersion = store.getSnapshotVersion(repoId);
+    const first = getOverlaySnapshot(repoId);
+    const replacementSymbolId = `${symbolId}-replacement`;
+
+    resetDefaultLiveIndexCoordinator();
+    store.upsertDraft({
+      repoId,
+      eventType: "change",
+      filePath,
+      content: "export function replacementFn() { return 2; }",
+      language: "typescript",
+      version: 1,
+      dirty: true,
+      timestamp: "2026-03-18T12:01:00.000Z",
+    });
+    store.setParseResult(
+      repoId,
+      filePath,
+      1,
+      {
+        version: 1,
+        file: makeFileRow({ contentHash: "replacement-file-hash" }),
+        symbols: [
+          makeSymbolRow({
+            symbolId: replacementSymbolId,
+            name: "replacementFn",
+          }),
+        ],
+        edges: [],
+        references: [],
+      },
+      "2026-03-18T12:01:01.000Z",
+    );
+
+    const secondVersion = store.getSnapshotVersion(repoId);
+    const second = getOverlaySnapshot(repoId);
+
+    assert.ok(secondVersion > firstVersion);
+    assert.notStrictEqual(second, first);
+    assert.ok(second.symbolsById.has(replacementSymbolId));
+    assert.ok(!second.symbolsById.has(symbolId));
+  });
+
   it("clearSnapshotCache forces snapshot recompute", () => {
     const first = getOverlaySnapshot(repoId);
     clearSnapshotCache();
@@ -151,6 +198,121 @@ describe("overlay-reader", () => {
       snapshot.outgoingEdgesBySymbolId.get(symbolId)?.length,
       1,
     );
+  });
+
+  it("captures draft content by snapshot version across interleaved updates", () => {
+    seedOverlayEntry();
+    const first = getOverlaySnapshot(repoId);
+
+    const nextContent = "export function overlayFn() { return 2; }";
+    const store = getDefaultOverlayStore();
+    store.upsertDraft({
+      repoId,
+      eventType: "change",
+      filePath,
+      content: nextContent,
+      language: "typescript",
+      version: 2,
+      dirty: true,
+      timestamp: "2026-03-18T12:00:02.000Z",
+    });
+    store.setParseResult(
+      repoId,
+      filePath,
+      2,
+      {
+        version: 2,
+        file: makeFileRow({ contentHash: "file-hash-2" }),
+        symbols: [makeSymbolRow({ astFingerprint: "fp-overlay-2" })],
+        edges: [makeEdgeRow()],
+        references: [],
+      },
+      "2026-03-18T12:00:03.000Z",
+    );
+    const second = getOverlaySnapshot(repoId);
+
+    assert.equal(
+      first.contentByFileId?.get(fileId),
+      "export function overlayFn() { return 1; }",
+    );
+    assert.equal(second.contentByFileId?.get(fileId), nextContent);
+  });
+
+  it("records authoritative empty edges for captured symbols", () => {
+    seedOverlayEntry([]);
+    const snapshot = getOverlaySnapshot(repoId);
+    const staleEdge: EdgeForSlice = {
+      fromSymbolId: symbolId,
+      toSymbolId: "stale-target",
+      edgeType: "call",
+      weight: 1,
+      confidence: 1,
+    };
+
+    assert.deepEqual(snapshot.outgoingEdgesBySymbolId.get(symbolId), []);
+    assert.deepEqual(
+      mergeEdgeMapWithOverlay(
+        snapshot,
+        [symbolId],
+        new Map([[symbolId, [staleEdge]]]),
+      ).get(symbolId),
+      [],
+    );
+  });
+
+  it("omits stale durable edges from hydrated captured overlays", async () => {
+    seedOverlayEntry([]);
+    const snapshot = getOverlaySnapshot(repoId);
+    const staleEdge: EdgeForSlice = {
+      fromSymbolId: symbolId,
+      toSymbolId: "stale-target",
+      edgeType: "call",
+      weight: 1,
+      confidence: 1,
+    };
+    const selected = [symbolId, "stale-target"].map((selectedSymbolId, index) => ({
+      candidate: {
+        symbolId: selectedSymbolId,
+        path: `src/${selectedSymbolId}.ts`,
+        rank: index + 1,
+        tier: 0 as const,
+        lanes: ["exactIdentifier" as const],
+        estimates: {},
+      },
+      rungs: ["skeleton" as const],
+    }));
+    const hydrated = await hydrateContextBundles(
+      {
+        conn: {} as never,
+        repoId,
+        versionId: "v1",
+        selected,
+        identifiers: [],
+        overlaySnapshot: snapshot,
+      },
+      {
+        loadCards: async () => ({
+          cards: [],
+          sliceDepsBySymbol: new Map(),
+        }),
+        loadEdges: async () => new Map([[symbolId, [staleEdge]]]),
+        loadSkeleton: async () => ({
+          skeleton: "function captured() {}",
+          actualRange: {
+            startLine: 1,
+            startCol: 0,
+            endLine: 1,
+            endCol: 22,
+          },
+          estimatedTokens: 4,
+          originalLines: 1,
+          truncated: false,
+          skeletonLinesConsumed: 1,
+        }),
+      },
+    );
+
+    assert.deepEqual(hydrated.edges, []);
   });
 
   it("getOverlaySymbol returns symbol, file, and outgoing edges when found", () => {

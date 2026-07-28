@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { readFile, stat } from "fs/promises";
 
+import type { Connection } from "kuzu";
 import type Parser from "tree-sitter";
 
 import type { RepoId, SymbolId } from "../domain/types.js";
@@ -16,6 +18,10 @@ import { findVariableDeclarationEndLine } from "../util/source-lines.js";
 import { estimateTokens as estimateTokenCount } from "../util/tokenize.js";
 import { getLadybugConn } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
+import {
+  getOverlaySymbol,
+  type OverlaySnapshot,
+} from "../live-index/overlay-reader.js";
 import { parseFile } from "./skeleton.js";
 
 export interface HotPathOptions {
@@ -243,13 +249,49 @@ export function buildHotPathExcerpt(
   };
 }
 
-export async function extractHotPath(
+export interface PreparedHotPath {
+  readonly symbol: NonNullable<
+    Awaited<ReturnType<typeof ladybugDb.getSymbol>>
+  >;
+  readonly filePath: string;
+  readonly relativePath: string;
+  readonly extension: string;
+  readonly sourceKind: "durable" | "overlay";
+  readonly capturedContentHash: string;
+  readonly capturedContent?: string;
+}
+
+function hashCapturedSource(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** Capture every durable input needed before source parsing begins. */
+export async function prepareHotPath(
+  conn: Connection,
   repoId: RepoId,
   symbolId: SymbolId,
-  identifiersToFind: string[],
-  options: HotPathOptions = {},
-): Promise<HotPathResult | null> {
-  const conn = await getLadybugConn();
+  overlaySnapshot?: OverlaySnapshot,
+  requireIndexedContentHash = true,
+): Promise<PreparedHotPath | null> {
+  const overlaySymbol = overlaySnapshot
+    ? getOverlaySymbol(overlaySnapshot, symbolId)
+    : null;
+  if (overlaySymbol) {
+    const content = overlaySnapshot?.contentByFileId?.get(
+      overlaySymbol.symbol.fileId,
+    );
+    if (content === undefined) return null;
+
+    return Object.freeze({
+      symbol: overlaySymbol.symbol,
+      filePath: overlaySymbol.file.relPath,
+      relativePath: overlaySymbol.file.relPath,
+      extension: overlaySymbol.file.relPath.split(".").pop() || "",
+      sourceKind: "overlay" as const,
+      capturedContentHash: hashCapturedSource(content),
+      capturedContent: content,
+    });
+  }
 
   const symbol = await ladybugDb.getSymbol(conn, symbolId);
   if (!symbol) return null;
@@ -265,8 +307,7 @@ export async function extractHotPath(
 
   const filePath = getAbsolutePathFromRepoRoot(repo.rootPath, file.relPath);
   const extension = file.relPath.split(".").pop() || "";
-
-  let content: string;
+  let capturedContent: string;
   try {
     const fileStat = await stat(filePath);
     if (fileStat.size > MAX_FILE_BYTES) {
@@ -277,13 +318,91 @@ export async function extractHotPath(
       });
       return null;
     }
-    content = (await readFile(filePath, "utf-8")).replace(/\r\n/g, "\n");
+    const rawContent = await readFile(filePath, "utf-8");
+    // Reject filesystem/DB skew before preparing evidence. Rendering retains
+    // its normalized-content hash to detect a later filesystem mutation.
+    if (
+      requireIndexedContentHash &&
+      hashCapturedSource(rawContent) !== file.contentHash
+    ) {
+      return null;
+    }
+    capturedContent = rawContent.replace(/\r\n/g, "\n");
   } catch (error) {
-    logger.warn("Failed to read file for hot path extraction", {
+    logger.warn("Failed to capture file for hot path extraction", {
       filePath: file.relPath,
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
+  }
+
+  return Object.freeze({
+    symbol,
+    filePath,
+    relativePath: file.relPath,
+    extension,
+    sourceKind: "durable" as const,
+    capturedContentHash: hashCapturedSource(capturedContent),
+  });
+}
+
+export async function extractHotPath(
+  repoId: RepoId,
+  symbolId: SymbolId,
+  identifiersToFind: string[],
+  options: HotPathOptions = {},
+): Promise<HotPathResult | null> {
+  const conn = await getLadybugConn();
+  const prepared = await prepareHotPath(
+    conn,
+    repoId,
+    symbolId,
+    undefined,
+    false,
+  );
+  return prepared
+    ? renderPreparedHotPath(prepared, identifiersToFind, options)
+    : null;
+}
+
+/** Parse and render source using metadata captured by prepareHotPath. */
+export async function renderPreparedHotPath(
+  prepared: PreparedHotPath,
+  identifiersToFind: string[],
+  options: HotPathOptions = {},
+): Promise<HotPathResult | null> {
+  const { symbol, filePath, extension } = prepared;
+  const symbolId = symbol.symbolId;
+  const file = { relPath: prepared.relativePath };
+  let content: string;
+  if (prepared.sourceKind === "overlay") {
+    if (prepared.capturedContent === undefined) return null;
+    content = prepared.capturedContent;
+  } else {
+    try {
+      const fileStat = await stat(filePath);
+      if (fileStat.size > MAX_FILE_BYTES) {
+        logger.warn("File exceeds size limit for hot path extraction", {
+          filePath: file.relPath,
+          fileSize: fileStat.size,
+          maxFileBytes: MAX_FILE_BYTES,
+        });
+        return null;
+      }
+      content = (await readFile(filePath, "utf-8")).replace(/\r\n/g, "\n");
+      if (hashCapturedSource(content) !== prepared.capturedContentHash) {
+        logger.warn("Source changed after hot path preparation", {
+          filePath: file.relPath,
+        });
+        return null;
+      }
+    } catch (error) {
+      logger.warn("Failed to read file for hot path extraction", {
+        filePath: file.relPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   const tree = parseFile(content, `.${extension}`);

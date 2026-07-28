@@ -23,6 +23,12 @@ import { isHybridRetrievalAvailable } from "../../retrieval/fallback.js";
 import { checkRetrievalHealth } from "../../retrieval/health.js";
 import { logger } from "../../util/logger.js";
 import {
+  getOverlaySnapshot,
+  rankOverlaySymbolsForQuery,
+  type OverlaySnapshot,
+} from "../../live-index/overlay-reader.js";
+import { searchContextCandidates } from "../../retrieval/context-candidate-search.js";
+import {
   createRetrievalQueryContext,
   getOrCreateHealthPromise,
   hybridSearch,
@@ -77,6 +83,36 @@ export interface StartNodeLimits {
   maxTaskTextStartNodes: number;
   maxFirstHopPerEntry: number;
   maxSiblingPerEntry: number;
+}
+
+export function mergeLegacyTaskTextCandidateIds(
+  durableResults: ReadonlyArray<{ symbolId: SymbolId; fileId: string }>,
+  overlaySnapshot: OverlaySnapshot,
+  repoId: RepoId,
+  query: string,
+  limit: number,
+): SymbolId[] {
+  const visibleDurable = durableResults.filter(
+    (row) => !overlaySnapshot.touchedFileIds.has(row.fileId),
+  );
+  const durableSymbolIds = new Set(
+    visibleDurable.map((row) => row.symbolId),
+  );
+  const overlayIds = rankOverlaySymbolsForQuery(
+    overlaySnapshot,
+    repoId,
+    query,
+    durableSymbolIds,
+  ).map((row) => row.symbolId);
+
+  // Draft matches are authoritative for touched files. Durable results keep
+  // their existing lexical order when no captured overlay match is present.
+  return Array.from(
+    new Set([
+      ...overlayIds,
+      ...visibleDurable.map((row) => row.symbolId),
+    ]),
+  ).slice(0, Math.max(0, limit));
 }
 
 export const START_NODE_SOURCE_PRIORITY: Record<StartNodeSource, number> = {
@@ -432,7 +468,11 @@ export async function resolveStartNodesLadybug(
   repoId: RepoId,
   request: SliceBuildRequestBase,
   queryContext: RetrievalQueryContext = createRetrievalQueryContext(),
+  overlaySnapshot: OverlaySnapshot = getOverlaySnapshot(repoId),
 ): Promise<StartNodeResolutionResult> {
+  // Slice callers may omit a query-context connection; bind every shared
+  // retrieval lane to the already-admitted slice snapshot.
+  queryContext.connection = conn;
   const startNodes = new Map<SymbolId, StartNodeSource>();
   const explicitEntrySymbols: SymbolId[] = [];
 
@@ -608,17 +648,35 @@ export async function resolveStartNodesLadybug(
 
   if (request.taskText) {
     if (useHybrid) {
-      // Stage 2: single hybrid retrieval call replaces token-by-token fan-out
-      const hybridResult = await hybridSearch({
-        repoId,
-        query: request.taskText,
-        limit: effectiveTaskTextLimit,
-        includeEvidence: true,
-      }, queryContext);
-      retrievalEvidence = hybridResult.evidence;
-      hybridSearchItems = hybridResult.results;
+      const sharedResult = await searchContextCandidates(
+        conn,
+        {
+          repoId,
+          query: request.taskText,
+          limit: effectiveTaskTextLimit,
+          includeFileSummary: false,
+          includeTests: true,
+          symbolsPerFileSummary: 1,
+          includeEvidence: true,
+        },
+        queryContext,
+        overlaySnapshot,
+      );
+      retrievalEvidence = sharedResult.evidence;
+      hybridSearchItems = sharedResult.rows.flatMap((row) =>
+        row.source === "exactIdentifier"
+          ? []
+          : [
+              {
+                symbolId: row.symbolId,
+                score: row.score,
+                source: row.source,
+                sourceRanks: row.sourceRanks,
+              },
+            ],
+      );
       let taskTextSeedCount = 0;
-      for (const item of hybridResult.results) {
+      for (const item of sharedResult.rows) {
         if (taskTextSeedCount >= effectiveTaskTextLimit || startNodes.size >= limits.maxTotalStartNodes) break;
         if (startNodes.has(item.symbolId)) continue;
         addStartNode(item.symbolId, "taskText");
@@ -645,21 +703,27 @@ export async function resolveStartNodesLadybug(
         taskTokens,
         perTokenLimit,
       );
-      for (const results of resultsByToken) {
+      for (const [tokenIndex, results] of resultsByToken.entries()) {
         if (
           taskTextSeedCount >= effectiveTaskTextLimit ||
           startNodes.size >= limits.maxTotalStartNodes
         ) {
           break;
         }
-        for (const result of results) {
+        const candidateIds = mergeLegacyTaskTextCandidateIds(
+          results,
+          overlaySnapshot,
+          repoId,
+          taskTokens[tokenIndex] ?? "",
+          perTokenLimit,
+        );
+        for (const symbolId of candidateIds) {
           if (
             taskTextSeedCount >= effectiveTaskTextLimit ||
             startNodes.size >= limits.maxTotalStartNodes
           ) {
             break;
           }
-          const symbolId = result.symbolId;
           if (startNodes.has(symbolId)) continue;
           addStartNode(symbolId, "taskText");
           if (startNodes.has(symbolId)) {
@@ -688,11 +752,18 @@ export async function resolveStartNodesLadybug(
       cappedRawWords,
       5,
     );
-    for (const results of resultsByWord) {
+    for (const [wordIndex, results] of resultsByWord.entries()) {
       if (startNodes.size >= limits.maxTotalStartNodes) break;
-      for (const result of results) {
+      const candidateIds = mergeLegacyTaskTextCandidateIds(
+        results,
+        overlaySnapshot,
+        repoId,
+        cappedRawWords[wordIndex] ?? "",
+        5,
+      );
+      for (const symbolId of candidateIds) {
         if (startNodes.size >= limits.maxTotalStartNodes) break;
-        addStartNode(result.symbolId, "taskText");
+        addStartNode(symbolId, "taskText");
       }
     }
   }

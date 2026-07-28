@@ -16,6 +16,7 @@ import {
 import {
   createOnnxSession,
   type OnnxEmbeddingSession,
+  type OnnxEmbeddingSessionOptions,
 } from "./embeddings-local.js";
 import {
   getModelInfo,
@@ -94,10 +95,15 @@ class MockEmbeddingProvider implements EmbeddingProvider {
 class LocalEmbeddingProvider implements EmbeddingProvider {
   private session: OnnxEmbeddingSession | null = null;
   private modelName: string;
+  private sessionOptions: OnnxEmbeddingSessionOptions;
   private fallbackToMock = false;
 
-  constructor(modelName: string) {
+  constructor(
+    modelName: string,
+    sessionOptions: OnnxEmbeddingSessionOptions,
+  ) {
     this.modelName = modelName;
+    this.sessionOptions = sessionOptions;
     // Eagerly detect missing model files so isMockFallback() is accurate
     // before the first embed() call.  This lets callers (e.g. the retrieval
     // orchestrator) skip unavailable models without triggering a warn log.
@@ -113,7 +119,10 @@ class LocalEmbeddingProvider implements EmbeddingProvider {
 
     try {
       if (!this.session) {
-        this.session = await createOnnxSession(this.modelName);
+        this.session = await createOnnxSession(
+          this.modelName,
+          this.sessionOptions,
+        );
       }
       return await this.session.embed(texts);
     } catch (error) {
@@ -261,11 +270,13 @@ function parseSignatureText(signatureJson: string | null): string | null {
 export function getEmbeddingProvider(
   provider: "api" | "local" | "mock",
   model?: string,
+  sessionOptions: OnnxEmbeddingSessionOptions = {},
 ): EmbeddingProvider {
   switch (provider) {
     case "local":
       return new LocalEmbeddingProvider(
         model ?? "jina-embeddings-v2-base-code",
+        sessionOptions,
       );
     case "api":
       return new ApiEmbeddingProvider();

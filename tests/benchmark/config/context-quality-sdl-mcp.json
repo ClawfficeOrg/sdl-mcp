@@ -1,0 +1,69 @@
+{
+  "performanceTier": "high",
+  "repos": [
+    {
+      "repoId": "sdl-mcp",
+      "rootPath": "${SDL_CONTEXT_QUALITY_REPO_ROOT}",
+      "ignore": [
+        "**/.git/**",
+        "**/.benchmark/**",
+        "**/.tmp/**",
+        "**/.worktrees/**",
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/native/target/**",
+        "**/coverage/**"
+      ],
+      "languages": [
+        "ts",
+        "tsx",
+        "js",
+        "jsx",
+        "rs"
+      ],
+      "maxFileBytes": 2000000,
+      "includeNodeModulesTypes": true
+    }
+  ],
+  "graphDatabase": {
+    "path": ".benchmark/context-quality-unused.lbug"
+  },
+  "policy": {
+    "maxWindowLines": 180,
+    "maxWindowTokens": 1400,
+    "requireIdentifiers": true,
+    "allowBreakGlass": false
+  },
+  "indexing": {
+    "pipeline": "legacy",
+    "engine": "typescript",
+    "enableFileWatching": false
+  },
+  "scip": {
+    "enabled": false
+  },
+  "semantic": {
+    "enabled": true,
+    "provider": "local",
+    "executionProviders": [
+      "cpu"
+    ],
+    "embeddingProfile": "specialized",
+    "symbolEmbeddingModels": [
+      "jina-embeddings-v2-base-code"
+    ],
+    "fileSummaryEmbeddingModels": [
+      "nomic-embed-text-v1.5"
+    ],
+    "retrieval": {
+      "mode": "hybrid",
+      "fts": {
+        "enabled": true,
+        "indexName": "symbol_search_text_v1"
+      },
+      "vector": {
+        "enabled": true
+      }
+    }
+  }
+}

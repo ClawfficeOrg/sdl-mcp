@@ -1490,7 +1490,20 @@ function sortFileSummarySymbolFacts(
 export async function getSymbolsByFile(
   conn: Connection,
   fileId: string,
+  limit?: number,
 ): Promise<SymbolRow[]> {
+  const params: Record<string, unknown> = { fileId };
+  let boundedOrderClause = "";
+  if (limit !== undefined) {
+    assertSafeInt(limit, "limit");
+    const safeLimit = Math.max(0, limit);
+    if (safeLimit === 0) return [];
+    params.limit = safeLimit;
+    boundedOrderClause =
+      "\n     ORDER BY s.exported DESC, s.rangeStartLine ASC, s.symbolId ASC" +
+      "\n     LIMIT $limit";
+  }
+
   const rows = await queryAll<{
     symbolId: string;
     repoId: string;
@@ -1547,8 +1560,8 @@ export async function getSymbolsByFile(
             s.packageVersion AS packageVersion,
             s.scipSymbol AS scipSymbol,
             s.source AS source,
-            s.updatedAt AS updatedAt`,
-    { fileId },
+            s.updatedAt AS updatedAt${boundedOrderClause}`,
+    params,
   );
 
   return rows.map((row) => ({

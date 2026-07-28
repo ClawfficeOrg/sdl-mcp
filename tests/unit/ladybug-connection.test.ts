@@ -9,7 +9,10 @@ const testDbBase = join(tmpdir(), ".test-kuzu-db");
 
 let getLadybugDb: (dbPath?: string) => Promise<unknown>;
 let getLadybugConn: () => Promise<unknown>;
-let closeLadybugDb: (options?: { preserveCloseHooks?: boolean }) => Promise<void>;
+let closeLadybugDb: (options?: {
+  preserveCloseHooks?: boolean;
+  strict?: boolean;
+}) => Promise<void>;
 let registerDbCloseHook: (fn: () => void) => void;
 let initLadybugDb: (dbPath: string) => Promise<void>;
 let isLadybugAvailable: () => boolean;
@@ -385,6 +388,33 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       }
     });
 
+    it("does not consume a round-robin pool slot while an exclusive lease is active", async () => {
+      const testPath = getTestDbPath("exclusive-read-concurrent-pool");
+      cleanupTestDb("exclusive-read-concurrent-pool");
+      await initLadybugDb(testPath);
+
+      const entered = deferred();
+      const release = deferred();
+      let leased: Connection | undefined;
+      const lease = withExclusiveReadConnection(async (conn) => {
+        leased = conn;
+        entered.resolve();
+        await release.promise;
+      });
+
+      try {
+        await Promise.race([entered.promise, lease]);
+        const pooled = (await getLadybugConn()) as Connection;
+        assert.ok(getReadPool().includes(pooled));
+        assert.notStrictEqual(pooled, leased);
+      } finally {
+        release.resolve();
+        await lease;
+        await closeLadybugDb();
+        cleanupTestDb("exclusive-read-concurrent-pool");
+      }
+    });
+
     it("closes and releases a lease when its callback fails", async () => {
       const testPath = getTestDbPath("exclusive-read-failure");
       cleanupTestDb("exclusive-read-failure");
@@ -542,6 +572,32 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       await closeLadybugDb();
       await closeLadybugDb();
       await closeLadybugDb();
+    });
+
+    it("strict mode reports close-hook failures after resetting database state", async () => {
+      const testPath = getTestDbPath("strict-close-hook-failure");
+      cleanupTestDb("strict-close-hook-failure");
+      await initLadybugDb(testPath);
+      const hookFailure = new Error("strict-close-hook-failure");
+      registerDbCloseHook(() => {
+        throw hookFailure;
+      });
+
+      try {
+        await assert.rejects(
+          closeLadybugDb({ strict: true }),
+          (error: unknown) =>
+            error instanceof AggregateError &&
+            error.errors.includes(hookFailure),
+        );
+        assert.strictEqual(getLadybugDbPath(), null);
+
+        await initLadybugDb(testPath);
+        await closeLadybugDb();
+      } finally {
+        await closeLadybugDb();
+        cleanupTestDb("strict-close-hook-failure");
+      }
     });
 
     it("clears close hooks when either concurrent caller requests it", async () => {

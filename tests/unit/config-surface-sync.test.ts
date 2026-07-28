@@ -163,6 +163,10 @@ describe("config surface sync", () => {
     assert.match(serveSource, /resolveSemanticEmbeddingModelPlan/);
     assert.match(serveSource, /modelPlan.symbolEmbeddingModels/);
     assert.match(serveSource, /modelPlan.fileSummaryEmbeddingModels/);
+    assert.match(
+      serveSource,
+      /getEmbeddingProvider\("local", model, \{\s*deterministic: true,\s*\}\)/,
+    );
     assert.doesNotMatch(
       serveSource,
       /getEmbeddingProvider("local", config.semantic?.model)/,

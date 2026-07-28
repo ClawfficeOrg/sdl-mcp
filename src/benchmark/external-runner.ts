@@ -1,9 +1,18 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs, { existsSync, readdirSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { RUNTIME_SIGKILL_GRACE_MS } from "../config/constants.js";
+import { killProcessTree } from "../runtime/executor.js";
 import { normalizePath } from "../util/paths.js";
 
 import {
@@ -28,6 +37,8 @@ import {
 } from "./external-manifest.js";
 import { writeUtf8Output } from "./output-file.js";
 
+const PROCESS_DEATH_CONFIRMATION_MARGIN_MS = 250;
+
 export interface DbFamilyFingerprint {
   files: HashedArtifactFile[];
   sha256: string;
@@ -50,10 +61,7 @@ export function collectDbFamilyFiles(primaryPath: string): string[] {
     .filter((entry) => entry.isFile())
     .map((entry) => join(directory, entry.name))
     .sort((left, right) =>
-      compareArtifactPath(
-        normalizePath(left),
-        normalizePath(right),
-      ),
+      compareArtifactPath(normalizePath(left), normalizePath(right)),
     );
 }
 
@@ -70,9 +78,7 @@ export function assertDbFamilyAbsent(primaryPath: string): void {
   }
 }
 
-export function fingerprintDbFamily(
-  primaryPath: string,
-): DbFamilyFingerprint {
+export function fingerprintDbFamily(primaryPath: string): DbFamilyFingerprint {
   const entries = familyEntries(primaryPath);
   const nonRegular = entries.find((entry) => !entry.isFile());
   if (nonRegular !== undefined) {
@@ -85,6 +91,222 @@ export function fingerprintDbFamily(
     dirname(primaryPath),
     entries.map((entry) => entry.name),
   );
+}
+
+function assertFingerprintsEqual(
+  actual: DbFamilyFingerprint,
+  expected: DbFamilyFingerprint,
+  message: string,
+): void {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(message);
+  }
+}
+
+function mapDbFamilyFingerprint(
+  fingerprint: DbFamilyFingerprint,
+  sourceName: string,
+  destinationName: string,
+): HashedArtifactFile[] {
+  return fingerprint.files.map((file) => {
+    if (file.path !== sourceName && !file.path.startsWith(sourceName + ".")) {
+      throw new Error("Invalid database family member: " + file.path);
+    }
+    return {
+      ...file,
+      path: destinationName + file.path.slice(sourceName.length),
+    };
+  });
+}
+
+/**
+ * Copies a closed database family without omitting LadybugDB sidecars.
+ *
+ * The source is fingerprinted before and after the exclusive copy so callers
+ * never publish bytes from a family that changed while it was being staged.
+ */
+export function copyDbFamilyVerified(
+  sourcePrimaryPath: string,
+  destinationPrimaryPath: string,
+): DbFamilyFingerprint {
+  const sourceName = basename(sourcePrimaryPath);
+  const destinationName = basename(destinationPrimaryPath);
+  const before = fingerprintDbFamily(sourcePrimaryPath);
+  if (!before.files.some((file) => file.path === sourceName)) {
+    throw new Error(
+      "Database family primary file is missing: " + sourcePrimaryPath,
+    );
+  }
+
+  assertDbFamilyAbsent(destinationPrimaryPath);
+  fs.mkdirSync(dirname(destinationPrimaryPath), { recursive: true });
+
+  for (const sourcePath of collectDbFamilyFiles(sourcePrimaryPath)) {
+    const sourceFileName = basename(sourcePath);
+    const destinationPath = join(
+      dirname(destinationPrimaryPath),
+      destinationName + sourceFileName.slice(sourceName.length),
+    );
+    fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
+  }
+
+  const after = fingerprintDbFamily(sourcePrimaryPath);
+  assertFingerprintsEqual(after, before, "Database family changed during copy");
+
+  const copied = fingerprintDbFamily(destinationPrimaryPath);
+  const expectedFiles = mapDbFamilyFingerprint(
+    before,
+    sourceName,
+    destinationName,
+  );
+  if (JSON.stringify(copied.files) !== JSON.stringify(expectedFiles)) {
+    throw new Error("Copied database family fingerprint mismatch");
+  }
+  return copied;
+}
+
+export interface VerifiedDbFamilyCacheMarker<TValidation = unknown> {
+  schemaVersion: 1;
+  family: DbFamilyFingerprint;
+  validation: TValidation;
+}
+
+interface PublishVerifiedDbFamilyCacheOptions<TValidation> {
+  sourcePrimaryPath: string;
+  destinationPrimaryPath: string;
+  readyMarkerPath: string;
+  validateCopiedFamily: (
+    copiedPrimaryPath: string,
+  ) => Promise<TValidation> | TValidation;
+}
+
+/**
+ * Publishes a cache entry only after the copied family has been reopened and
+ * validated by the caller. The ready marker is the final crash-safe write.
+ */
+export async function publishVerifiedDbFamilyCache<TValidation>(
+  options: PublishVerifiedDbFamilyCacheOptions<TValidation>,
+): Promise<VerifiedDbFamilyCacheMarker<TValidation>> {
+  if (existsSync(options.readyMarkerPath)) {
+    throw new Error(
+      "Database family cache marker already exists: " + options.readyMarkerPath,
+    );
+  }
+
+  const sourceBefore = fingerprintDbFamily(options.sourcePrimaryPath);
+  copyDbFamilyVerified(
+    options.sourcePrimaryPath,
+    options.destinationPrimaryPath,
+  );
+  const validation = await options.validateCopiedFamily(
+    options.destinationPrimaryPath,
+  );
+  assertFingerprintsEqual(
+    fingerprintDbFamily(options.sourcePrimaryPath),
+    sourceBefore,
+    "Source database family changed during copied-family validation",
+  );
+  // LadybugDB can checkpoint bytes during a clean reopen/close. The cache
+  // identity therefore describes the validated, closed family, not the
+  // pre-open copy.
+  const family = fingerprintDbFamily(options.destinationPrimaryPath);
+  if (
+    !family.files.some(
+      (file) => file.path === basename(options.destinationPrimaryPath),
+    )
+  ) {
+    throw new Error(
+      "Validated database family primary file is missing: " +
+        options.destinationPrimaryPath,
+    );
+  }
+
+  const marker: VerifiedDbFamilyCacheMarker<TValidation> = {
+    schemaVersion: 1,
+    family,
+    validation,
+  };
+  fs.mkdirSync(dirname(options.readyMarkerPath), { recursive: true });
+  writeUtf8Output(
+    options.readyMarkerPath,
+    JSON.stringify(marker, null, 2) + "\n",
+    "exclusive",
+  );
+  return marker;
+}
+
+interface RestoreVerifiedDbFamilyCacheOptions<TValidation> {
+  cachedPrimaryPath: string;
+  readyMarkerPath: string;
+  workingPrimaryPath: string;
+  validateCopiedFamily: (
+    copiedPrimaryPath: string,
+  ) => Promise<TValidation> | TValidation;
+}
+
+function readVerifiedDbFamilyCacheMarker<TValidation>(
+  markerPath: string,
+): VerifiedDbFamilyCacheMarker<TValidation> {
+  const parsed: unknown = JSON.parse(fs.readFileSync(markerPath, "utf8"));
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("schemaVersion" in parsed) ||
+    parsed.schemaVersion !== 1 ||
+    !("family" in parsed) ||
+    typeof parsed.family !== "object" ||
+    parsed.family === null ||
+    !("files" in parsed.family) ||
+    !Array.isArray(parsed.family.files) ||
+    !("sha256" in parsed.family) ||
+    typeof parsed.family.sha256 !== "string" ||
+    !("validation" in parsed)
+  ) {
+    throw new Error("Invalid database family cache marker: " + markerPath);
+  }
+  return parsed as VerifiedDbFamilyCacheMarker<TValidation>;
+}
+
+/**
+ * Restores a cache hit into an absent working family and reopens the copy.
+ * Cache bytes and validation identity must both still match the ready marker.
+ */
+export async function restoreVerifiedDbFamilyCache<TValidation>(
+  options: RestoreVerifiedDbFamilyCacheOptions<TValidation>,
+): Promise<VerifiedDbFamilyCacheMarker<TValidation>> {
+  const marker = readVerifiedDbFamilyCacheMarker<TValidation>(
+    options.readyMarkerPath,
+  );
+  assertFingerprintsEqual(
+    fingerprintDbFamily(options.cachedPrimaryPath),
+    marker.family,
+    "Cached database family does not match its ready marker",
+  );
+
+  copyDbFamilyVerified(options.cachedPrimaryPath, options.workingPrimaryPath);
+  const validation = await options.validateCopiedFamily(
+    options.workingPrimaryPath,
+  );
+  if (JSON.stringify(validation) !== JSON.stringify(marker.validation)) {
+    throw new Error("Restored database family validation identity mismatch");
+  }
+  assertFingerprintsEqual(
+    fingerprintDbFamily(options.cachedPrimaryPath),
+    marker.family,
+    "Cached database family changed during restored-family validation",
+  );
+  const restored = fingerprintDbFamily(options.workingPrimaryPath);
+  if (
+    !restored.files.some(
+      (file) => file.path === basename(options.workingPrimaryPath),
+    )
+  ) {
+    throw new Error(
+      "Restored database family primary file is missing: " +
+        options.workingPrimaryPath,
+    );
+  }
+  return marker;
 }
 
 export interface PreparedRepeatDatabase {
@@ -117,7 +339,9 @@ export function stageWarmSnapshot(
   const before = fingerprintDbFamily(sourcePrimaryPath);
   const sourceName = basename(sourcePrimaryPath);
   if (!before.files.some(({ path }) => path === sourceName)) {
-    throw new Error("Warm source primary database is missing: " + sourcePrimaryPath);
+    throw new Error(
+      "Warm source primary database is missing: " + sourcePrimaryPath,
+    );
   }
 
   const warmDirectory = join(artifactRoot, "inputs", "warm-db");
@@ -212,10 +436,7 @@ export function canonicalizePath(input: string): string {
   );
 }
 
-export function assertCanonicalPathEqual(
-  left: string,
-  right: string,
-): void {
+export function assertCanonicalPathEqual(left: string, right: string): void {
   if (canonicalizePath(left) !== canonicalizePath(right)) {
     throw new Error("Canonical paths do not match");
   }
@@ -340,7 +561,10 @@ export function validateBaselineV1(
   const metrics = record(baseline.metrics, "Baseline metrics");
   requireExactKeys(metrics, BASELINE_METRICS, "Baseline metrics");
   for (const metric of BASELINE_METRICS) {
-    if (typeof metrics[metric] !== "number" || !Number.isFinite(metrics[metric])) {
+    if (
+      typeof metrics[metric] !== "number" ||
+      !Number.isFinite(metrics[metric])
+    ) {
       throw new Error("Baseline metric must be finite: " + metric);
     }
   }
@@ -348,18 +572,90 @@ export function validateBaselineV1(
 }
 
 const THRESHOLD_RULES = [
-  ["indexing", "indexTimePerFile", "lower-is-better", "maxMs", "allowableIncreasePercent"],
-  ["indexing", "indexTimePerSymbol", "lower-is-better", "maxMs", "allowableIncreasePercent"],
-  ["quality", "symbolsPerFile", "higher-is-better", "minValue", "allowableDecreasePercent"],
-  ["quality", "edgesPerSymbol", "higher-is-better", "minValue", "allowableDecreasePercent"],
-  ["quality", "graphConnectivity", "higher-is-better", "minValue", "allowableDecreasePercent"],
-  ["quality", "exportedSymbolRatio", "higher-is-better", "minValue", "allowableDecreasePercent"],
-  ["performance", "sliceBuildTimeMs", "lower-is-better", "maxMs", "allowableIncreasePercent"],
-  ["performance", "avgSkeletonTimeMs", "lower-is-better", "maxMs", "allowableIncreasePercent"],
-  ["tokenEfficiency", "avgCardTokens", "lower-is-better", "maxTokens", "allowableIncreasePercent"],
-  ["tokenEfficiency", "avgSkeletonTokens", "lower-is-better", "maxTokens", "allowableIncreasePercent"],
-  ["coverage", "callEdgeCoverage", "higher-is-better", "minPercent", "allowableDecreasePercent"],
-  ["coverage", "importEdgeCoverage", "higher-is-better", "minPercent", "allowableDecreasePercent"],
+  [
+    "indexing",
+    "indexTimePerFile",
+    "lower-is-better",
+    "maxMs",
+    "allowableIncreasePercent",
+  ],
+  [
+    "indexing",
+    "indexTimePerSymbol",
+    "lower-is-better",
+    "maxMs",
+    "allowableIncreasePercent",
+  ],
+  [
+    "quality",
+    "symbolsPerFile",
+    "higher-is-better",
+    "minValue",
+    "allowableDecreasePercent",
+  ],
+  [
+    "quality",
+    "edgesPerSymbol",
+    "higher-is-better",
+    "minValue",
+    "allowableDecreasePercent",
+  ],
+  [
+    "quality",
+    "graphConnectivity",
+    "higher-is-better",
+    "minValue",
+    "allowableDecreasePercent",
+  ],
+  [
+    "quality",
+    "exportedSymbolRatio",
+    "higher-is-better",
+    "minValue",
+    "allowableDecreasePercent",
+  ],
+  [
+    "performance",
+    "sliceBuildTimeMs",
+    "lower-is-better",
+    "maxMs",
+    "allowableIncreasePercent",
+  ],
+  [
+    "performance",
+    "avgSkeletonTimeMs",
+    "lower-is-better",
+    "maxMs",
+    "allowableIncreasePercent",
+  ],
+  [
+    "tokenEfficiency",
+    "avgCardTokens",
+    "lower-is-better",
+    "maxTokens",
+    "allowableIncreasePercent",
+  ],
+  [
+    "tokenEfficiency",
+    "avgSkeletonTokens",
+    "lower-is-better",
+    "maxTokens",
+    "allowableIncreasePercent",
+  ],
+  [
+    "coverage",
+    "callEdgeCoverage",
+    "higher-is-better",
+    "minPercent",
+    "allowableDecreasePercent",
+  ],
+  [
+    "coverage",
+    "importEdgeCoverage",
+    "higher-is-better",
+    "minPercent",
+    "allowableDecreasePercent",
+  ],
 ] as const;
 
 export function validateThresholdConfigV1(input: unknown): string[] {
@@ -372,7 +668,9 @@ export function validateThresholdConfigV1(input: unknown): string[] {
     throw new Error("Thresholds must not be empty");
   }
 
-  const categories = [...new Set(THRESHOLD_RULES.map(([category]) => category))];
+  const categories = [
+    ...new Set(THRESHOLD_RULES.map(([category]) => category)),
+  ];
   requireExactKeys(thresholds, categories, "Threshold categories");
   for (const categoryName of categories) {
     const metrics = THRESHOLD_RULES.filter(
@@ -385,7 +683,13 @@ export function validateThresholdConfigV1(input: unknown): string[] {
     );
   }
 
-  for (const [categoryName, metric, trend, absolute, allowance] of THRESHOLD_RULES) {
+  for (const [
+    categoryName,
+    metric,
+    trend,
+    absolute,
+    allowance,
+  ] of THRESHOLD_RULES) {
     const category = record(thresholds[categoryName], categoryName);
     const rule = record(category[metric], metric);
     requireExactKeys(rule, ["trend", absolute, allowance], metric + " rule");
@@ -443,7 +747,10 @@ export function buildGeneratedRunConfig(
   externalConfigPath: string,
   repoId: string,
 ): Record<string, unknown> {
-  const base = record(parseJsonFile(baseConfigPath, "base config"), "Base config");
+  const base = record(
+    parseJsonFile(baseConfigPath, "base config"),
+    "Base config",
+  );
   const external = record(
     parseJsonFile(externalConfigPath, "external config"),
     "External config",
@@ -479,13 +786,12 @@ export function validateGeneratedRunConfig(
   if (repo.repoId !== repoId || typeof repo.rootPath !== "string") {
     throw new Error("Generated config target does not match");
   }
-  if (record(config.indexing, "Generated indexing").enableFileWatching !== false) {
+  if (
+    record(config.indexing, "Generated indexing").enableFileWatching !== false
+  ) {
     throw new Error("Generated config file watching must be disabled");
   }
-  assertCanonicalPathEqual(
-    resolve(runnerRoot, repo.rootPath),
-    targetRoot,
-  );
+  assertCanonicalPathEqual(resolve(runnerRoot, repo.rootPath), targetRoot);
 }
 
 function assertFileHash(
@@ -536,10 +842,7 @@ export interface GitSnapshot {
   treeSha256: string;
 }
 
-export type ExecFileText = (
-  file: string,
-  args: readonly string[],
-) => string;
+export type ExecFileText = (file: string, args: readonly string[]) => string;
 
 const execText: ExecFileText = (file, args) =>
   execFileSync(file, [...args], { encoding: "utf8" });
@@ -610,11 +913,7 @@ export function assertTargetRef(
     throw new Error("Target HEAD does not match the locked ref");
   }
   const trimSlash = (value: string) => value.trim().replace(/\/+$/u, "");
-  const origin = runGit(
-    targetRoot,
-    ["remote", "get-url", "origin"],
-    exec,
-  );
+  const origin = runGit(targetRoot, ["remote", "get-url", "origin"], exec);
   if (trimSlash(origin) !== trimSlash(lock.cloneUrl)) {
     throw new Error("Target origin does not match the lock");
   }
@@ -647,7 +946,6 @@ export function assertRunnerSnapshot(
     "runner launcher",
   );
 }
-
 
 export interface ExternalBenchmarkCliOptions {
   repoId: string;
@@ -683,7 +981,8 @@ export function parseExternalBenchmarkArgs(
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index];
-    const key = flag === undefined ? undefined : EXTERNAL_BENCHMARK_OPTIONS.get(flag);
+    const key =
+      flag === undefined ? undefined : EXTERNAL_BENCHMARK_OPTIONS.get(flag);
     const value = argv[index + 1];
     if (key === undefined) {
       throw new Error("Unknown external benchmark option: " + String(flag));
@@ -715,13 +1014,16 @@ export function parseExternalBenchmarkArgs(
 
   const warmDb = values.get("warmDb");
   if ((cacheMode === "warm") !== (warmDb !== undefined)) {
-    throw new Error("--warm-db is required for warm mode and forbidden for cold mode");
+    throw new Error(
+      "--warm-db is required for warm mode and forbidden for cold mode",
+    );
   }
 
   return {
     repoId,
     outDir,
-    lock: values.get("lock") ?? "scripts/benchmark/matrix-external-repos.lock.json",
+    lock:
+      values.get("lock") ?? "scripts/benchmark/matrix-external-repos.lock.json",
     baseConfig: values.get("baseConfig") ?? "config/sdlmcp.config.json",
     externalConfig:
       values.get("externalConfig") ??
@@ -743,7 +1045,6 @@ export async function runExternalBenchmarkCli(
   return runExternalBenchmarkPrepared(argv, runChild);
 }
 
-
 export interface BenchmarkChildRequest {
   command: string[];
   cwd: string;
@@ -751,6 +1052,16 @@ export interface BenchmarkChildRequest {
   stdoutPath: string;
   stderrPath: string;
   rawResultPath: string;
+  timeoutMs?: number;
+  processDeathTimeoutMs?: number;
+}
+
+export interface BenchmarkChildLifecycle {
+  platform: NodeJS.Platform;
+  killProcessTree: (pid: number) => void;
+  isProcessAlive: (pid: number) => boolean;
+  processDeathPollMs: number;
+  processDeathTimeoutMs: number;
 }
 
 export type RunBenchmarkChild = (
@@ -831,7 +1142,9 @@ function prepareExternalBenchmarkRun(
     .map((value) => record(value, "External benchmark lock repo"))
     .filter((value) => value.repoId === options.repoId);
   if (matches.length !== 1) {
-    throw new Error("External benchmark lock must contain the target exactly once");
+    throw new Error(
+      "External benchmark lock must contain the target exactly once",
+    );
   }
   const selectedLock = matches[0];
   if (
@@ -841,7 +1154,9 @@ function prepareExternalBenchmarkRun(
     throw new Error("External benchmark lock target is invalid");
   }
 
-  const baseConfigPath = canonicalizePath(resolve(runnerRoot, options.baseConfig));
+  const baseConfigPath = canonicalizePath(
+    resolve(runnerRoot, options.baseConfig),
+  );
   const externalConfigPath = canonicalizePath(
     resolve(runnerRoot, options.externalConfig),
   );
@@ -853,7 +1168,10 @@ function prepareExternalBenchmarkRun(
   if (!Array.isArray(generatedConfig.repos)) {
     throw new Error("Generated config repos must be an array");
   }
-  const generatedRepo = record(generatedConfig.repos[0], "Generated config repo");
+  const generatedRepo = record(
+    generatedConfig.repos[0],
+    "Generated config repo",
+  );
   if (typeof generatedRepo.rootPath !== "string") {
     throw new Error("Generated config rootPath must be a string");
   }
@@ -866,10 +1184,10 @@ function prepareExternalBenchmarkRun(
     targetRoot,
     runnerRoot,
   );
-  const targetSnapshot = assertTargetRef(
-    targetRoot,
-    { ref: selectedLock.ref, cloneUrl: selectedLock.cloneUrl },
-  );
+  const targetSnapshot = assertTargetRef(targetRoot, {
+    ref: selectedLock.ref,
+    cloneUrl: selectedLock.cloneUrl,
+  });
   const runnerSnapshot = readGitSnapshot(runnerRoot);
   const distFingerprint = fingerprintDirectory(join(runnerRoot, "dist"));
   const launcherPath = join(
@@ -892,17 +1210,12 @@ function prepareExternalBenchmarkRun(
     resolve(runnerRoot, options.baseline),
   );
   const baselineText = fs.readFileSync(baselineSourcePath, "utf8");
-  const baseline = validateBaselineV1(
-    JSON.parse(baselineText),
-    options.repoId,
-  );
+  const baseline = validateBaselineV1(JSON.parse(baselineText), options.repoId);
   const thresholdSourcePath = canonicalizePath(
     resolve(runnerRoot, options.threshold),
   );
   const thresholdText = fs.readFileSync(thresholdSourcePath, "utf8");
-  const thresholdPairs = validateThresholdConfigV1(
-    JSON.parse(thresholdText),
-  );
+  const thresholdPairs = validateThresholdConfigV1(JSON.parse(thresholdText));
 
   for (const directory of ["inputs", "logs", "db", "raw"]) {
     fs.mkdirSync(join(artifactRoot, directory));
@@ -931,7 +1244,9 @@ function prepareExternalBenchmarkRun(
     thresholdSourcePath,
     thresholdPath,
   );
-  if (JSON.stringify(stagedThreshold.pairs) !== JSON.stringify(thresholdPairs)) {
+  if (
+    JSON.stringify(stagedThreshold.pairs) !== JSON.stringify(thresholdPairs)
+  ) {
     throw new Error("Staged threshold contract changed");
   }
 
@@ -1024,7 +1339,8 @@ function prepareExternalBenchmarkRun(
       thresholdSourcePath: "config/benchmark.config.json",
       thresholdPath: "inputs/threshold.json",
       thresholdSha256: stagedThreshold.sha256,
-      warmSnapshot: warmSnapshot === null ? null : { files: warmSnapshot.files },
+      warmSnapshot:
+        warmSnapshot === null ? null : { files: warmSnapshot.files },
     },
     repeats,
   };
@@ -1076,9 +1392,9 @@ function assertExternalBenchmarkInputs(
     ...state.manifest.inputs.baselinePath.split("/"),
   );
   if (
-    !fs.readFileSync(state.baselineSourcePath).equals(
-      fs.readFileSync(stagedBaselinePath),
-    )
+    !fs
+      .readFileSync(state.baselineSourcePath)
+      .equals(fs.readFileSync(stagedBaselinePath))
   ) {
     throw new Error("Baseline source and staged files must be byte-identical");
   }
@@ -1095,15 +1411,14 @@ function assertExternalBenchmarkInputs(
     state.thresholdSourcePath,
     stagedThresholdPath,
   );
-  if (JSON.stringify(threshold.pairs) !== JSON.stringify(state.thresholdPairs)) {
+  if (
+    JSON.stringify(threshold.pairs) !== JSON.stringify(state.thresholdPairs)
+  ) {
     throw new Error("Threshold contract changed");
   }
   validateGeneratedRunConfig(
     parseJsonFile(
-      join(
-        state.artifactRoot,
-        ...state.manifest.inputs.configPath.split("/"),
-      ),
+      join(state.artifactRoot, ...state.manifest.inputs.configPath.split("/")),
       "staged config",
     ),
     state.manifest.target.repoId,
@@ -1158,10 +1473,69 @@ function assertExternalBenchmarkInputs(
   }
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ESRCH"
+    );
+  }
+}
+
+function waitForCloseOrTimeout(
+  closePromise: Promise<void>,
+  delayMs: number,
+): Promise<void> {
+  return new Promise<void>((resolvePromise) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise();
+    };
+    const timer = setTimeout(finish, delayMs);
+    void closePromise.then(finish);
+  });
+}
+
+async function waitForProcessDeath(
+  pid: number,
+  alive: (processId: number) => boolean,
+  closePromise: Promise<void>,
+  pollMs: number,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  let childCloseObserved = false;
+  void closePromise.then(() => {
+    childCloseObserved = true;
+  });
+  while (alive(pid)) {
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `Benchmark child process ${pid} remained alive after tree termination`,
+      );
+    }
+    const delayMs = Math.min(pollMs, remainingMs);
+    if (childCloseObserved) {
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, delayMs),
+      );
+    } else {
+      await waitForCloseOrTimeout(closePromise, delayMs);
+    }
+  }
+}
 
 class BenchmarkChildFailure extends Error {
   constructor(
-    readonly boundary: "child-spawn" | "child-stream",
+    readonly boundary: "child-spawn" | "child-stream" | "child-timeout",
     cause: unknown,
   ) {
     super(
@@ -1174,10 +1548,21 @@ class BenchmarkChildFailure extends Error {
 
 export function runBenchmarkChild(
   request: BenchmarkChildRequest,
+  injectedLifecycle: Partial<BenchmarkChildLifecycle> = {},
 ): Promise<{ exitCode: number | null; durationMs: number }> {
   const started = performance.now();
   const stdout = fs.createWriteStream(request.stdoutPath, { flags: "wx" });
   const stderr = fs.createWriteStream(request.stderrPath, { flags: "wx" });
+  const lifecycle: BenchmarkChildLifecycle = {
+    platform: process.platform,
+    killProcessTree,
+    isProcessAlive,
+    processDeathPollMs: 25,
+    processDeathTimeoutMs:
+      request.processDeathTimeoutMs ??
+      RUNTIME_SIGKILL_GRACE_MS + PROCESS_DEATH_CONFIRMATION_MARGIN_MS,
+    ...injectedLifecycle,
+  };
 
   return new Promise((resolvePromise, rejectPromise) => {
     let settled = false;
@@ -1187,10 +1572,25 @@ export function runBenchmarkChild(
     let exitCode: number | null = null;
     let child: ReturnType<typeof spawn> | undefined;
     let failure: BenchmarkChildFailure | undefined;
+    let timeoutTimer: NodeJS.Timeout | undefined;
+    let processDeathConfirmed = true;
+    let resolveChildClose: (() => void) | undefined;
+    const childClosePromise = new Promise<void>((resolveClose) => {
+      resolveChildClose = resolveClose;
+    });
 
     const finish = () => {
-      if (settled || !childClosed || !stdoutClosed || !stderrClosed) return;
+      if (
+        settled ||
+        !processDeathConfirmed ||
+        !childClosed ||
+        !stdoutClosed ||
+        !stderrClosed
+      ) {
+        return;
+      }
       settled = true;
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
       if (failure !== undefined) {
         rejectPromise(failure);
         return;
@@ -1201,16 +1601,57 @@ export function runBenchmarkChild(
       });
     };
     const fail = (
-      boundary: "child-spawn" | "child-stream",
+      boundary: "child-spawn" | "child-stream" | "child-timeout",
       error: unknown,
     ) => {
       if (settled || failure !== undefined) return;
       failure = new BenchmarkChildFailure(boundary, error);
-      child?.kill();
       child?.stdout?.destroy();
       child?.stderr?.destroy();
       stdout.destroy();
       stderr.destroy();
+      if (boundary !== "child-timeout") {
+        child?.kill();
+        finish();
+        return;
+      }
+
+      const pid = child?.pid;
+      if (pid === undefined) {
+        processDeathConfirmed = true;
+        failure = new BenchmarkChildFailure(
+          "child-timeout",
+          new Error("spawned child PID is unavailable"),
+        );
+        finish();
+        return;
+      }
+      processDeathConfirmed = false;
+      try {
+        lifecycle.killProcessTree(pid);
+      } catch (terminationError) {
+        failure = new BenchmarkChildFailure("child-timeout", terminationError);
+      }
+      const processTarget = lifecycle.platform === "win32" ? pid : -pid;
+      void waitForProcessDeath(
+        processTarget,
+        lifecycle.isProcessAlive,
+        childClosePromise,
+        lifecycle.processDeathPollMs,
+        lifecycle.processDeathTimeoutMs,
+      ).then(
+        () => {
+          processDeathConfirmed = true;
+          finish();
+        },
+        (terminationError: unknown) => {
+          failure = new BenchmarkChildFailure(
+            "child-timeout",
+            terminationError,
+          );
+          finish();
+        },
+      );
       finish();
     };
 
@@ -1230,6 +1671,8 @@ export function runBenchmarkChild(
         cwd: request.cwd,
         env: request.env,
         stdio: ["ignore", "pipe", "pipe"],
+        detached: lifecycle.platform !== "win32",
+        windowsHide: true,
       });
     } catch (error) {
       childClosed = true;
@@ -1240,6 +1683,8 @@ export function runBenchmarkChild(
     child.once("close", (code) => {
       exitCode = code;
       childClosed = true;
+      resolveChildClose?.();
+      if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
       finish();
     });
     if (child.stdout === null || child.stderr === null) {
@@ -1250,6 +1695,13 @@ export function runBenchmarkChild(
     child.stderr.once("error", (error) => fail("child-stream", error));
     child.stdout.pipe(stdout);
     child.stderr.pipe(stderr);
+    if (request.timeoutMs !== undefined) {
+      timeoutTimer = setTimeout(
+        () =>
+          fail("child-timeout", new Error(`exceeded ${request.timeoutMs} ms`)),
+        request.timeoutMs,
+      );
+    }
   });
 }
 
@@ -1260,9 +1712,8 @@ async function executeExternalBenchmarkRepeats(
   const rawRepeats: ExternalBenchmarkRawRepeat[] = [];
   let stop: ExternalBenchmarkStopBoundary | undefined;
   let activeRepeat = 1;
-  let unexpectedBoundary:
-    | "preflight-between-repeats"
-    | "raw-result-invalid" = "preflight-between-repeats";
+  let unexpectedBoundary: "preflight-between-repeats" | "raw-result-invalid" =
+    "preflight-between-repeats";
   let results: ExternalBenchmarkResults | undefined;
   const usedDbPaths = new Set<string>();
 
@@ -1280,11 +1731,7 @@ async function executeExternalBenchmarkRepeats(
         break;
       }
 
-      const request = buildBenchmarkChildRequest(
-        state,
-        repeat,
-        usedDbPaths,
-      );
+      const request = buildBenchmarkChildRequest(state, repeat, usedDbPaths);
       let childResult: { exitCode: number | null; durationMs: number };
       try {
         childResult = await runChild(request);
@@ -1387,24 +1834,14 @@ function readRawBenchmarkRepeat(
   rawResultPath: string,
 ): ExternalBenchmarkRawRepeat {
   if (!existsSync(rawResultPath)) {
-    return failedRawRepeat(
-      repeat,
-      "raw-result-missing",
-      exitCode,
-      durationMs,
-    );
+    return failedRawRepeat(repeat, "raw-result-missing", exitCode, durationMs);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(rawResultPath, "utf8"));
   } catch {
-    return failedRawRepeat(
-      repeat,
-      "raw-result-invalid",
-      exitCode,
-      durationMs,
-    );
+    return failedRawRepeat(repeat, "raw-result-invalid", exitCode, durationMs);
   }
 
   let benchmarkResult: ExternalBenchmarkRawResult;
@@ -1500,7 +1937,6 @@ function roundDuration(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-
 class ThresholdEvidenceFailure extends Error {}
 
 const RAW_METRIC_KEYS = [
@@ -1578,7 +2014,12 @@ export function validateRawBenchmarkResult(
       throw new ThresholdEvidenceFailure("Threshold pair set is invalid");
     }
     actual.push(pair);
-    for (const key of ["currentValue", "baselineValue", "delta", "deltaPercent"]) {
+    for (const key of [
+      "currentValue",
+      "baselineValue",
+      "delta",
+      "deltaPercent",
+    ]) {
       const field = evaluation[key];
       if (
         field !== undefined &&
@@ -1621,7 +2062,6 @@ export function validateRawBenchmarkResult(
   return input as ExternalBenchmarkRawResult;
 }
 
-
 export function writeDbFamilyFingerprintFile(
   primaryPath: string,
   outputPath: string,
@@ -1661,10 +2101,7 @@ export function verifyExternalBenchmarkEvidence(
   const runnerRoot = canonicalizePath(
     resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
   );
-  const manifestPath = containedArtifactPath(
-    artifactRoot,
-    "run-manifest.json",
-  );
+  const manifestPath = containedArtifactPath(artifactRoot, "run-manifest.json");
   const resultsPath = containedArtifactPath(artifactRoot, "results.json");
   const manifestText = fs.readFileSync(manifestPath, "utf8");
   const resultsText = fs.readFileSync(resultsPath, "utf8");
@@ -1678,10 +2115,7 @@ export function verifyExternalBenchmarkEvidence(
     throw new Error("External benchmark results bytes are not canonical");
   }
   const manifestSha256 = hashSerializedManifest(manifestText);
-  if (
-    results.runManifestSha256 !== manifestSha256 ||
-    results.passed !== true
-  ) {
+  if (results.runManifestSha256 !== manifestSha256 || results.passed !== true) {
     throw new Error("Results do not identify a passing run manifest");
   }
   if (
@@ -1827,10 +2261,7 @@ export function verifyExternalBenchmarkEvidence(
       benchmarkResult,
     });
 
-    const graphDbPath = containedArtifactPath(
-      artifactRoot,
-      repeat.graphDbPath,
-    );
+    const graphDbPath = containedArtifactPath(artifactRoot, repeat.graphDbPath);
     if (collectDbFamilyFiles(graphDbPath).length === 0) {
       throw new Error("Repeat database family is missing: " + repeat.repeat);
     }
@@ -1868,9 +2299,7 @@ export function verifyExternalBenchmarkEvidence(
 
 function containedArtifactPath(rootPath: string, artifactPath: string): string {
   const normalized = normalizeArtifactPath(artifactPath);
-  const filePath = canonicalizePath(
-    join(rootPath, ...normalized.split("/")),
-  );
+  const filePath = canonicalizePath(join(rootPath, ...normalized.split("/")));
   assertCanonicalPathContained(rootPath, filePath);
   return filePath;
 }

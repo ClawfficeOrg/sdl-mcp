@@ -275,4 +275,39 @@ describe("draft live reads", () => {
       initialBeta?.version.astFingerprint,
     );
   });
+
+  it("keeps an overlay-only taskText seed through slice traversal", async () => {
+    await handleBufferPush({
+      repoId: REPO_ID,
+      eventType: "change",
+      filePath: "src/example.ts",
+      content: [
+        "export function overlayOnlyTaskSeed() {",
+        "  return beta();",
+        "}",
+        "",
+        "export function beta() {",
+        "  return 5;",
+        "}",
+      ].join("\n"),
+      language: "typescript",
+      version: 5,
+      dirty: true,
+      timestamp: "2026-03-07T12:12:00.000Z",
+    });
+    await waitForDefaultLiveIndexIdle();
+
+    const { slice } = await buildSlice({
+      repoId: REPO_ID,
+      versionId: latestVersionId,
+      taskText: "overlayOnlyTaskSeed",
+      budget: { maxCards: 10, maxEstimatedTokens: 10_000 },
+      minConfidence: 0,
+    });
+
+    assert.ok(
+      slice.cards.some((card) => card.name === "overlayOnlyTaskSeed"),
+      "Expected the overlay-only taskText seed in the traversed slice",
+    );
+  });
 });

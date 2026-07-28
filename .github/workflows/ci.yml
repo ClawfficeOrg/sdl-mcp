@@ -1042,3 +1042,211 @@ jobs:
               console.log('  Both artifacts are valid for their respective commits');
             }
           "
+
+  context-quality-scheduled:
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Checkout pinned context-quality corpus
+        uses: actions/checkout@v6
+        with:
+          ref: fcf4f2e11c5a1bb9b301a245af42b28556414b8e
+          path: .context-quality-corpus
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --legacy-peer-deps
+
+      - name: Setup tree-sitter
+        uses: ./.github/actions/setup-tree-sitter
+
+      - name: Setup LadybugDB native binary
+        shell: bash
+        run: |
+          if [ -f node_modules/kuzu/install.js ] && [ ! -f node_modules/kuzu/lbugjs.node ]; then
+            echo "Running upstream kuzu install.js to copy platform binary..."
+            cd node_modules/kuzu && node install.js
+          else
+            echo "LadybugDB binary available (split package or already installed)"
+          fi
+
+      - name: Setup Windows Rust toolchain for FTS preloader
+        if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Windows FTS preloader build
+        if: runner.os == 'Windows'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: ${{ runner.os }}-x86_64-pc-windows-msvc-context-fts-${{ hashFiles('native/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-x86_64-pc-windows-msvc-context-fts-
+
+      - name: Build and configure Windows FTS preloader
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & npx napi build --release --cargo-cwd native --config native/package.json --target x86_64-pc-windows-msvc native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $addonPath = (Resolve-Path "native/sdl-mcp-native.node").Path
+          "SDL_MCP_NATIVE_ADDON_PATH=$addonPath" >> $env:GITHUB_ENV
+
+      - name: Build
+        run: npm run build
+
+      - name: Resolve immutable cache inputs
+        id: context-inputs
+        shell: pwsh
+        run: |
+          $inputJson = & node --input-type=module -e 'import { getModelCacheDir, getRequiredModelSetDigest } from "./scripts/postinstall-models.mjs"; import { LADYBUG_SCHEMA_VERSION } from "./dist/db/ladybug-schema.js"; console.log(JSON.stringify({ modelCache: getModelCacheDir(), modelSet: getRequiredModelSetDigest(), schema: LADYBUG_SCHEMA_VERSION }));'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $inputs = $inputJson | ConvertFrom-Json
+          "model-cache=$($inputs.modelCache)" >> $env:GITHUB_OUTPUT
+          "model-set=$($inputs.modelSet)" >> $env:GITHUB_OUTPUT
+          "schema=$($inputs.schema)" >> $env:GITHUB_OUTPUT
+
+      - name: Cache immutable embedding models
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.context-inputs.outputs.model-cache }}
+          key: ${{ runner.os }}-${{ runner.arch }}-context-models-${{ steps.context-inputs.outputs.model-set }}
+
+      - name: Verify required embedding models
+        run: node scripts/postinstall-models.mjs --strict
+
+      - name: Cache verified context-quality graph families
+        id: context-graph-cache
+        uses: actions/cache@v5
+        with:
+          path: .benchmark/context-quality-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-schema${{ steps.context-inputs.outputs.schema }}-models-${{ steps.context-inputs.outputs.model-set }}-corpus-fcf4f2e11c5a1bb9b301a245af42b28556414b8e-configs-${{ hashFiles('tests/benchmark/config/context-quality-sdl-mcp.json', 'tests/benchmark/config/context-quality-neutral.json') }}
+
+      - name: Build both isolated graph families on cache miss
+        if: steps.context-graph-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          SDL_MCP_PASS1_STABLE_DB_WRITES: "1"
+        run: |
+          $corpusRoot = (Resolve-Path ".context-quality-corpus").Path
+          $sdlConfig = (Resolve-Path "tests/benchmark/config/context-quality-sdl-mcp.json").Path
+          $neutralConfig = (Resolve-Path "tests/benchmark/config/context-quality-neutral.json").Path
+          $sdlSource = Join-Path $env:RUNNER_TEMP "context-quality-source-sdl-mcp.lbug"
+          $neutralSource = Join-Path $env:RUNNER_TEMP "context-quality-source-neutral.lbug"
+
+          $env:SDL_CONTEXT_QUALITY_REPO_ROOT = $corpusRoot
+          $env:SDL_CONFIG = $sdlConfig
+          & node dist/cli/index.js index --force --safe-rebuild $sdlSource
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $env:SDL_CONTEXT_QUALITY_REPO_ROOT = Join-Path $corpusRoot "sdlbench/tests/fixtures/repo"
+          $env:SDL_CONFIG = $neutralConfig
+          & node dist/cli/index.js index --force --safe-rebuild $neutralSource
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          "SDL_CONTEXT_QUALITY_SDL_SOURCE=$sdlSource" >> $env:GITHUB_ENV
+          "SDL_CONTEXT_QUALITY_NEUTRAL_SOURCE=$neutralSource" >> $env:GITHUB_ENV
+
+      - name: Publish both verified graph families on cache miss
+        if: steps.context-graph-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          SDL_CONTEXT_QUALITY_REPO_SHA: fcf4f2e11c5a1bb9b301a245af42b28556414b8e
+          SDL_CONTEXT_QUALITY_CACHE_PREPARE_ONLY: "1"
+        run: |
+          $corpusRoot = (Resolve-Path ".context-quality-corpus").Path
+          $cacheRoot = Join-Path $env:GITHUB_WORKSPACE ".benchmark/context-quality-cache"
+
+          $env:SDL_CONTEXT_QUALITY_REPO_ROOT = $corpusRoot
+          $env:SDL_CONTEXT_QUALITY_REPO_ID = "sdl-mcp"
+          $env:SDL_CONFIG = (Resolve-Path "tests/benchmark/config/context-quality-sdl-mcp.json").Path
+          $env:SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH = $env:SDL_CONFIG
+          $env:SDL_CONTEXT_QUALITY_CACHE_SOURCE_PATH = $env:SDL_CONTEXT_QUALITY_SDL_SOURCE
+          $env:SDL_CONTEXT_QUALITY_CACHE_PRIMARY_PATH = Join-Path $cacheRoot "sdl-mcp/graph.lbug"
+          $env:SDL_CONTEXT_QUALITY_CACHE_READY_PATH = Join-Path $cacheRoot "sdl-mcp/ready.json"
+          $env:SDL_CONTEXT_QUALITY_WORKING_DB_PATH = Join-Path $env:RUNNER_TEMP "context-quality-publish-sdl-mcp.lbug"
+          & node tests/benchmark/context-quality-runner.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $env:SDL_CONTEXT_QUALITY_REPO_ROOT = Join-Path $corpusRoot "sdlbench/tests/fixtures/repo"
+          $env:SDL_CONTEXT_QUALITY_REPO_ID = "sdl-neutral-fixture"
+          $env:SDL_CONFIG = (Resolve-Path "tests/benchmark/config/context-quality-neutral.json").Path
+          $env:SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH = $env:SDL_CONFIG
+          $env:SDL_CONTEXT_QUALITY_CACHE_SOURCE_PATH = $env:SDL_CONTEXT_QUALITY_NEUTRAL_SOURCE
+          $env:SDL_CONTEXT_QUALITY_CACHE_PRIMARY_PATH = Join-Path $cacheRoot "neutral/graph.lbug"
+          $env:SDL_CONTEXT_QUALITY_CACHE_READY_PATH = Join-Path $cacheRoot "neutral/ready.json"
+          $env:SDL_CONTEXT_QUALITY_WORKING_DB_PATH = Join-Path $env:RUNNER_TEMP "context-quality-publish-neutral.lbug"
+          & node tests/benchmark/context-quality-runner.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run paired context-quality evaluation from validated copies
+        shell: pwsh
+        env:
+          SDL_CONTEXT_QUALITY_REPO_SHA: fcf4f2e11c5a1bb9b301a245af42b28556414b8e
+          SDL_CONTEXT_QUALITY_REQUIRE_INDEX: "1"
+          SDL_CONTEXT_QUALITY_V2_SHADOW: "1"
+        run: |
+          $corpusRoot = (Resolve-Path ".context-quality-corpus").Path
+          $cacheRoot = Join-Path $env:GITHUB_WORKSPACE ".benchmark/context-quality-cache"
+          $resultRoot = Join-Path $env:GITHUB_WORKSPACE ".benchmark/context-quality-results"
+          New-Item -ItemType Directory -Path $resultRoot -Force | Out-Null
+          Remove-Item Env:SDL_CONTEXT_QUALITY_CACHE_SOURCE_PATH -ErrorAction SilentlyContinue
+          Remove-Item Env:SDL_CONTEXT_QUALITY_CACHE_PREPARE_ONLY -ErrorAction SilentlyContinue
+
+          $env:SDL_CONTEXT_QUALITY_CORPUS = "sdl-mcp"
+          $env:SDL_CONTEXT_QUALITY_REPO_ROOT = $corpusRoot
+          $env:SDL_CONTEXT_QUALITY_REPO_ID = "sdl-mcp"
+          $env:SDL_CONFIG = (Resolve-Path "tests/benchmark/config/context-quality-sdl-mcp.json").Path
+          $env:SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH = $env:SDL_CONFIG
+          $env:SDL_CONTEXT_QUALITY_CACHE_PRIMARY_PATH = Join-Path $cacheRoot "sdl-mcp/graph.lbug"
+          $env:SDL_CONTEXT_QUALITY_CACHE_READY_PATH = Join-Path $cacheRoot "sdl-mcp/ready.json"
+          $env:SDL_CONTEXT_QUALITY_WORKING_DB_PATH = Join-Path $env:RUNNER_TEMP "context-quality-run-sdl-mcp.lbug"
+          $env:SDL_CONTEXT_QUALITY_OUTPUT_PATH = Join-Path $resultRoot "sdl-mcp.json"
+          & node tests/benchmark/context-quality-runner.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $env:SDL_CONTEXT_QUALITY_CORPUS = "neutral"
+          $env:SDL_CONTEXT_QUALITY_REPO_ROOT = Join-Path $corpusRoot "sdlbench/tests/fixtures/repo"
+          $env:SDL_CONTEXT_QUALITY_REPO_ID = "sdl-neutral-fixture"
+          $env:SDL_CONFIG = (Resolve-Path "tests/benchmark/config/context-quality-neutral.json").Path
+          $env:SDL_CONTEXT_QUALITY_MANIFEST_CONFIG_PATH = $env:SDL_CONFIG
+          $env:SDL_CONTEXT_QUALITY_CACHE_PRIMARY_PATH = Join-Path $cacheRoot "neutral/graph.lbug"
+          $env:SDL_CONTEXT_QUALITY_CACHE_READY_PATH = Join-Path $cacheRoot "neutral/ready.json"
+          $env:SDL_CONTEXT_QUALITY_WORKING_DB_PATH = Join-Path $env:RUNNER_TEMP "context-quality-run-neutral.lbug"
+          $env:SDL_CONTEXT_QUALITY_OUTPUT_PATH = Join-Path $resultRoot "neutral.json"
+          & node tests/benchmark/context-quality-runner.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload context-quality artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: context-quality-${{ matrix.os }}
+          path: .benchmark/context-quality-results/**
+          if-no-files-found: warn
+          retention-days: 14
