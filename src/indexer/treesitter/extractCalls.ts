@@ -1,4 +1,6 @@
 import { Tree, SyntaxNode, QueryCapture } from "tree-sitter";
+
+import type { TestCaseFacet } from "../../domain/types.js";
 import { queryTreeForExtension } from "./tsTreesitter.js";
 import { findEnclosingSymbol } from "./symbolUtils.js";
 
@@ -28,6 +30,7 @@ export interface ExtractedSymbol {
   };
   visibility?: "public" | "private" | "protected" | "internal";
   decorators?: string[];
+  testCase?: TestCaseFacet;
 }
 
 export interface ExtractedCall {

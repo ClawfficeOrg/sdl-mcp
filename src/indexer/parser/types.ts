@@ -5,6 +5,7 @@ import type {
   SymbolReferenceRow,
 } from "../../db/ladybug-queries.js";
 import type { SymbolPlaceholderMeta } from "../../db/symbol-placeholders.js";
+import type { TestCaseFacet } from "../../domain/types.js";
 import type {
   PendingCallEdge,
   SymbolIndex,
@@ -145,6 +146,7 @@ export interface SymbolDetail {
     };
     signature?: SignatureLike;
     visibility?: "public" | "private" | "protected" | "internal";
+    testCase?: TestCaseFacet;
   };
   astFingerprint: string;
   symbolId: string;

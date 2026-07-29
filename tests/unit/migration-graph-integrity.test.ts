@@ -50,6 +50,16 @@ async function createVersion22Database(
       graphIntegrityDigest STRING,
       graphIntegrityError STRING
     )`,
+    `CREATE NODE TABLE Symbol (
+      symbolId STRING PRIMARY KEY,
+      roleTagsJson STRING
+    )`,
+    `CREATE NODE TABLE SymbolVersion (
+      id STRING PRIMARY KEY,
+      versionId STRING,
+      symbolId STRING,
+      sideEffectsJson STRING
+    )`,
     `CREATE NODE TABLE SchemaVersion (
       id STRING PRIMARY KEY,
       schemaVersion INT64,
@@ -92,6 +102,16 @@ async function createVersion22Database(
       graphIntegrityDigest: '${"b".repeat(64)}',
       graphIntegrityError: 'older failure'
     })`,
+    `CREATE (s:Symbol {
+      symbolId: 'legacy-symbol',
+      roleTagsJson: '["test"]'
+    })`,
+    `CREATE (sv:SymbolVersion {
+      id: 'legacy-version:legacy-symbol',
+      versionId: 'legacy-version',
+      symbolId: 'legacy-symbol',
+      sideEffectsJson: '[]'
+    })`,
     `CREATE (sv:SchemaVersion {
       id: 'current',
       schemaVersion: 22,
@@ -117,19 +137,20 @@ describe("migration: graph integrity revisions and manifest", () => {
     root = "";
   });
 
-  it("migrates all m022 rows to unknown nullable revision state", async () => {
-    root = mkdtempSync(join(tmpdir(), "sdl-integrity-m023-"));
+  it("migrates a populated m022 graph through m024 without deleting nodes", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-integrity-m024-"));
     const dbPath = join(root, "v22.lbug");
     await createVersion22Database(dbPath);
 
     await initLadybugDb(dbPath);
+    const conn = await getLadybugConn();
     const rows = await Promise.all([
       getDerivedState("repo"),
       getDerivedState("repo-b"),
     ]);
     const summary = await getDerivedStateSummary("repo");
 
-    assert.equal(LADYBUG_SCHEMA_VERSION, 23);
+    assert.equal(LADYBUG_SCHEMA_VERSION, 24);
     assert.deepEqual(
       rows.map((row) => ({
         state: row?.graphIntegrityState,
@@ -148,9 +169,9 @@ describe("migration: graph integrity revisions and manifest", () => {
           verifiedRevision: null,
           pruningSupported: null,
           manifestEstablished: false,
-          versionId: "legacy-v1",
-          digest: "a".repeat(64),
-          error: "history",
+          versionId: null,
+          digest: null,
+          error: null,
         },
         {
           state: "unknown",
@@ -158,13 +179,33 @@ describe("migration: graph integrity revisions and manifest", () => {
           verifiedRevision: null,
           pruningSupported: null,
           manifestEstablished: false,
-          versionId: "legacy-v2",
-          digest: "b".repeat(64),
-          error: "older failure",
+          versionId: null,
+          digest: null,
+          error: null,
         },
       ],
     );
     assert.equal(summary?.graphIntegrityRevision, null);
+
+    const schemaVersion = await querySingle<{ schemaVersion: unknown }>(
+      conn,
+      "MATCH (v:SchemaVersion {id: 'current'}) RETURN v.schemaVersion AS schemaVersion",
+    );
+    assert.equal(Number(schemaVersion?.schemaVersion), 24);
+    assert.deepEqual(
+      await queryAll(
+        conn,
+        "MATCH (s:Symbol) RETURN s.symbolId AS symbolId, s.testCaseJson AS testCaseJson ORDER BY s.symbolId",
+      ),
+      [{ symbolId: "legacy-symbol", testCaseJson: null }],
+    );
+    assert.deepEqual(
+      await queryAll(
+        conn,
+        "MATCH (s:SymbolVersion) RETURN s.id AS id, s.testCaseJson AS testCaseJson ORDER BY s.id",
+      ),
+      [{ id: "legacy-version:legacy-symbol", testCaseJson: null }],
+    );
   });
 
   it("finishes a partial DDL rerun and creates both manifest relationships", async () => {

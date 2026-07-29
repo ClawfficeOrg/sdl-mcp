@@ -75,6 +75,7 @@ export const NODE_TABLES: string[] = [
     invariantsJson STRING,
     sideEffectsJson STRING,
     roleTagsJson STRING,
+    testCaseJson STRING,
     searchText STRING,
     updatedAt STRING,
     embeddingMiniLM STRING,
@@ -115,7 +116,8 @@ export const NODE_TABLES: string[] = [
     signatureJson STRING,
     summary STRING,
     invariantsJson STRING,
-    sideEffectsJson STRING
+    sideEffectsJson STRING,
+    testCaseJson STRING
   )`,
 
   `CREATE NODE TABLE IF NOT EXISTS Metrics (

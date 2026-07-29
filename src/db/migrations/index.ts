@@ -27,6 +27,7 @@ import * as m020 from "./m020-add-metrics-fingerprint.js";
 import * as m021 from "./m021-remediate-symbol-embeddings.js";
 import * as m022 from "./m022-add-graph-integrity-state.js";
 import * as m023 from "./m023-add-graph-integrity-revisions-and-manifest.js";
+import * as m024 from "./m024-add-symbol-test-case.js";
 
 /** Ordered list of all migrations. Must be sorted by version ascending. */
 export const migrations: Migration[] = [
@@ -49,6 +50,7 @@ export const migrations: Migration[] = [
   m021,
   m022,
   m023,
+  m024,
 ];
 
 // --- Registry validation (runs at import time) ---

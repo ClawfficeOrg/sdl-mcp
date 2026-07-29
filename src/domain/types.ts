@@ -170,6 +170,14 @@ export function cardDetailLevelOrder(level: CardDetailLevel): number {
   return CARD_DETAIL_LEVEL_RANK[level];
 }
 
+export interface TestCaseFacet {
+  framework: string;
+  title: string;
+  suitePath?: string[];
+  category?: "test" | "benchmark" | "example" | "fuzz";
+  modifiers?: Array<"skip" | "todo" | "only" | "parameterized">;
+}
+
 export interface SymbolCard {
   symbolId: SymbolId;
   repoId: RepoId;
@@ -191,6 +199,7 @@ export interface SymbolCard {
   cluster?: SymbolClusterInfo;
   processes?: SymbolProcessInfo[];
   callResolution?: CallResolution;
+  testCase?: TestCaseFacet;
 
   deps: SymbolDeps;
   metrics?: SymbolMetrics;

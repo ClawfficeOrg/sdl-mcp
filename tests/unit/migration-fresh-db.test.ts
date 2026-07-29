@@ -55,7 +55,7 @@ describe("migration: fresh database", { skip: !ladybugAvailable }, () => {
     }
   });
 
-  it("creates schema version 23 with nullable graph integrity revisions directly", async () => {
+  it("creates schema version 24 with nullable graph integrity revisions directly", async () => {
     mkdirSync(testRoot, { recursive: true });
     const dbPath = join(testRoot, "fresh.lbug");
     const original = migrations[0];
@@ -70,8 +70,8 @@ describe("migration: fresh database", { skip: !ladybugAvailable }, () => {
       await initLadybugDb(dbPath);
       const conn = await getLadybugConn();
 
-      assert.equal(LADYBUG_SCHEMA_VERSION, 23);
-      assert.equal(await getSchemaVersion(conn), 23);
+      assert.equal(LADYBUG_SCHEMA_VERSION, 24);
+      assert.equal(await getSchemaVersion(conn), 24);
 
       await exec(
         conn,

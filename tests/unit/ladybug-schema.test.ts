@@ -104,6 +104,27 @@ describe("LadybugDB Schema", () => {
         await import("../../dist/db/migrations/index.js");
       assert.strictEqual(LADYBUG_SCHEMA_VERSION, MIGRATION_SCHEMA_VERSION);
     });
+
+    it("defines nullable test-case columns in canonical positions", async () => {
+      const { NODE_TABLES } = await import("../../dist/db/ladybug-schema.js");
+      const symbolDdl = NODE_TABLES.find((ddl) =>
+        ddl.includes("CREATE NODE TABLE IF NOT EXISTS Symbol ("),
+      );
+      const symbolVersionDdl = NODE_TABLES.find((ddl) =>
+        ddl.includes("CREATE NODE TABLE IF NOT EXISTS SymbolVersion ("),
+      );
+
+      assert.ok(symbolDdl);
+      assert.ok(symbolVersionDdl);
+      assert.match(
+        symbolDdl,
+        /roleTagsJson STRING,\s+testCaseJson STRING,\s+searchText STRING/u,
+      );
+      assert.match(
+        symbolVersionDdl,
+        /sideEffectsJson STRING,\s+testCaseJson STRING\s+\)/u,
+      );
+    });
   });
 
   describe("Node Tables - Basic Operations", () => {

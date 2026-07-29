@@ -193,6 +193,7 @@ export interface SymbolRow {
   summaryQuality?: number;
   summarySource?: string;
   roleTagsJson?: string | null;
+  testCaseJson?: string | null;
   searchText?: string | null;
   // SCIP integration fields
   external?: boolean;
