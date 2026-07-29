@@ -132,7 +132,7 @@ export function buildSymbolDetails(params: {
   return symbolsWithNodeIds.map((extractedSymbol) => {
     let astFingerprint = extractedSymbol.astFingerprint ?? "";
 
-    if (tree) {
+    if (tree && !astFingerprint) {
       const astNode = resolveSymbolNodeForFingerprint(tree, {
         kind: extractedSymbol.kind,
         name: extractedSymbol.name,

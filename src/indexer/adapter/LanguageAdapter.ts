@@ -4,7 +4,7 @@ import type {
   ExtractedCall,
 } from "../treesitter/extractCalls.js";
 import type { ExtractedImport } from "../treesitter/extractImports.js";
-import type { EdgeResolutionStrategy } from "../../domain/types.js";
+import type { EdgeResolutionStrategy, TestCaseFacet } from "../../domain/types.js";
 
 export interface StructuralMatcherDescriptor {
   /**
@@ -38,6 +38,24 @@ export interface AdapterResolvedCall {
   targetName?: string;
 }
 
+export type TestCaseCandidate =
+  | {
+      mode: "attach";
+      targetName: string;
+      targetKinds: Array<"function" | "method">;
+      constructRange: ExtractedSymbol["range"];
+      testCase: TestCaseFacet;
+    }
+  | {
+      mode: "synthetic";
+      kind: "function";
+      name: string;
+      nodeId: string;
+      constructRange: ExtractedSymbol["range"];
+      sourceFingerprint: string;
+      testCase: TestCaseFacet;
+    };
+
 export interface LanguageAdapter {
   languageId: string;
 
@@ -58,6 +76,13 @@ export interface LanguageAdapter {
     imports: ExtractedImport[];
     calls: ExtractedCall[];
   }>;
+
+  detectTestCases?(params: {
+    tree: Tree | null;
+    content: string;
+    filePath: string;
+    symbols: readonly ExtractedSymbol[];
+  }): TestCaseCandidate[];
 
   extractSymbols(
     tree: Tree,
