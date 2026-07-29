@@ -13,6 +13,7 @@ import {
 } from "../db/symbol-placeholders.js";
 import { getAdapterForExtension } from "../indexer/adapter/registry.js";
 import { logger } from "../util/logger.js";
+import { serializeTestCaseFacet } from "../util/test-case.js";
 import {
   isBuiltinCall,
   resolveCallTarget,
@@ -179,6 +180,7 @@ export async function parseDraftFile(
         range: symbol.range,
         signature: symbol.signature,
         visibility: symbol.visibility,
+        testCase: symbol.testCase,
         astFingerprint: "",
       }),
     );
@@ -294,6 +296,9 @@ export async function parseDraftFile(
         sideEffectsJson:
           sideEffects.length > 0 ? JSON.stringify(sideEffects) : null,
         roleTagsJson,
+        testCaseJson: extractedSymbol.testCase
+          ? (serializeTestCaseFacet(extractedSymbol.testCase) ?? null)
+          : null,
         searchText,
         updatedAt: timestamp,
       };

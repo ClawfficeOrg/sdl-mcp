@@ -115,6 +115,7 @@ export interface SyncIndexState {
     invariants_json: string | null;
     side_effects_json: string | null;
     role_tags_json: string | null;
+    test_case_json?: string | null;
     search_text: string | null;
     updated_at: string;
   }>;
@@ -126,6 +127,7 @@ export interface SyncIndexState {
     summary: string | null;
     invariants_json: string | null;
     side_effects_json: string | null;
+    test_case_json?: string | null;
   }>;
   edges: Array<{
     repo_id: RepoId;

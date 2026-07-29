@@ -117,6 +117,7 @@ export async function snapshotSymbols(
             summary: symbol.summary,
             invariantsJson: symbol.invariantsJson,
             sideEffectsJson: symbol.sideEffectsJson,
+            testCaseJson: symbol.testCaseJson,
           });
 
           snapshots.push({

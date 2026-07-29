@@ -132,6 +132,7 @@ const SYMBOL_COLUMNS = [
   "invariantsJson",
   "sideEffectsJson",
   "roleTagsJson",
+  "testCaseJson",
   "searchText",
   "updatedAt",
   "embeddingMiniLM",
@@ -190,6 +191,7 @@ const SYMBOL_VERSION_COLUMNS = [
   "summary",
   "invariantsJson",
   "sideEffectsJson",
+  "testCaseJson",
 ] as const;
 
 const METRICS_COLUMNS = [
@@ -311,6 +313,7 @@ interface AuxiliarySymbolRow {
   invariantsJson: string | null;
   sideEffectsJson: string | null;
   roleTagsJson: string | null;
+  testCaseJson: string | null;
   searchText: string | null;
   updatedAt: string | null;
   external: boolean;
@@ -343,6 +346,7 @@ interface AuxiliarySymbolQueryRow {
   invariantsJson: string | null;
   sideEffectsJson: string | null;
   roleTagsJson: string | null;
+  testCaseJson: string | null;
   searchText: string | null;
   updatedAt: string | null;
   external: unknown;
@@ -766,6 +770,7 @@ async function copyFinalizedRows(params: {
         row.summary,
         row.invariantsJson,
         row.sideEffectsJson,
+        row.testCaseJson,
       ],
     }),
     await writeCsvArtifact({
@@ -1320,6 +1325,7 @@ async function readRealSymbolsForRepo(
             s.invariantsJson AS invariantsJson,
             s.sideEffectsJson AS sideEffectsJson,
             s.roleTagsJson AS roleTagsJson,
+            s.testCaseJson AS testCaseJson,
             s.searchText AS searchText,
             s.updatedAt AS updatedAt,
             coalesce(s.external, false) AS external,
@@ -1367,6 +1373,7 @@ async function readEdgeTargetSymbolsForRepo(
             target.invariantsJson AS invariantsJson,
             target.sideEffectsJson AS sideEffectsJson,
             target.roleTagsJson AS roleTagsJson,
+            target.testCaseJson AS testCaseJson,
             target.searchText AS searchText,
             target.updatedAt AS updatedAt,
             coalesce(target.external, false) AS external,
@@ -1495,6 +1502,7 @@ function symbolRowFromQuery(
     invariantsJson: row.invariantsJson,
     sideEffectsJson: row.sideEffectsJson,
     roleTagsJson: row.roleTagsJson,
+    testCaseJson: row.testCaseJson,
     searchText: row.searchText,
     updatedAt: row.updatedAt,
     external: toBoolean(row.external),
@@ -1562,6 +1570,7 @@ async function ensureRelationshipEndpointSymbols(
            s.invariantsJson = row.invariantsJson,
            s.sideEffectsJson = row.sideEffectsJson,
            s.roleTagsJson = row.roleTagsJson,
+           s.testCaseJson = row.testCaseJson,
            s.searchText = row.searchText,
            s.updatedAt = row.updatedAt,
            s.external = row.external,
@@ -1639,6 +1648,7 @@ async function upsertAuxiliarySymbolsFallback(
            s.invariantsJson = row.invariantsJson,
            s.sideEffectsJson = row.sideEffectsJson,
            s.roleTagsJson = row.roleTagsJson,
+           s.testCaseJson = row.testCaseJson,
            s.searchText = row.searchText,
            s.updatedAt = row.updatedAt,
            s.external = row.external,
@@ -1878,6 +1888,7 @@ function symbolRowToFallbackParams(row: AuxiliarySymbolRow): {
   invariantsJson: string;
   sideEffectsJson: string;
   roleTagsJson: string;
+  testCaseJson: string | null;
   searchText: string;
   updatedAt: string;
   external: boolean;
@@ -1909,6 +1920,7 @@ function symbolRowToFallbackParams(row: AuxiliarySymbolRow): {
     invariantsJson: row.invariantsJson ?? "",
     sideEffectsJson: row.sideEffectsJson ?? "",
     roleTagsJson: row.roleTagsJson ?? "",
+    testCaseJson: row.testCaseJson ?? null,
     searchText: row.searchText ?? "",
     updatedAt: row.updatedAt ?? "",
     external: row.external,
@@ -2015,6 +2027,7 @@ async function readAuxiliarySymbolsForRepo(
             s.invariantsJson AS invariantsJson,
             s.sideEffectsJson AS sideEffectsJson,
             s.roleTagsJson AS roleTagsJson,
+            s.testCaseJson AS testCaseJson,
             s.searchText AS searchText,
             s.updatedAt AS updatedAt,
             coalesce(s.external, false) AS external,
@@ -2070,6 +2083,7 @@ function auxiliarySymbolToCopyCells(row: AuxiliarySymbolRow): unknown[] {
     row.invariantsJson,
     row.sideEffectsJson,
     row.roleTagsJson,
+    row.testCaseJson,
     row.searchText,
     row.updatedAt,
     null,
@@ -2414,7 +2428,8 @@ async function readRealSymbolVersionsForRepoAtVersion(
             sv.signatureJson AS signatureJson,
             sv.summary AS summary,
             sv.invariantsJson AS invariantsJson,
-            sv.sideEffectsJson AS sideEffectsJson`,
+            sv.sideEffectsJson AS sideEffectsJson,
+            sv.testCaseJson AS testCaseJson`,
     { repoId, versionId, excludedSymbolIds: excluded },
   );
 }

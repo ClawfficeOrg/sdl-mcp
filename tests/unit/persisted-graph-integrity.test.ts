@@ -52,6 +52,9 @@ const {
   markUnrevisionedGraphIntegrityFailedIfVerifying,
 } = derivedState;
 
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
+
 function symbolRow(overrides: Record<string, unknown> = {}) {
   return {
     symbolId: "sym:alpha",
@@ -161,6 +164,8 @@ function canonicalFilelessJson(
     false,
     "import",
     symbolId,
+    null,
+    null,
   ];
   for (const [index, value] of Object.entries(overrides)) {
     fields[Number(index)] = value;
@@ -213,6 +218,40 @@ async function seedVersionedGraph(root: string): Promise<void> {
 
 describe("persisted graph integrity", () => {
   let root = "";
+
+  it("includes nullable test-case JSON in canonical symbols and digests", () => {
+    const base = symbolRow({ roleTagsJson: '["test"]' });
+    const withFacet = { ...base, testCaseJson: TEST_CASE_JSON };
+    const withNull = { ...base, testCaseJson: null };
+    const reference = {
+      filelessSymbolId: base.symbolId,
+      sourceSymbolId: null,
+      edgeType: "call",
+      direction: "incoming" as const,
+      referenceCount: 1,
+    };
+    const canonicalJson = (symbol: ReturnType<typeof symbolRow>) =>
+      createGraphIntegrityFilelessReferenceTuples(
+        [reference],
+        [symbol],
+        new Map(),
+      )[0]![1];
+    const digest = (symbol: ReturnType<typeof symbolRow>) =>
+      createGraphIntegrityFileDigest({
+        fileId: base.fileId,
+        relPath: "src/alpha.ts",
+        symbols: [symbol],
+      }).digest;
+
+    assert.notStrictEqual(canonicalJson(base), canonicalJson(withFacet));
+    assert.notStrictEqual(digest(base), digest(withFacet));
+    assert.strictEqual(
+      parseGraphIntegrityCanonicalSymbol(canonicalJson(withFacet)).testCaseJson,
+      TEST_CASE_JSON,
+    );
+    assert.strictEqual(canonicalJson(base), canonicalJson(withNull));
+    assert.strictEqual(digest(base), digest(withNull));
+  });
 
   afterEach(async () => {
     resetObservabilityTap();
@@ -301,6 +340,8 @@ describe("persisted graph integrity", () => {
       external: true,
       placeholderKind: "scip",
       placeholderTarget: "target",
+      roleTagsJson: null,
+      testCaseJson: null,
     });
     assert.deepEqual(
       parseReferences(
@@ -652,6 +693,74 @@ describe("persisted graph integrity", () => {
     const actual = await capture(await getLadybugConn(), "repo");
     assert.equal(compare(expected, actual), null);
     assert.equal((actual as { digest: string }).digest, expected.digest);
+  });
+
+  it("preserves terminal semantic facets in durable integrity capture", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-graph-integrity-semantic-facets-"));
+    await initLadybugDb(join(root, "semantic-facets.lbug"));
+    const fileId = "repo:src/semantic.ts";
+    const relPath = "src/semantic.ts";
+    const absentSymbol = symbolRow({
+      symbolId: "sym:absent",
+      fileId,
+      name: "absent",
+    });
+    const facetSymbol = symbolRow({
+      symbolId: "sym:semantic",
+      fileId,
+      name: "semantic",
+      roleTagsJson: '["test"]',
+      testCaseJson: TEST_CASE_JSON,
+    });
+    const symbols = [absentSymbol, facetSymbol];
+
+    await withWriteConn(async (conn) => {
+      await ladybugDb.upsertRepo(conn, {
+        repoId: "repo",
+        rootPath: root,
+        configJson: "{}",
+        createdAt: "2026-07-29T00:00:00.000Z",
+      });
+      await ladybugDb.upsertFile(conn, {
+        fileId,
+        repoId: "repo",
+        relPath,
+        contentHash: "a".repeat(64),
+        language: "typescript",
+        byteSize: 10,
+        lastIndexedAt: "2026-07-29T00:00:00.000Z",
+      });
+      await ladybugDb.upsertKnownFileSymbols(conn, symbols);
+    });
+
+    const expected = createGraphIntegrityExpectation([
+      createGraphIntegrityFileDigest({ fileId, relPath, symbols }),
+    ]);
+    const actual = await capturePersistedGraphIntegrity(
+      await getLadybugConn(),
+      "repo",
+    );
+
+    assert.equal(compareGraphIntegrityExpectations(expected, actual), null);
+    assert.equal(actual.digest, expected.digest);
+
+    await withWriteConn((conn) =>
+      ladybugDb.exec(
+        conn,
+        `MATCH (s:Symbol {symbolId: $symbolId})
+         SET s.testCaseJson = $testCaseJson`,
+        { symbolId: absentSymbol.symbolId, testCaseJson: "" },
+      ),
+    );
+    const emptyTestCaseActual = await capturePersistedGraphIntegrity(
+      await getLadybugConn(),
+      "repo",
+    );
+    assert.notEqual(
+      compareGraphIntegrityExpectations(expected, emptyTestCaseActual),
+      null,
+      "empty testCaseJson must remain a canonical mismatch",
+    );
   });
 
   it("stops integrity paging after a short final page", async () => {

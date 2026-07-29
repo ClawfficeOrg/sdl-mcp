@@ -20,6 +20,7 @@ import { Connection } from "kuzu";
 import {
   type AppConfig,
   IndexingConfigSchema,
+  RepoConfigSchema,
   ScipConfigSchema,
   SemanticEnrichmentConfigSchema,
 } from "../../dist/config/types.js";
@@ -68,6 +69,7 @@ import { validateProviderFirstGraphRows } from "../../dist/indexer/provider-firs
 import { resolveProviderFirstPipeline } from "../../dist/indexer/provider-first/planner.js";
 import { normalizeScipProviderFacts } from "../../dist/indexer/provider-first/scip-normalizer.js";
 import { BatchPersistAccumulator } from "../../dist/indexer/parser/batch-persist.js";
+import { processFileFromRustResult } from "../../dist/indexer/parser/rust-process-file.js";
 import { stageProviderFirstShadowBuild } from "../../dist/indexer/provider-first/shadow-build.js";
 import { finalizeProviderFirstShadowDb } from "../../dist/indexer/provider-first/shadow-finalization.js";
 import {
@@ -122,6 +124,9 @@ import type { ProviderFirstGraphRows } from "../../dist/indexer/provider-first/m
 import type { ProviderFactSet } from "../../dist/indexer/provider-first/types.js";
 import { writeTestScipIndex } from "../fixtures/scip/builder.ts";
 
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
+
 describe("provider-first indexing foundation", () => {
   it("defaults indexing to automatic provider-first selection with shadow activation", () => {
     const config = IndexingConfigSchema.parse({});
@@ -134,6 +139,87 @@ describe("provider-first indexing foundation", () => {
     assert.equal(config.providerFirst.lsp.mode, "primaryWithCaps");
     assert.equal(config.algorithmRefresh.louvain.maxCallEdges, 10_000);
     assert.equal(config.watchProvider, "auto");
+  });
+
+  it("reconstructs semantic test facets from RustExtractedSymbol rows", async () => {
+    const root = mkdtempSync(join(tmpdir(), "sdl-rust-test-case-row-"));
+    const dbPath = join(root, "graph.lbug");
+    const capturedSymbols: SymbolRow[] = [];
+    class CapturingAccumulator extends BatchPersistAccumulator {
+      override addSymbols(rows: SymbolRow[]): void {
+        capturedSymbols.push(...rows);
+        super.addSymbols(rows);
+      }
+    }
+
+    try {
+      await initLadybugDb(dbPath);
+      const testCase = JSON.parse(TEST_CASE_JSON) as {
+        framework: string;
+        title: string;
+        suitePath: string[];
+        modifiers: string[];
+      };
+      await processFileFromRustResult({
+        repoId: "repo-rust-test-case",
+        repoRoot: root,
+        fileMeta: {
+          path: "src/sample.ts",
+          size: 24,
+          mtime: Date.now(),
+          contentHash: "1".repeat(64),
+        },
+        rustResult: {
+          relPath: "src/sample.ts",
+          contentHash: "1".repeat(64),
+          content: "export function sample() {}",
+          symbols: [
+            {
+              nodeId: "sample:1:0",
+              symbolId: "repo-rust-test-case:src/sample.ts:function:sample",
+              astFingerprint: "rust-fingerprint",
+              kind: "function",
+              name: "sample",
+              exported: true,
+              visibility: "public",
+              range: { startLine: 1, startCol: 0, endLine: 1, endCol: 27 },
+              signature: { params: [], returns: "void", generics: [] },
+              summary: "",
+              invariantsJson: "[]",
+              sideEffectsJson: "[]",
+              roleTagsJson: "[]",
+              testCase,
+              decorators: [],
+              searchText: "sample",
+            },
+          ],
+          imports: [],
+          calls: [],
+          parseError: null,
+        },
+        languages: ["ts"],
+        mode: "full",
+        symbolIndex: new Map(),
+        pendingCallEdges: [],
+        createdCallEdges: new Set(),
+        tsResolver: null,
+        config: RepoConfigSchema.parse({
+          repoId: "repo-rust-test-case",
+          rootPath: root,
+          languages: ["ts"],
+        }),
+        allSymbolsByName: new Map(),
+        skipCallResolution: true,
+        batchAccumulator: new CapturingAccumulator(10_000, {
+          autoDrain: false,
+        }),
+      });
+
+      assert.equal(capturedSymbols[0]?.testCaseJson, TEST_CASE_JSON);
+    } finally {
+      await closeLadybugDb().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("validates watcher provider configuration", () => {
@@ -7364,6 +7450,7 @@ describe("provider-first indexing foundation", () => {
           symbolId: "symbol-ts",
           symbolLanguage: "typescript",
           name: "runTs",
+          testCaseJson: TEST_CASE_JSON,
           byteSize: 128,
         },
         {
@@ -7374,6 +7461,7 @@ describe("provider-first indexing foundation", () => {
           symbolId: "symbol-rs",
           symbolLanguage: "rust",
           name: "runRs",
+          testCaseJson: null,
           byteSize: 96,
         },
       ]) {
@@ -7403,6 +7491,7 @@ describe("provider-first indexing foundation", () => {
                s.summaryQuality = 0.5,
                s.summarySource = 'test',
                s.roleTagsJson = '[]',
+               s.testCaseJson = $testCaseJson,
                s.searchText = $name,
                s.external = false,
                s.source = 'treesitter',
@@ -7442,6 +7531,11 @@ describe("provider-first indexing foundation", () => {
       );
       assert.equal(symbolLanguageById.get("symbol-ts"), "typescript");
       assert.equal(symbolLanguageById.get("symbol-rs"), "rust");
+      const testCaseBySymbolId = new Map(
+        rows.symbols.map((row) => [row.symbolId, row.testCaseJson]),
+      );
+      assert.equal(testCaseBySymbolId.get("symbol-ts"), TEST_CASE_JSON);
+      assert.equal(testCaseBySymbolId.get("symbol-rs"), null);
     } finally {
       conn.close();
       db.close();
@@ -8960,6 +9054,7 @@ describe("provider-first indexing foundation", () => {
              target.invariantsJson = '',
              target.sideEffectsJson = '',
              target.roleTagsJson = '',
+             target.testCaseJson = $testCaseJson,
              target.searchText = $unresolvedSymbolId,
              target.updatedAt = $now,
              target.external = false,
@@ -8991,6 +9086,7 @@ describe("provider-first indexing foundation", () => {
           fileId,
           sourceSymbolId,
           unresolvedSymbolId,
+          testCaseJson: TEST_CASE_JSON,
           versionId,
           now,
         },
@@ -9027,13 +9123,141 @@ describe("provider-first indexing foundation", () => {
       const verificationDb = new kuzu.Database(shadowDbPath);
       const verificationConn = new kuzu.Connection(verificationDb);
       try {
-        const membershipRows = await queryAll<{ count: unknown }>(
+        const membershipRows = await queryAll<{
+          count: unknown;
+          testCaseJson: string | null;
+        }>(
           verificationConn,
           `MATCH (s:Symbol {symbolId: $unresolvedSymbolId})-[:SYMBOL_IN_FILE]->(:File {fileId: $fileId})
-           RETURN count(s) AS count`,
+           RETURN count(s) AS count, max(s.testCaseJson) AS testCaseJson`,
           { unresolvedSymbolId, fileId },
         );
         assert.equal(toNumber(membershipRows[0]?.count ?? 0), 1);
+        assert.equal(membershipRows[0]?.testCaseJson, TEST_CASE_JSON);
+      } finally {
+        await verificationConn.close().catch(() => {});
+        await verificationDb.close().catch(() => {});
+      }
+    } finally {
+      await activeConn.close().catch(() => {});
+      await activeDb.close().catch(() => {});
+      await shadowConn.close().catch(() => {});
+      await shadowDb.close().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves testCaseJson for edge-only target symbols", async () => {
+    const root = mkdtempSync(
+      join(tmpdir(), "sdl-provider-first-finalize-edge-target-"),
+    );
+    const activeDbPath = join(root, "active.lbug");
+    const shadowDbPath = join(root, "shadow.lbug");
+    const kuzu = await import("kuzu");
+    const activeDb = new kuzu.Database(activeDbPath);
+    const activeConn = new kuzu.Connection(activeDb);
+    const shadowDb = new kuzu.Database(shadowDbPath);
+    const shadowConn = new kuzu.Connection(shadowDb);
+    const repoId = "repo";
+    const fileId = "file-1";
+    const sourceSymbolId = "source-symbol";
+    const targetSymbolId = "edge-only-target";
+    const versionId = "version-1";
+    const now = "2026-05-26T00:00:00.000Z";
+
+    try {
+      await createBaseSchema(activeConn);
+      await createBaseSchema(shadowConn);
+      await seedRepoFileAndSourceSymbol(activeConn, {
+        repoId,
+        fileId,
+        sourceSymbolId,
+        now,
+      });
+      await seedRepoFileAndSourceSymbol(shadowConn, {
+        repoId,
+        fileId,
+        sourceSymbolId,
+        now,
+      });
+      await dbExec(
+        activeConn,
+        `MATCH (r:Repo {repoId: $repoId})
+         MATCH (source:Symbol {symbolId: $sourceSymbolId})
+         MERGE (target:Symbol {symbolId: $targetSymbolId})
+         SET target.repoId = $repoId,
+             target.kind = 'function',
+             target.name = 'edgeOnlyTarget',
+             target.exported = false,
+             target.visibility = '',
+             target.language = 'typescript',
+             target.rangeStartLine = 0,
+             target.rangeStartCol = 0,
+             target.rangeEndLine = 0,
+             target.rangeEndCol = 0,
+             target.astFingerprint = $targetSymbolId,
+             target.signatureJson = '',
+             target.summary = '',
+             target.summaryQuality = 0.0,
+             target.summarySource = 'unknown',
+             target.invariantsJson = '',
+             target.sideEffectsJson = '',
+             target.roleTagsJson = '',
+             target.testCaseJson = $testCaseJson,
+             target.searchText = $targetSymbolId,
+             target.updatedAt = $now,
+             target.external = false,
+             target.source = 'treesitter',
+             target.packageName = '',
+             target.packageVersion = '',
+             target.scipSymbol = '',
+             target.symbolStatus = 'real',
+             target.placeholderKind = '',
+             target.placeholderTarget = ''
+         MERGE (source)-[d:DEPENDS_ON {edgeType: 'call'}]->(target)
+         SET d.weight = 1.0,
+             d.confidence = 0.7,
+             d.resolution = 'heuristic',
+             d.resolverId = 'test',
+             d.resolutionPhase = 'pass2',
+             d.provenance = 'unit-test',
+             d.createdAt = $now
+         MERGE (v:Version {versionId: $versionId})
+         SET v.createdAt = $now,
+             v.reason = 'test',
+             v.prevVersionHash = null,
+             v.versionHash = 'hash'
+         MERGE (v)-[:VERSION_OF_REPO]->(r)`,
+        {
+          repoId,
+          sourceSymbolId,
+          targetSymbolId,
+          testCaseJson: TEST_CASE_JSON,
+          versionId,
+          now,
+        },
+      );
+      await shadowConn.close();
+      await shadowDb.close();
+
+      const summary = await finalizeProviderFirstShadowDb({
+        activeConn,
+        repoId,
+        versionId,
+        shadowDbPath,
+      });
+      assert.equal(summary.status, "finalized", summary.reasons.join("\n"));
+
+      const verificationDb = new kuzu.Database(shadowDbPath);
+      const verificationConn = new kuzu.Connection(verificationDb);
+      try {
+        const rows = await queryAll<{ testCaseJson: string | null }>(
+          verificationConn,
+          `MATCH (s:Symbol {symbolId: $targetSymbolId})
+           RETURN s.testCaseJson AS testCaseJson`,
+          { targetSymbolId },
+        );
+        assert.equal(rows[0]?.testCaseJson, TEST_CASE_JSON);
       } finally {
         await verificationConn.close().catch(() => {});
         await verificationDb.close().catch(() => {});
@@ -9560,6 +9784,14 @@ describe("provider-first indexing foundation", () => {
       const finalizedDb = new kuzu.Database(shadowDbPath);
       const finalizedConn = new kuzu.Connection(finalizedDb);
       try {
+        const facetRows = await queryAll<{ testCaseJson: string | null }>(
+          finalizedConn,
+          `MATCH (s:Symbol {symbolId: $sourceSymbolId})
+           RETURN s.testCaseJson AS testCaseJson`,
+          { sourceSymbolId },
+        );
+        assert.equal(facetRows[0]?.testCaseJson, TEST_CASE_JSON);
+
         const edgeRows = await queryAll<{ provenance: string | null }>(
           finalizedConn,
           `MATCH (:Symbol {symbolId: $sourceSymbolId})-[d:DEPENDS_ON {edgeType: 'call'}]->(:Symbol {symbolId: $targetSymbolId})
@@ -11936,6 +12168,7 @@ async function seedRepoFileAndSourceSymbol(
          s.invariantsJson = '',
          s.sideEffectsJson = '',
          s.roleTagsJson = '',
+         s.testCaseJson = $testCaseJson,
          s.searchText = 'main',
          s.updatedAt = $now,
          s.external = false,
@@ -11948,7 +12181,7 @@ async function seedRepoFileAndSourceSymbol(
          s.placeholderTarget = ''
      MERGE (s)-[:SYMBOL_IN_FILE]->(f)
      MERGE (s)-[:SYMBOL_IN_REPO]->(r)`,
-    params,
+    { ...params, testCaseJson: TEST_CASE_JSON },
   );
 }
 

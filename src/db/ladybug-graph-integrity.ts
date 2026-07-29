@@ -34,6 +34,8 @@ export interface PersistedGraphIntegritySymbolRow {
   external: boolean;
   placeholderKind: string | null;
   placeholderTarget: string | null;
+  roleTagsJson: string | null;
+  testCaseJson: string | null;
 }
 
 export interface GraphIntegritySymbolCursor {
@@ -592,7 +594,9 @@ export async function getPersistedGraphIntegritySymbolPage(
             s.symbolStatus AS symbolStatus,
             s.external AS external,
             s.placeholderKind AS placeholderKind,
-            s.placeholderTarget AS placeholderTarget
+            s.placeholderTarget AS placeholderTarget,
+            s.roleTagsJson AS roleTagsJson,
+            s.testCaseJson AS testCaseJson
      ORDER BY relPath ASC, fileId ASC, s.symbolId ASC
      LIMIT $limit`,
     {

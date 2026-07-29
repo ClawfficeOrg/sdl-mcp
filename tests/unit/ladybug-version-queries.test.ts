@@ -8,6 +8,8 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const TEST_DB_PATH = join(tmpdir(), ".lbug-version-test-db.lbug");
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
 
 interface LadybugConnection {
   query: (q: string) => Promise<{
@@ -160,6 +162,7 @@ describe("LadybugDB Version & Snapshot Queries", () => {
           summary: "s",
           invariantsJson: null,
           sideEffectsJson: null,
+          testCaseJson: TEST_CASE_JSON,
         },
       );
 
@@ -170,6 +173,27 @@ describe("LadybugDB Version & Snapshot Queries", () => {
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0]!.symbolId, "sym-1");
       assert.strictEqual(rows[0]!.id, "v1:sym-1");
+      assert.strictEqual(rows[0]!.testCaseJson, TEST_CASE_JSON);
+
+      await queries.snapshotSymbolVersion(
+        conn as unknown as import("kuzu").Connection,
+        {
+          versionId: "v2",
+          symbolId: "sym-1",
+          astFingerprint: "fp",
+          signatureJson: "{}",
+          summary: "s",
+          invariantsJson: null,
+          sideEffectsJson: null,
+          testCaseJson: null,
+        },
+      );
+      const changedRows = await queries.getSymbolVersionsAtVersion(
+        conn as unknown as import("kuzu").Connection,
+        "v2",
+      );
+      assert.strictEqual(changedRows[0]!.symbolId, rows[0]!.symbolId);
+      assert.notStrictEqual(changedRows[0]!.testCaseJson, rows[0]!.testCaseJson);
     },
   );
 
@@ -188,6 +212,7 @@ describe("LadybugDB Version & Snapshot Queries", () => {
             summary: null,
             invariantsJson: null,
             sideEffectsJson: null,
+            testCaseJson: TEST_CASE_JSON,
           },
           {
             versionId: "v-batch",
@@ -197,6 +222,7 @@ describe("LadybugDB Version & Snapshot Queries", () => {
             summary: "summary",
             invariantsJson: "[]",
             sideEffectsJson: "[]",
+            testCaseJson: null,
           },
         ],
       );
@@ -213,6 +239,11 @@ describe("LadybugDB Version & Snapshot Queries", () => {
         rows.map((row) => row.id).sort(),
         ["v-batch:sym-1", "v-batch:sym-2"],
       );
+      const testCaseBySymbolId = new Map(
+        rows.map((row) => [row.symbolId, row.testCaseJson]),
+      );
+      assert.strictEqual(testCaseBySymbolId.get("sym-1"), TEST_CASE_JSON);
+      assert.strictEqual(testCaseBySymbolId.get("sym-2"), null);
     },
   );
 
@@ -242,6 +273,7 @@ describe("LadybugDB Version & Snapshot Queries", () => {
             summary: null,
             invariantsJson: null,
             sideEffectsJson: null,
+            testCaseJson: symbolId === symbolIds[0] ? TEST_CASE_JSON : null,
             updatedAt: "2026-07-18T00:00:00Z",
           },
         );
@@ -275,15 +307,34 @@ describe("LadybugDB Version & Snapshot Queries", () => {
           versionId: "v-merge-fresh",
           reason: "fresh-snapshot",
         });
-        assert.strictEqual(
-          (
-            await queries.getSymbolVersionsAtVersion(
-              snapshotConn,
-              "v-merge-fresh",
-            )
-          ).length,
-          symbolIds.length,
+        const freshRows = await queries.getSymbolVersionsAtVersion(
+          snapshotConn,
+          "v-merge-fresh",
         );
+        assert.strictEqual(freshRows.length, symbolIds.length);
+        assert.strictEqual(
+          freshRows.find((row) => row.symbolId === symbolIds[0])?.testCaseJson,
+          TEST_CASE_JSON,
+        );
+
+        const deltaVersionId = "v-delta-snapshot";
+        await queries.createVersion(snapshotConn, {
+          versionId: deltaVersionId,
+          repoId,
+          createdAt: "2026-07-18T00:00:01Z",
+          reason: "delta-snapshot",
+          prevVersionHash: null,
+          versionHash: "pending",
+        });
+        const { snapshotSymbols } = await import(
+          "../../dist/delta/versioning.js"
+        );
+        await snapshotSymbols(deltaVersionId, [symbolIds[0]!]);
+        const deltaRows = await queries.getSymbolVersionsAtVersion(
+          snapshotConn,
+          deltaVersionId,
+        );
+        assert.strictEqual(deltaRows[0]?.testCaseJson, TEST_CASE_JSON);
 
         for (const reason of ["partial-snapshot", "idempotent-replay"]) {
           await createVersionAndSnapshot({
@@ -292,16 +343,17 @@ describe("LadybugDB Version & Snapshot Queries", () => {
             reason,
           });
         }
+        const partialRows = await queries.getSymbolVersionsAtVersion(
+          snapshotConn,
+          partialVersionId,
+        );
         assert.deepStrictEqual(
-          (
-            await queries.getSymbolVersionsAtVersion(
-              snapshotConn,
-              partialVersionId,
-            )
-          )
-            .map((row) => row.symbolId)
-            .sort(),
+          partialRows.map((row) => row.symbolId).sort(),
           symbolIds,
+        );
+        assert.strictEqual(
+          partialRows.find((row) => row.symbolId === symbolIds[0])?.testCaseJson,
+          TEST_CASE_JSON,
         );
       } finally {
         await ladybug.closeLadybugDb();

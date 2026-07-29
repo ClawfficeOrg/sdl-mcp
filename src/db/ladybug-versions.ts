@@ -45,6 +45,7 @@ export interface SymbolVersionRow {
   summary: string | null;
   invariantsJson: string | null;
   sideEffectsJson: string | null;
+  testCaseJson?: string | null;
 }
 
 export async function createVersion(
@@ -188,7 +189,8 @@ export async function snapshotSymbolVersion(
          sv.signatureJson = $signatureJson,
          sv.summary = $summary,
          sv.invariantsJson = $invariantsJson,
-         sv.sideEffectsJson = $sideEffectsJson`,
+         sv.sideEffectsJson = $sideEffectsJson,
+         sv.testCaseJson = $testCaseJson`,
     {
       id,
       versionId: row.versionId,
@@ -198,6 +200,7 @@ export async function snapshotSymbolVersion(
       summary: row.summary,
       invariantsJson: row.invariantsJson,
       sideEffectsJson: row.sideEffectsJson,
+      testCaseJson: row.testCaseJson ?? null,
     },
   );
 }
@@ -227,6 +230,7 @@ export async function snapshotSymbolVersionsBatch(
       summary: row.summary,
       invariantsJson: row.invariantsJson,
       sideEffectsJson: row.sideEffectsJson,
+      testCaseJson: row.testCaseJson ?? null,
     }));
     await withTransaction(conn, async (txConn) => {
       await exec(
@@ -239,7 +243,8 @@ export async function snapshotSymbolVersionsBatch(
              sv.signatureJson = row.signatureJson,
              sv.summary = row.summary,
              sv.invariantsJson = row.invariantsJson,
-             sv.sideEffectsJson = row.sideEffectsJson`,
+             sv.sideEffectsJson = row.sideEffectsJson,
+             sv.testCaseJson = row.testCaseJson`,
         { rows: chunk },
       );
     });
@@ -264,7 +269,8 @@ export async function getSymbolVersionsByIds(
             sv.signatureJson AS signatureJson,
             sv.summary AS summary,
             sv.invariantsJson AS invariantsJson,
-            sv.sideEffectsJson AS sideEffectsJson`,
+            sv.sideEffectsJson AS sideEffectsJson,
+            sv.testCaseJson AS testCaseJson`,
     { versionId, symbolIds },
   );
   return rows;
@@ -284,7 +290,8 @@ export async function getSymbolVersionsAtVersion(
             sv.signatureJson AS signatureJson,
             sv.summary AS summary,
             sv.invariantsJson AS invariantsJson,
-            sv.sideEffectsJson AS sideEffectsJson`,
+            sv.sideEffectsJson AS sideEffectsJson,
+            sv.testCaseJson AS testCaseJson`,
     { versionId },
   );
   return rows;

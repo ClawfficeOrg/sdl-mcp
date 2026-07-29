@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   readSafeRebuildSymbolPointLookupSample,
   SAFE_REBUILD_SYMBOL_STRING_FIELDS,
+  validateSafeRebuildCanonicalStrings,
 } from "../../dist/db/ladybug-safe-rebuild.js";
 import { NODE_TABLES } from "../../dist/db/ladybug-schema.js";
 
@@ -38,6 +39,7 @@ function symbolProjection(
     invariantsJson: "",
     sideEffectsJson: "",
     roleTagsJson: "",
+    testCaseJson: null,
     searchText: "scan-name",
     updatedAt: "2026-07-23T00:00:00.000Z",
     embeddingMiniLM: null,
@@ -82,12 +84,35 @@ describe("safe rebuild Symbol point-lookup parity", () => {
     );
   });
 
+  it("validates every canonical Symbol STRING field", async () => {
+    let statement = "";
+    const conn = {
+      async prepare(query: string) {
+        statement = query;
+        return { statement: query };
+      },
+      async execute() {
+        return new FakeQueryResult([{}]);
+      },
+    } as unknown as import("kuzu").Connection;
+
+    await validateSafeRebuildCanonicalStrings(conn);
+
+    for (const field of SAFE_REBUILD_SYMBOL_STRING_FIELDS) {
+      assert.ok(
+        statement.includes(`s.${field}`),
+        `canonical validation must include ${field}`,
+      );
+    }
+  });
+
   it("rejects coherent IDs whose scan-visible strings disagree with scalar PK lookup", async () => {
     const statements: string[] = [];
     const paramsLog: Record<string, unknown>[] = [];
     const scan = symbolProjection();
     const point = symbolProjection({
       name: "point-name",
+      testCaseJson: '{"framework":"node:test","title":"point"}',
       scipSymbol: "scip . . sym-1().",
     });
     const conn = {
@@ -128,7 +153,7 @@ describe("safe rebuild Symbol point-lookup parity", () => {
     assert.deepStrictEqual(result.mismatches, [
       {
         symbolId: "sym-1",
-        fields: ["name", "scipSymbol"],
+        fields: ["name", "testCaseJson", "scipSymbol"],
       },
     ]);
     assert.ok(

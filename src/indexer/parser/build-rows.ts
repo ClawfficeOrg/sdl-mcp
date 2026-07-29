@@ -5,6 +5,7 @@ import {
 } from "../../db/symbol-placeholders.js";
 import type { SymbolKind } from "../../domain/types.js";
 import { logger } from "../../util/logger.js";
+import { serializeTestCaseFacet } from "../../util/test-case.js";
 import {
   addToSymbolIndex,
   isBuiltinCall,
@@ -324,6 +325,9 @@ export async function buildSymbolAndEdgeRows(
       summaryQuality,
       summarySource,
       roleTagsJson,
+      testCaseJson: extractedSymbol.testCase
+        ? (serializeTestCaseFacet(extractedSymbol.testCase) ?? null)
+        : null,
       searchText,
       updatedAt: now,
     };

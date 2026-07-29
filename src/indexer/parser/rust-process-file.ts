@@ -276,6 +276,7 @@ export async function processFileFromRustResult(params: {
           range: extracted.range,
           signature: extracted.signature,
           visibility: extracted.visibility,
+          testCase: extracted.testCase,
         },
         astFingerprint: extracted.astFingerprint,
         symbolId: extracted.symbolId,

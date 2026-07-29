@@ -228,6 +228,7 @@ export interface LegacyFallbackSymbolDbRow {
   summaryQuality?: number;
   summarySource: string | null;
   roleTagsJson: string | null;
+  testCaseJson: string | null;
   searchText: string | null;
   external: boolean;
   source: string | null;
@@ -307,7 +308,7 @@ export async function readLegacyFallbackSymbols(
       signatureJson: string | null; summary: string | null;
       invariantsJson: string | null; sideEffectsJson: string | null;
       summaryQuality: unknown; summarySource: string | null;
-      roleTagsJson: string | null; searchText: string | null; external: unknown;
+      roleTagsJson: string | null; testCaseJson: string | null; searchText: string | null; external: unknown;
       source: string | null; packageName: string | null; packageVersion: string | null;
       scipSymbol: string | null; symbolStatus: string | null;
       placeholderKind: string | null; placeholderTarget: string | null;
@@ -325,7 +326,7 @@ export async function readLegacyFallbackSymbols(
               s.summary AS summary, s.invariantsJson AS invariantsJson,
               s.sideEffectsJson AS sideEffectsJson, s.summaryQuality AS summaryQuality,
               s.summarySource AS summarySource, s.roleTagsJson AS roleTagsJson,
-              s.searchText AS searchText, coalesce(s.external, false) AS external,
+              s.testCaseJson AS testCaseJson, s.searchText AS searchText, coalesce(s.external, false) AS external,
               s.source AS source, s.packageName AS packageName,
               s.packageVersion AS packageVersion, s.scipSymbol AS scipSymbol,
               coalesce(s.symbolStatus, 'real') AS symbolStatus,

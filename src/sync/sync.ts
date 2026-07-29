@@ -138,6 +138,7 @@ export async function exportArtifact(
       invariants_json: s.invariantsJson,
       side_effects_json: s.sideEffectsJson,
       role_tags_json: s.roleTagsJson ?? null,
+      test_case_json: s.testCaseJson ?? null,
       search_text: s.searchText ?? null,
       updated_at: s.updatedAt,
     })),
@@ -149,6 +150,7 @@ export async function exportArtifact(
       summary: sv.summary,
       invariants_json: sv.invariantsJson,
       side_effects_json: sv.sideEffectsJson,
+      test_case_json: sv.testCaseJson ?? null,
     })),
     edges: edges.map((e) => ({
       repo_id: e.repoId,
@@ -326,6 +328,7 @@ export async function importArtifact(
         invariantsJson: symbol.invariants_json,
         sideEffectsJson: symbol.side_effects_json,
         roleTagsJson,
+        testCaseJson: symbol.test_case_json ?? null,
         searchText,
         updatedAt: symbol.updated_at,
       });
@@ -349,6 +352,7 @@ export async function importArtifact(
         summary: sv.summary,
         invariantsJson: sv.invariants_json,
         sideEffectsJson: sv.side_effects_json,
+        testCaseJson: sv.test_case_json ?? null,
       });
     }
 

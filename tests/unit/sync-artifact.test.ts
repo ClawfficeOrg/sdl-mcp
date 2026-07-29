@@ -20,6 +20,8 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
 
 describe("Sync Artifact Model", () => {
   let graphDbPath = "";
@@ -188,8 +190,19 @@ describe("Sync Artifact Model", () => {
       invariantsJson: null,
       sideEffectsJson: null,
       roleTagsJson: JSON.stringify(["handler", "entrypoint"]),
+      testCaseJson: TEST_CASE_JSON,
       searchText: "handleloginrequest handle login requests handler entrypoint auth request",
       updatedAt: now,
+    });
+    await ladybugDb.snapshotSymbolVersion(conn, {
+      versionId: "v-test",
+      symbolId: "sym-1",
+      astFingerprint: "fp-1",
+      signatureJson: null,
+      summary: null,
+      invariantsJson: null,
+      sideEffectsJson: null,
+      testCaseJson: TEST_CASE_JSON,
     });
 
     const exportResult = await exportArtifact({
@@ -208,14 +221,18 @@ describe("Sync Artifact Model", () => {
     ) as {
       symbols: Array<{
         role_tags_json: string | null;
+        test_case_json: string | null;
         search_text: string | null;
       }>;
+      symbol_versions: Array<{ test_case_json: string | null }>;
     };
 
     assert.strictEqual(
       state.symbols[0]?.role_tags_json,
       JSON.stringify(["handler", "entrypoint"]),
     );
+    assert.strictEqual(state.symbols[0]?.test_case_json, TEST_CASE_JSON);
+    assert.strictEqual(state.symbol_versions[0]?.test_case_json, TEST_CASE_JSON);
     assert.match(state.symbols[0]?.search_text ?? "", /\bhandler\b/);
 
     await closeLadybugDb();
@@ -238,6 +255,12 @@ describe("Sync Artifact Model", () => {
       restoredSymbols[0]?.roleTagsJson,
       JSON.stringify(["handler", "entrypoint"]),
     );
+    assert.strictEqual(restoredSymbols[0]?.testCaseJson, TEST_CASE_JSON);
+    const restoredVersions = await ladybugDb.getSymbolVersionsAtVersion(
+      restoredConn,
+      "v-test",
+    );
+    assert.strictEqual(restoredVersions[0]?.testCaseJson, TEST_CASE_JSON);
     assert.match(restoredSymbols[0]?.searchText ?? "", /\bauth\b/);
   });
 
@@ -276,8 +299,19 @@ describe("Sync Artifact Model", () => {
       invariantsJson: null,
       sideEffectsJson: null,
       roleTagsJson: JSON.stringify(["entrypoint"]),
+      testCaseJson: TEST_CASE_JSON,
       searchText: "render app shell entrypoint root element main tsx",
       updatedAt: now,
+    });
+    await ladybugDb.snapshotSymbolVersion(conn, {
+      versionId: "v-test",
+      symbolId: "sym-legacy",
+      astFingerprint: "fp-legacy",
+      signatureJson: null,
+      summary: null,
+      invariantsJson: null,
+      sideEffectsJson: null,
+      testCaseJson: TEST_CASE_JSON,
     });
 
     const exportResult = await exportArtifact({
@@ -297,11 +331,16 @@ describe("Sync Artifact Model", () => {
       gunzipSync(Buffer.from(artifact.compressed_data, "base64")).toString("utf-8"),
     ) as {
       symbols: Array<Record<string, unknown>>;
+      symbol_versions: Array<Record<string, unknown>>;
     };
 
     for (const symbol of state.symbols) {
       delete symbol.role_tags_json;
+      delete symbol.test_case_json;
       delete symbol.search_text;
+    }
+    for (const symbolVersion of state.symbol_versions) {
+      delete symbolVersion.test_case_json;
     }
 
     const rewrittenStateJson = JSON.stringify(state, null, 0);
@@ -324,6 +363,12 @@ describe("Sync Artifact Model", () => {
     const restoredSymbols = await ladybugDb.getSymbolsByRepo(restoredConn, repoId);
 
     assert.strictEqual(restoredSymbols[0]?.roleTagsJson, JSON.stringify(["entrypoint"]));
+    assert.strictEqual(restoredSymbols[0]?.testCaseJson, null);
+    const restoredVersions = await ladybugDb.getSymbolVersionsAtVersion(
+      restoredConn,
+      "v-test",
+    );
+    assert.strictEqual(restoredVersions[0]?.testCaseJson, null);
     assert.match(restoredSymbols[0]?.searchText ?? "", /\brender\b/);
     assert.match(restoredSymbols[0]?.searchText ?? "", /\broot\b/);
   });

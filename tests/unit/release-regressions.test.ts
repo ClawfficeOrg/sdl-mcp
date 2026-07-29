@@ -347,19 +347,19 @@ describe("release regression guards", () => {
 
     assert.match(
       buildRowsSource,
-      /roleTagsJson,\s*searchText,\s*updatedAt:/s,
+      /roleTagsJson,\s*testCaseJson:\s*extractedSymbol\.testCase[\s\S]*?: null,\s*searchText,\s*updatedAt:/s,
       "Shared build-rows should persist derived search metadata for both TS and Rust paths",
     );
 
     assert.match(
       syncTypesSource,
-      /role_tags_json: string \| null;\s*search_text: string \| null;/s,
+      /role_tags_json: string \| null;\s*test_case_json\?: string \| null;\s*search_text: string \| null;/s,
       "sync state type should carry enrichment metadata",
     );
 
     assert.match(
       syncSource,
-      /role_tags_json:\s*s\.roleTagsJson\s*\?\?\s*null,\s*search_text:\s*s\.searchText\s*\?\?\s*null,/s,
+      /role_tags_json:\s*s\.roleTagsJson\s*\?\?\s*null,\s*test_case_json:\s*s\.testCaseJson\s*\?\?\s*null,\s*search_text:\s*s\.searchText\s*\?\?\s*null,/s,
       "artifact export should serialize enrichment metadata",
     );
 

@@ -566,6 +566,7 @@ function symbolFactToRow(
     ),
     summarySource: `provider:${fact.providerType}`,
     roleTagsJson: enrichment.roleTagsJson,
+    testCaseJson: null,
     searchText: enrichment.searchText,
     external: false,
     scipSymbol: fact.providerType === "scip" ? fact.providerSymbolId : null,

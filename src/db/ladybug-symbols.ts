@@ -245,6 +245,7 @@ function toSymbolBatchUpsertRow(symbol: SymbolRow) {
     invariantsJson: symbol.invariantsJson ?? "",
     sideEffectsJson: symbol.sideEffectsJson ?? "",
     roleTagsJson: symbol.roleTagsJson ?? "",
+    testCaseJson: symbol.testCaseJson ?? null,
     searchText: symbol.searchText ?? "",
     summaryQuality: symbol.summaryQuality ?? 0.0,
     summarySource: symbol.summarySource ?? "unknown",
@@ -331,6 +332,7 @@ async function mergeSymbolNodeRows(
          s.invariantsJson = row.invariantsJson,
          s.sideEffectsJson = row.sideEffectsJson,
          s.roleTagsJson = row.roleTagsJson,
+         s.testCaseJson = row.testCaseJson,
          s.searchText = row.searchText,
          s.summaryQuality = row.summaryQuality,
          s.summarySource = row.summarySource,
@@ -370,6 +372,7 @@ export interface SymbolSnapshotRow {
   summary: string | null;
   invariantsJson: string | null;
   sideEffectsJson: string | null;
+  testCaseJson: string | null;
 }
 
 export interface SymbolSnapshotPageOptions {
@@ -402,6 +405,7 @@ export async function upsertSymbol(
          s.invariantsJson = $invariantsJson,
          s.sideEffectsJson = $sideEffectsJson,
          s.roleTagsJson = $roleTagsJson,
+         s.testCaseJson = $testCaseJson,
          s.searchText = $searchText,
          s.summaryQuality = $summaryQuality,
          s.summarySource = $summarySource,
@@ -431,6 +435,7 @@ export async function upsertSymbol(
       invariantsJson: symbol.invariantsJson,
       sideEffectsJson: symbol.sideEffectsJson,
       roleTagsJson: symbol.roleTagsJson ?? null,
+      testCaseJson: symbol.testCaseJson ?? null,
       searchText: symbol.searchText ?? null,
       summaryQuality: symbol.summaryQuality ?? 0.0,
       summarySource: symbol.summarySource ?? "unknown",
@@ -1214,6 +1219,7 @@ export async function getSymbol(
     sideEffectsJson: string | null;
     summaryQuality: number | null;
     summarySource: string | null;
+    testCaseJson: string | null;
     updatedAt: string;
   }>(
     conn,
@@ -1238,6 +1244,7 @@ export async function getSymbol(
             s.sideEffectsJson AS sideEffectsJson,
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
+            s.testCaseJson AS testCaseJson,
             s.updatedAt AS updatedAt`,
     { symbolId },
   );
@@ -1264,6 +1271,7 @@ export async function getSymbol(
     sideEffectsJson: row.sideEffectsJson,
     summaryQuality: row.summaryQuality ?? undefined,
     summarySource: row.summarySource ?? undefined,
+    testCaseJson: row.testCaseJson,
     updatedAt: row.updatedAt,
   };
 }
@@ -1525,6 +1533,7 @@ export async function getSymbolsByFile(
     summaryQuality: number | null;
     summarySource: string | null;
     roleTagsJson: string | null;
+    testCaseJson: string | null;
     searchText: string | null;
     external: unknown;
     packageName: string | null;
@@ -1555,6 +1564,7 @@ export async function getSymbolsByFile(
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
             s.roleTagsJson AS roleTagsJson,
+            s.testCaseJson AS testCaseJson,
             s.searchText AS searchText,
             coalesce(s.external, false) AS external,
             s.packageName AS packageName,
@@ -1586,6 +1596,7 @@ export async function getSymbolsByFile(
     summaryQuality: row.summaryQuality ?? undefined,
     summarySource: row.summarySource ?? undefined,
     roleTagsJson: row.roleTagsJson,
+    testCaseJson: row.testCaseJson,
     searchText: row.searchText,
     external: toBoolean(row.external) || undefined,
     packageName: row.packageName,
@@ -1690,6 +1701,7 @@ export async function getSymbolsByRepo(
     summaryQuality: number | null;
     summarySource: string | null;
     roleTagsJson: string | null;
+    testCaseJson: string | null;
     searchText: string | null;
     external: unknown;
     packageName: string | null;
@@ -1720,6 +1732,7 @@ export async function getSymbolsByRepo(
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
             s.roleTagsJson AS roleTagsJson,
+            s.testCaseJson AS testCaseJson,
             s.searchText AS searchText,
             coalesce(s.external, false) AS external,
             s.packageName AS packageName,
@@ -1750,6 +1763,7 @@ export async function getSymbolsByRepo(
     summaryQuality: row.summaryQuality ?? undefined,
     summarySource: row.summarySource ?? undefined,
     roleTagsJson: row.roleTagsJson,
+    testCaseJson: row.testCaseJson,
     searchText: row.searchText,
     external: toBoolean(row.external) || undefined,
     packageName: row.packageName,
@@ -1799,7 +1813,8 @@ export async function getSymbolsByRepoForSnapshotPage(
             s.signatureJson AS signatureJson,
             s.summary AS summary,
             s.invariantsJson AS invariantsJson,
-            s.sideEffectsJson AS sideEffectsJson
+            s.sideEffectsJson AS sideEffectsJson,
+            s.testCaseJson AS testCaseJson
      ORDER BY s.symbolId ASC
      LIMIT $limit`,
     {
@@ -1871,6 +1886,7 @@ export async function getSymbolsByIds(
     summaryQuality: number | null;
     summarySource: string | null;
     roleTagsJson: string | null;
+    testCaseJson: string | null;
     searchText: string | null;
     external: unknown;
     packageName: string | null;
@@ -1903,6 +1919,7 @@ export async function getSymbolsByIds(
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
             s.roleTagsJson AS roleTagsJson,
+            s.testCaseJson AS testCaseJson,
             s.searchText AS searchText,
             coalesce(s.external, false) AS external,
             s.packageName AS packageName,
@@ -1935,6 +1952,7 @@ export async function getSymbolsByIds(
       summaryQuality: row.summaryQuality ?? undefined,
       summarySource: row.summarySource ?? undefined,
       roleTagsJson: row.roleTagsJson,
+      testCaseJson: row.testCaseJson,
       searchText: row.searchText,
       external: toBoolean(row.external) || undefined,
       packageName: row.packageName,
@@ -2472,6 +2490,7 @@ interface SearchSymbolsRawRow {
   summary: string | null;
   invariantsJson: string | null;
   sideEffectsJson: string | null;
+  testCaseJson: string | null;
   summaryQuality: number | null;
   summarySource: string | null;
   updatedAt: string;
@@ -2515,6 +2534,7 @@ function mapSearchSymbolRow(
     summary: row.summary,
     invariantsJson: row.invariantsJson,
     sideEffectsJson: row.sideEffectsJson,
+    testCaseJson: row.testCaseJson,
     summaryQuality: row.summaryQuality ?? undefined,
     summarySource: row.summarySource ?? undefined,
     updatedAt: row.updatedAt,
@@ -2591,6 +2611,7 @@ async function searchSymbolsSingleTerm(
             s.sideEffectsJson AS sideEffectsJson,
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
+            s.testCaseJson AS testCaseJson,
             s.updatedAt AS updatedAt,
             coalesce(s.external, false) AS external,
             s.scipSymbol AS scipSymbol,
@@ -2645,6 +2666,7 @@ export async function getSearchableSymbolsByIds(
             s.sideEffectsJson AS sideEffectsJson,
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
+            s.testCaseJson AS testCaseJson,
             s.updatedAt AS updatedAt,
             coalesce(s.external, false) AS external,
             s.scipSymbol AS scipSymbol,

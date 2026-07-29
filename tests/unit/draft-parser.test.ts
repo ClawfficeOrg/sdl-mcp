@@ -13,7 +13,13 @@ import {
   initLadybugDb,
 } from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
-import { loadBuiltInAdapters } from "../../dist/indexer/adapter/registry.js";
+import {
+  getAdapterForExtension,
+  loadBuiltInAdapters,
+} from "../../dist/indexer/adapter/registry.js";
+
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
 
 describe("parseDraftFile", () => {
   const testDbDir = mkdtempSync(join(tmpdir(), "sdl-draft-parser-test-"));
@@ -50,23 +56,45 @@ describe("parseDraftFile", () => {
   });
 
   it("extracts file-owned symbols, edges, and references from unsaved content", async () => {
-    const result = await parseDraftFile({
-      repoId: "demo-repo",
-      repoRoot: process.cwd(),
-      filePath: "tests/example.test.ts",
-      content: [
-        "export function alpha() {",
-        "  return beta();",
-        "}",
-        "",
-        "function beta() {",
-        "  return 1;",
-        "}",
-      ].join("\n"),
-      languages: ["ts"],
-      language: "typescript",
-      version: 5,
-    });
+    const adapter = getAdapterForExtension(".ts");
+    assert.ok(adapter);
+    const extractSymbols = adapter.extractSymbols;
+    adapter.extractSymbols = (...args) =>
+      extractSymbols.call(adapter, ...args).map((symbol, index) =>
+        index === 0
+          ? {
+              ...symbol,
+              testCase: {
+                framework: "node:test",
+                title: "keeps sdl.info callable",
+                suitePath: ["Code Mode"],
+                modifiers: ["only"],
+              },
+            }
+          : symbol,
+      );
+    let result: Awaited<ReturnType<typeof parseDraftFile>>;
+    try {
+      result = await parseDraftFile({
+        repoId: "demo-repo",
+        repoRoot: process.cwd(),
+        filePath: "tests/example.test.ts",
+        content: [
+          "export function alpha() {",
+          "  return beta();",
+          "}",
+          "",
+          "function beta() {",
+          "  return 1;",
+          "}",
+        ].join("\n"),
+        languages: ["ts"],
+        language: "typescript",
+        version: 5,
+      });
+    } finally {
+      adapter.extractSymbols = extractSymbols;
+    }
 
     assert.strictEqual(result.file.relPath, "tests/example.test.ts");
     assert.strictEqual(result.symbols.length, 2);
@@ -74,6 +102,8 @@ describe("parseDraftFile", () => {
     assert.ok(result.symbols.some((symbol) => symbol.name === "beta"));
     const alpha = result.symbols.find((symbol) => symbol.name === "alpha");
     const beta = result.symbols.find((symbol) => symbol.name === "beta");
+    assert.strictEqual(alpha?.testCaseJson, TEST_CASE_JSON);
+    assert.strictEqual(beta?.testCaseJson ?? null, null);
     assert.ok(
       result.edges.some(
         (edge) =>

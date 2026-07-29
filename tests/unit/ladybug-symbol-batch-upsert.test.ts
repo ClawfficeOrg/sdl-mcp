@@ -78,6 +78,9 @@ async function setupSchema(conn: LadybugConnection): Promise<void> {
 type Queries = typeof import("../../dist/db/ladybug-queries.js");
 type SymbolRow = import("../../dist/db/ladybug-queries.js").SymbolRow;
 
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
+
 function makeSymbol(
   symbolId: string,
   repoId: string,
@@ -213,6 +216,7 @@ describe("upsertSymbolBatch — integration", () => {
         sideEffectsJson: '["logs"]',
         summaryQuality: 0.9,
         summarySource: "llm",
+        testCaseJson: TEST_CASE_JSON,
       });
 
       await queries.upsertSymbolBatch(conn_, [sym]);
@@ -227,6 +231,25 @@ describe("upsertSymbolBatch — integration", () => {
       assert.strictEqual(result.summary, sym.summary);
       assert.strictEqual(result.invariantsJson, sym.invariantsJson);
       assert.strictEqual(result.sideEffectsJson, sym.sideEffectsJson);
+      assert.strictEqual(result.testCaseJson, TEST_CASE_JSON);
+
+      const searchRows = await queries.searchSymbols(
+        conn_,
+        repoId,
+        "singleFn",
+        10,
+      );
+      assert.strictEqual(searchRows[0]?.testCaseJson, TEST_CASE_JSON);
+
+      const searchableRows = await queries.getSearchableSymbolsByIds(
+        conn_,
+        repoId,
+        [sym.symbolId],
+      );
+      assert.strictEqual(
+        searchableRows.get(sym.symbolId)?.testCaseJson,
+        TEST_CASE_JSON,
+      );
       assert.strictEqual(result.repoId, repoId);
       assert.strictEqual(result.fileId, fileId);
     },

@@ -51,6 +51,7 @@ async function snapshotSymbolsForVersion(params: {
           summary: symbol.summary,
           invariantsJson: symbol.invariantsJson,
           sideEffectsJson: symbol.sideEffectsJson,
+          testCaseJson: symbol.testCaseJson,
         }));
         await measureVersionPhase(
           recordTiming,

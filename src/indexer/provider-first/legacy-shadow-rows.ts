@@ -183,6 +183,7 @@ function symbolRow(row: LegacyFallbackSymbolDbRow, indexedAt: string): SymbolRow
         : row.summaryQuality,
     summarySource: row.summarySource ?? undefined,
     roleTagsJson: row.roleTagsJson,
+    testCaseJson: row.testCaseJson,
     searchText: row.searchText,
     external: row.external || undefined,
     source: row.source,

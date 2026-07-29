@@ -89,6 +89,8 @@ export type GraphIntegrityCanonicalSymbol = Pick<
   | "external"
   | "placeholderKind"
   | "placeholderTarget"
+  | "roleTagsJson"
+  | "testCaseJson"
 >;
 
 type CanonicalSymbol = GraphIntegrityCanonicalSymbol;
@@ -131,6 +133,8 @@ type GraphIntegrityCanonicalSymbolTuple = readonly [
   external: boolean,
   placeholderKind: string,
   placeholderTarget: string,
+  roleTagsJson: string | null,
+  testCaseJson: string | null,
 ];
 
 export interface GraphIntegrityEdgeWrite {
@@ -1241,13 +1245,16 @@ export function parseGraphIntegrityCanonicalSymbol(
 ): GraphIntegrityCanonicalSymbol {
   const fields = parseGraphIntegrityArray(json, "canonical symbol");
   if (
-    fields.length !== 18 ||
+    (fields.length !== 18 && fields.length !== 20) ||
     !fields.slice(0, 7).every((value) => typeof value === "string") ||
     !fields.slice(7, 11).every(isSafeInteger) ||
     !fields.slice(11, 15).every((value) => typeof value === "string") ||
     typeof fields[15] !== "boolean" ||
     typeof fields[16] !== "string" ||
     typeof fields[17] !== "string" ||
+    (fields.length === 20 &&
+      ((fields[18] !== null && typeof fields[18] !== "string") ||
+        (fields[19] !== null && typeof fields[19] !== "string"))) ||
     fields[1] !== FILELESS_SENTINEL ||
     fields[2] !== FILELESS_SENTINEL ||
     !isGraphIntegritySymbolStatus(fields[14])
@@ -1255,7 +1262,9 @@ export function parseGraphIntegrityCanonicalSymbol(
     throw new Error("Malformed graph integrity canonical symbol JSON");
   }
 
-  const canonical = fields as unknown as GraphIntegrityCanonicalSymbolTuple;
+  const canonical = (fields.length === 18
+    ? [...fields, null, null]
+    : fields) as unknown as GraphIntegrityCanonicalSymbolTuple;
   return {
     symbolId: canonical[0],
     fileId: canonical[1],
@@ -1274,6 +1283,8 @@ export function parseGraphIntegrityCanonicalSymbol(
     external: canonical[15],
     placeholderKind: canonical[16],
     placeholderTarget: canonical[17],
+    roleTagsJson: canonical[18],
+    testCaseJson: canonical[19],
   };
 }
 
@@ -1724,6 +1735,8 @@ async function capturePersistedGraphIntegrityInternal(
         external: row.external,
         placeholderKind: row.placeholderKind,
         placeholderTarget: row.placeholderTarget,
+        roleTagsJson: row.roleTagsJson === "" ? null : row.roleTagsJson,
+        testCaseJson: row.testCaseJson,
       });
       appendCanonicalSymbol(current, canonicalSymbol);
       onSymbol?.(canonicalSymbol);
@@ -2057,6 +2070,8 @@ function canonicalSymbolFields(
     symbol.external ?? false,
     symbol.placeholderKind ?? "",
     symbol.placeholderTarget ?? "",
+    symbol.roleTagsJson ?? null,
+    symbol.testCaseJson ?? null,
   ];
 }
 
