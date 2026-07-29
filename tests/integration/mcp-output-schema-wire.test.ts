@@ -33,6 +33,7 @@ import {
   SemanticEnrichmentRefreshResponseSchema,
   SemanticEnrichmentStatusResponseSchema,
   SymbolEditResponseSchema,
+  SymbolGetCardResponseSchema,
 } from "../../dist/mcp/tools.js";
 import {
   createMCPServer,
@@ -266,6 +267,66 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     if (existsSync(TEST_ROOT)) {
       rmSync(TEST_ROOT, { recursive: true, force: true });
     }
+  });
+
+  it("preserves the optional test-case facet in card schema order", () => {
+    const baseCard = {
+      symbolId: "sym-test",
+      repoId: REPO_ID,
+      file: "tests/sample.test.ts",
+      range: { startLine: 1, startCol: 0, endLine: 3, endCol: 0 },
+      kind: "function",
+      name: "keeps sdl.info callable",
+      exported: false,
+      sideEffects: [],
+      deps: { imports: [], calls: [] },
+      detailLevel: "full",
+      etag: "etag",
+      version: { ledgerVersion: "v1", astFingerprint: "fp" },
+    };
+    const testCase = {
+      framework: "node:test",
+      title: "keeps sdl.info callable",
+      suitePath: ["Code Mode"],
+      modifiers: ["only"],
+    };
+    const withFacet = SymbolGetCardResponseSchema.parse({
+      card: { ...baseCard, testCase },
+    }) as { card: Record<string, unknown> };
+    const withoutFacet = SymbolGetCardResponseSchema.parse({
+      card: baseCard,
+    }) as { card: Record<string, unknown> };
+
+    assert.deepStrictEqual(withFacet.card.testCase, testCase);
+    assert.deepStrictEqual(Object.keys(withFacet.card), [
+      "symbolId",
+      "repoId",
+      "file",
+      "range",
+      "kind",
+      "name",
+      "exported",
+      "sideEffects",
+      "testCase",
+      "deps",
+      "detailLevel",
+      "etag",
+      "version",
+    ]);
+    assert.deepStrictEqual(Object.keys(withoutFacet.card), [
+      "symbolId",
+      "repoId",
+      "file",
+      "range",
+      "kind",
+      "name",
+      "exported",
+      "sideEffects",
+      "deps",
+      "detailLevel",
+      "etag",
+      "version",
+    ]);
   });
 
   const cases: WireCase[] = [

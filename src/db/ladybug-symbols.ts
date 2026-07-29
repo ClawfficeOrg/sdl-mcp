@@ -1220,6 +1220,10 @@ export async function getSymbol(
     summaryQuality: number | null;
     summarySource: string | null;
     testCaseJson: string | null;
+    external: unknown;
+    packageName: string | null;
+    packageVersion: string | null;
+    scipSymbol: string | null;
     updatedAt: string;
   }>(
     conn,
@@ -1245,6 +1249,10 @@ export async function getSymbol(
             s.summaryQuality AS summaryQuality,
             s.summarySource AS summarySource,
             s.testCaseJson AS testCaseJson,
+            s.external AS external,
+            s.packageName AS packageName,
+            s.packageVersion AS packageVersion,
+            s.scipSymbol AS scipSymbol,
             s.updatedAt AS updatedAt`,
     { symbolId },
   );
@@ -1272,6 +1280,10 @@ export async function getSymbol(
     summaryQuality: row.summaryQuality ?? undefined,
     summarySource: row.summarySource ?? undefined,
     testCaseJson: row.testCaseJson,
+    external: toBoolean(row.external) || undefined,
+    packageName: row.packageName,
+    packageVersion: row.packageVersion,
+    scipSymbol: row.scipSymbol,
     updatedAt: row.updatedAt,
   };
 }

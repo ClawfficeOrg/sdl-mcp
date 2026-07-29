@@ -150,6 +150,16 @@ const SymbolProcessInfoSchema = z.object({
   depth: z.number().int().min(0),
 });
 
+const TestCaseFacetSchema = z.object({
+  framework: z.string(),
+  title: z.string(),
+  suitePath: z.array(z.string()).optional(),
+  category: z.enum(["test", "benchmark", "example", "fuzz"]).optional(),
+  modifiers: z
+    .array(z.enum(["skip", "todo", "only", "parameterized"]))
+    .optional(),
+});
+
 const SymbolCardSchema = z.object({
   symbolId: z.string(),
   repoId: z.string().min(1),
@@ -175,6 +185,7 @@ const SymbolCardSchema = z.object({
   summaryProvenance: z.enum(["llm", "heuristic"]).optional(),
   invariants: z.array(z.string()).optional(),
   sideEffects: z.array(z.string()).optional(),
+  testCase: TestCaseFacetSchema.optional(),
   cluster: SymbolClusterInfoSchema.optional(),
   processes: z.array(SymbolProcessInfoSchema).optional(),
   callResolution: CallResolutionSchema.optional(),

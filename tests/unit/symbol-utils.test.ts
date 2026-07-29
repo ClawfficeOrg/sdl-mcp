@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { toLegacySymbolRow } from "../../dist/mcp/tools/symbol-utils.js";
+import {
+  CARD_WIRE_FIELD_ORDER,
+  compactCardForWire,
+  toLegacySymbolRow,
+} from "../../dist/mcp/tools/symbol-utils.js";
 
 function makeSymbolRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -25,6 +29,35 @@ function makeSymbolRow(overrides: Record<string, unknown> = {}) {
     ...overrides,
   } as any;
 }
+
+describe("compactCardForWire", () => {
+  it("emits testCase after sideEffects and before dependency fields", () => {
+    const card = compactCardForWire({
+      sideEffects: ["logs"],
+      testCase: {
+        framework: "node:test",
+        title: "keeps sdl.info callable",
+        suitePath: ["Code Mode"],
+        modifiers: ["only"],
+      },
+      deps: { imports: ["dep"], calls: ["call"] },
+    });
+
+    assert.deepStrictEqual(Object.keys(card), [
+      "sideEffects",
+      "testCase",
+      "deps",
+    ]);
+    assert.equal(
+      CARD_WIRE_FIELD_ORDER.indexOf("testCase"),
+      CARD_WIRE_FIELD_ORDER.indexOf("sideEffects") + 1,
+    );
+    assert.ok(
+      CARD_WIRE_FIELD_ORDER.indexOf("testCase") <
+        CARD_WIRE_FIELD_ORDER.indexOf("deps"),
+    );
+  });
+});
 
 describe("toLegacySymbolRow", () => {
   it("maps all fields correctly for exported=true", () => {

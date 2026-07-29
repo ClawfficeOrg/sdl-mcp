@@ -256,6 +256,46 @@ describe("upsertSymbolBatch — integration", () => {
   );
 
   it(
+    "getSymbol hydrates persisted external symbol metadata",
+    { skip: !ladybugAvailable },
+    async () => {
+      const conn_ = conn as unknown as import("kuzu").Connection;
+      const sym = makeSymbol(
+        "batch-external-sym",
+        repoId,
+        fileId,
+        "externalFn",
+        {
+          external: true,
+          source: "scip",
+          packageName: "@scope/example",
+          packageVersion: "1.2.3",
+          scipSymbol: "scip-typescript npm @scope/example 1.2.3 externalFn().",
+        },
+      );
+
+      await queries.upsertSymbolBatch(conn_, [sym]);
+
+      const result = await queries.getSymbol(conn_, sym.symbolId);
+      assert.ok(result, "external symbol should exist after batch upsert");
+      assert.deepStrictEqual(
+        {
+          external: result.external,
+          packageName: result.packageName,
+          packageVersion: result.packageVersion,
+          scipSymbol: result.scipSymbol,
+        },
+        {
+          external: true,
+          packageName: "@scope/example",
+          packageVersion: "1.2.3",
+          scipSymbol: "scip-typescript npm @scope/example 1.2.3 externalFn().",
+        },
+      );
+    },
+  );
+
+  it(
     "counts the exact union of scoped and incoming persisted symbols",
     { skip: !ladybugAvailable },
     async () => {

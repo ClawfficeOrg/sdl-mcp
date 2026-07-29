@@ -60,6 +60,7 @@ interface WireCardInput {
   summaryProvenance?: unknown;
   invariants?: unknown;
   sideEffects?: unknown;
+  testCase?: unknown;
   cluster?: unknown;
   processes?: unknown;
   callResolution?: unknown;
@@ -86,6 +87,7 @@ export const CARD_WIRE_FIELD_ORDER = [
   "summaryProvenance",
   "invariants",
   "sideEffects",
+  "testCase",
   "cluster",
   "processes",
   "callResolution",
@@ -215,6 +217,7 @@ export function compactCardForWire(
       summary === undefined ? undefined : card.summaryProvenance,
     invariants: card.invariants,
     sideEffects: card.sideEffects,
+    testCase: card.testCase,
     cluster: card.cluster,
     processes: card.processes,
     callResolution: card.callResolution,

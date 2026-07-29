@@ -44,6 +44,7 @@ import {
 } from "../live-index/overlay-reader.js";
 import { logger } from "../util/logger.js";
 import { safeJsonParse, StringArraySchema } from "../util/safeJson.js";
+import { parseTestCaseFacetJson } from "../util/test-case.js";
 import { captureActiveRepoEpoch } from "./repo-lifecycle.js";
 import { createSymbolSearchFallback } from "./symbol-search-fallback.js";
 
@@ -135,6 +136,7 @@ async function buildOverlayCardForSymbol(
   const signature = parseJson<SymbolSignature>(overlay.symbol.signatureJson);
   const invariants = parseJson<string[]>(overlay.symbol.invariantsJson);
   const sideEffects = parseJson<string[]>(overlay.symbol.sideEffectsJson);
+  const testCase = parseTestCaseFacetJson(overlay.symbol.testCaseJson);
 
   const callTargetIds = overlay.outgoingEdges
     .filter((edge) => edge.edgeType === "call")
@@ -230,6 +232,7 @@ async function buildOverlayCardForSymbol(
     sideEffects: sideEffects
       ? sideEffects.slice(0, SYMBOL_CARD_MAX_SIDE_EFFECTS)
       : undefined,
+    ...(testCase ? { testCase } : {}),
     cluster: clusterRow
       ? {
           clusterId: clusterRow.clusterId,
@@ -400,6 +403,7 @@ export async function buildCardForSymbol(
   if (symbol.external) {
     const latestVer =
       latestVersion ?? (await ladybugDb.getLatestVersion(conn, repoId));
+    const testCase = parseTestCaseFacetJson(symbol.testCaseJson);
     const minimalCard: SymbolCard = {
       symbolId,
       repoId,
@@ -412,6 +416,7 @@ export async function buildCardForSymbol(
       packageName: symbol.packageName ?? undefined,
       packageVersion: symbol.packageVersion ?? undefined,
       scipSymbol: symbol.scipSymbol ?? undefined,
+      ...(testCase ? { testCase } : {}),
       deps: { imports: [], calls: [] },
       detailLevel: "minimal",
       version: {
@@ -505,6 +510,7 @@ export async function buildCardForSymbol(
   const signature = parseJson<SymbolSignature>(symbol.signatureJson);
   const invariants = parseJson<string[]>(symbol.invariantsJson);
   const sideEffects = parseJson<string[]>(symbol.sideEffectsJson);
+  const testCase = parseTestCaseFacetJson(symbol.testCaseJson);
 
   const cardSummary = cardSummaryForWire(symbol.summary, symbol.name)?.slice(
     0,
@@ -630,6 +636,7 @@ export async function buildCardForSymbol(
     sideEffects: sideEffects
       ? sideEffects.slice(0, SYMBOL_CARD_MAX_SIDE_EFFECTS)
       : undefined,
+    ...(testCase ? { testCase } : {}),
     cluster: clusterRow
       ? {
           clusterId: clusterRow.clusterId,

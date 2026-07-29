@@ -22,6 +22,14 @@ const TEST_DB_PATH = join(
 );
 const ORIGINAL_GRAPH_DB_PATH = process.env.SDL_GRAPH_DB_PATH;
 const ORIGINAL_NATIVE_ADDON = process.env.SDL_MCP_DISABLE_NATIVE_ADDON;
+const TEST_CASE_JSON =
+  '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
+const TEST_CASE = {
+  framework: "node:test",
+  title: "keeps sdl.info callable",
+  suitePath: ["Code Mode"],
+  modifiers: ["only"],
+};
 
 async function resetDb(): Promise<void> {
   clearAllCaches();
@@ -63,9 +71,11 @@ async function seedSymbol(params: {
   fileId: string;
   symbolId: string;
   name: string;
+  testCaseJson?: string | null;
+  external?: boolean;
 }): Promise<void> {
   const conn = await getLadybugConn();
-  await ladybugDb.upsertSymbol(conn, {
+  await ladybugDb.upsertSymbolBatch(conn, [{
     symbolId: params.symbolId,
     repoId: params.repoId,
     fileId: params.fileId,
@@ -87,8 +97,10 @@ async function seedSymbol(params: {
     summary: `${params.name} summary`,
     invariantsJson: null,
     sideEffectsJson: null,
+    testCaseJson: params.testCaseJson ?? null,
+    external: params.external ?? false,
     updatedAt: "2026-03-19T08:00:00.000Z",
-  });
+  }]);
 }
 
 describe("card-builder", () => {
@@ -142,6 +154,107 @@ describe("card-builder", () => {
     assert.equal(card.name, "buildThing");
     assert.equal(card.detailLevel, "full");
     assert.equal(typeof card.etag, "string");
+  });
+
+  it("exposes parsed test-case facets on minimal and full cards", async () => {
+    await resetDb();
+    await seedRepoAndFile("repo-a", "file-a");
+    await seedSymbol({
+      repoId: "repo-a",
+      fileId: "file-a",
+      symbolId: "sym-full",
+      name: "fullTest",
+      testCaseJson: TEST_CASE_JSON,
+    });
+    await seedSymbol({
+      repoId: "repo-a",
+      fileId: "file-a",
+      symbolId: "sym-minimal",
+      name: "minimalTest",
+      testCaseJson: TEST_CASE_JSON,
+      external: true,
+    });
+
+    const full = await buildCardForSymbol(
+      "repo-a",
+      "sym-full",
+      undefined,
+    );
+    const minimal = await buildCardForSymbol(
+      "repo-a",
+      "sym-minimal",
+      undefined,
+    );
+
+    assert.ok(!("notModified" in full));
+    assert.ok(!("notModified" in minimal));
+    assert.deepStrictEqual(full.testCase, TEST_CASE);
+    assert.deepStrictEqual(minimal.testCase, TEST_CASE);
+    assert.equal(minimal.detailLevel, "minimal");
+  });
+
+  it("omits null and malformed persisted test-case facets", async () => {
+    await resetDb();
+    await seedRepoAndFile("repo-a", "file-a");
+    await seedSymbol({
+      repoId: "repo-a",
+      fileId: "file-a",
+      symbolId: "sym-null",
+      name: "nullTest",
+      testCaseJson: null,
+    });
+    await seedSymbol({
+      repoId: "repo-a",
+      fileId: "file-a",
+      symbolId: "sym-malformed",
+      name: "malformedTest",
+      testCaseJson: '{"framework":"node:test"}',
+    });
+
+    const nullCard = await buildCardForSymbol(
+      "repo-a",
+      "sym-null",
+      undefined,
+    );
+    const malformedCard = await buildCardForSymbol(
+      "repo-a",
+      "sym-malformed",
+      undefined,
+    );
+
+    assert.ok(!("notModified" in nullCard));
+    assert.ok(!("notModified" in malformedCard));
+    assert.ok(!("testCase" in nullCard));
+    assert.ok(!("testCase" in malformedCard));
+  });
+
+  it("changes the card ETag when only the test-case facet changes", async () => {
+    await resetDb();
+    await seedRepoAndFile("repo-a", "file-a");
+    const symbol = {
+      repoId: "repo-a",
+      fileId: "file-a",
+      symbolId: "sym-etag",
+      name: "etagTest",
+    };
+    await seedSymbol({ ...symbol, testCaseJson: null });
+    const withoutFacet = await buildCardForSymbol(
+      "repo-a",
+      "sym-etag",
+      undefined,
+    );
+
+    await seedSymbol({ ...symbol, testCaseJson: TEST_CASE_JSON });
+    const withFacet = await buildCardForSymbol(
+      "repo-a",
+      "sym-etag",
+      undefined,
+    );
+
+    assert.ok(!("notModified" in withoutFacet));
+    assert.ok(!("notModified" in withFacet));
+    assert.notEqual(withFacet.etag, withoutFacet.etag);
+    assert.deepStrictEqual(withFacet.testCase, TEST_CASE);
   });
 
   it("throws NotFoundError when symbol does not exist", async () => {
