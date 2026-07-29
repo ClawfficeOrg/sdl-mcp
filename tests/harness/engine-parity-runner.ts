@@ -26,6 +26,8 @@ import {
   type RustParseResult,
 } from "../../dist/indexer/rustIndexer.js";
 import type { FileMetadata } from "../../dist/indexer/fileScanner.js";
+import { buildSymbolDetails } from "../../dist/indexer/parser/symbol-mapping.js";
+import { applyTestCaseCandidates } from "../../dist/indexer/test-case-normalizer.js";
 
 export interface ParityDiff {
   kind: "missing-in-rust" | "extra-in-rust" | "field-mismatch";
@@ -39,6 +41,7 @@ export interface ParityResult {
   symbolDiffs: ParityDiff[];
   importDiffs: ParityDiff[];
   callDiffs: ParityDiff[];
+  testCaseIdentityDiffs?: ParityDiff[];
   skipped?: string;
 }
 
@@ -90,6 +93,48 @@ function sortImports(arr: ExtractedImport[]): ExtractedImport[] {
 
 function symbolOwnerKey(sym: ExtractedSymbol | RustExtractedSymbol): string {
   return `${sym.kind}:${sym.name}@${sym.range.startLine}:${sym.range.startCol}`;
+}
+
+function symbolIdentity(
+  symbol: ExtractedSymbol | RustExtractedSymbol,
+): string | undefined {
+  const symbolId = (symbol as { symbolId?: unknown }).symbolId;
+  if (typeof symbolId === "string" && symbolId.length > 0) {
+    return `symbol:${symbolId}`;
+  }
+  const nodeId = (symbol as { nodeId?: unknown }).nodeId;
+  return typeof nodeId === "string" && nodeId.length > 0
+    ? `node:${nodeId}`
+    : undefined;
+}
+
+function attachedIdentityDiffs(
+  rawSymbols: Array<ExtractedSymbol | RustExtractedSymbol>,
+  normalizedSymbols: Array<ExtractedSymbol | RustExtractedSymbol>,
+  side: "ts" | "rust",
+): ParityDiff[] {
+  const rawIdentities = new Set(
+    rawSymbols.map(symbolIdentity).filter((identity) => identity !== undefined),
+  );
+  return normalizedSymbols.flatMap((symbol, index) => {
+    const identity = symbolIdentity(symbol);
+    const nodeId = (symbol as { nodeId?: unknown }).nodeId;
+    if (
+      !symbol.testCase ||
+      (typeof nodeId === "string" && nodeId.startsWith("sdl:test-case:")) ||
+      (identity !== undefined && rawIdentities.has(identity))
+    ) {
+      return [];
+    }
+    return [
+      {
+        kind: "field-mismatch" as const,
+        index,
+        path: `${side}:${symbolOwnerKey(symbol)}:test-case-identity`,
+        [side]: { identity, preserved: false },
+      },
+    ];
+  });
 }
 
 interface OwnerEntry {
@@ -160,8 +205,16 @@ function projectCallerOwner(call: ExtractedCall, owners: OwnerIndex): string | u
 
 function projectSymbol(sym: ExtractedSymbol | RustExtractedSymbol): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  const syntheticTestCase =
+    typeof (sym as { nodeId?: unknown }).nodeId === "string" &&
+    ((sym as { nodeId: string }).nodeId.startsWith("sdl:test-case:"));
   for (const [k, v] of Object.entries(sym)) {
-    if (SYMBOL_FIELD_EXCLUDES.has(k)) continue;
+    if (
+      SYMBOL_FIELD_EXCLUDES.has(k) &&
+      !(syntheticTestCase && (k === "nodeId" || k === "astFingerprint"))
+    ) {
+      continue;
+    }
     if (k === "signature" && v && typeof v === "object") {
       // Exclude because: TS/Rust may differ on whitespace inside param types
       // (e.g. "Foo<Bar,Baz>" vs "Foo<Bar, Baz>"); normalise whitespace.
@@ -265,13 +318,26 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   }
 
   const content = readFileSync(absFixture, "utf8");
+  const relPath = relative(absRepoRoot, absFixture).split(sep).join("/");
 
   // TS Pass-1
   const tree = adapter.parse(content, absFixture);
   if (!tree) return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: "ts-parse-failed" };
-  const tsSymbols = adapter.extractSymbols(tree, content, absFixture) as ExtractedSymbol[];
+  const rawTsSymbols = adapter.extractSymbols(tree, content, absFixture) as ExtractedSymbol[];
   const tsImports = adapter.extractImports(tree, content, absFixture);
-  const tsCalls = adapter.extractCalls(tree, content, absFixture, tsSymbols);
+  const rawTsCalls = adapter.extractCalls(tree, content, absFixture, rawTsSymbols);
+  const normalizedTs = applyTestCaseCandidates({
+    relPath,
+    symbols: rawTsSymbols,
+    calls: rawTsCalls,
+    candidates:
+      adapter.detectTestCases?.({
+        tree,
+        content,
+        filePath: absFixture,
+        symbols: rawTsSymbols,
+      }) ?? [],
+  });
 
   // Rust Pass-1
   if (!isRustEngineAvailable()) {
@@ -280,7 +346,6 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   if (RUST_UNSUPPORTED_EXTENSIONS.has(ext)) {
     return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: `rust-unsupported:${ext}` };
   }
-  const relPath = relative(absRepoRoot, absFixture).split(sep).join("/");
   const fileMeta: FileMetadata = { path: relPath, size: Buffer.byteLength(content, "utf8"), mtime: Date.now() };
   const rustResults = parseFilesRust("parity-harness", absRepoRoot, [fileMeta]);
   if (!rustResults || rustResults.length === 0 || rustResults[0] === null) {
@@ -291,13 +356,55 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
     return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: `rust-parse-error` };
   }
 
-  const tsOwnerMap = buildNodeOwnerMap(tsSymbols);
-  const rustOwnerMap = buildNodeOwnerMap(rustResult.symbols);
+  const normalizedRust = applyTestCaseCandidates({
+    relPath,
+    symbols: rustResult.symbols,
+    calls: rustResult.calls,
+    candidates:
+      adapter.detectTestCases?.({
+        tree,
+        content,
+        filePath: absFixture,
+        symbols: rustResult.symbols,
+      }) ?? [],
+  });
+  const tsOwnerMap = buildNodeOwnerMap(normalizedTs.symbols);
+  const rustOwnerMap = buildNodeOwnerMap(normalizedRust.symbols);
+  const rawTsSymbolsWithIds = buildSymbolDetails({
+    symbolsWithNodeIds: rawTsSymbols,
+    tree,
+    repoId: "parity-harness",
+    fileMeta,
+  }).map((detail) => ({
+    ...detail.extractedSymbol,
+    symbolId: detail.symbolId,
+  }));
+  const normalizedTsSymbolsWithIds = buildSymbolDetails({
+    symbolsWithNodeIds: normalizedTs.symbols,
+    tree,
+    repoId: "parity-harness",
+    fileMeta,
+  }).map((detail) => ({
+    ...detail.extractedSymbol,
+    symbolId: detail.symbolId,
+  }));
 
   return {
+    testCaseIdentityDiffs: [
+      ...attachedIdentityDiffs(
+        rawTsSymbolsWithIds,
+        normalizedTsSymbolsWithIds,
+        "ts",
+      ),
+      ...attachedIdentityDiffs(
+        rustResult.symbols,
+        normalizedRust.symbols,
+        "rust",
+      ),
+    ],
     symbolDiffs: diffArrays(
-      sortByRange(tsSymbols),
-      sortByRange(rustResult.symbols),
+      sortByRange(normalizedTs.symbols),
+      sortByRange(normalizedRust.symbols),
       projectSymbol,
       (s) => `${s.kind}:${s.name}@${s.range.startLine}:${s.range.startCol}`,
     ),
@@ -308,8 +415,8 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
       (i) => `import:${i.specifier}`,
     ),
     callDiffs: diffArrays(
-      sortByRange(tsCalls),
-      sortByRange(rustResult.calls),
+      sortByRange(normalizedTs.calls),
+      sortByRange(normalizedRust.calls),
       (call, side) => projectCall(call, side === "ts" ? tsOwnerMap : rustOwnerMap),
       (c) => `call:${c.calleeIdentifier}@${c.range.startLine}:${c.range.startCol}`,
     ),

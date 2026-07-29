@@ -4,6 +4,7 @@ import type { LanguageAdapter } from "../adapter/LanguageAdapter.js";
 import type { FileMetadata } from "../fileScanner.js";
 import type { ParserWorkerPool } from "../workerPool.js";
 import type { SymbolWithNodeId } from "../worker.js";
+import { applyTestCaseCandidates } from "../test-case-normalizer.js";
 import type { ExtractedCall } from "../treesitter/extractCalls.js";
 import type { ExtractedImport } from "../treesitter/extractImports.js";
 import { createEmptyProcessFileResult, persistSkippedFile } from "./helpers.js";
@@ -112,6 +113,38 @@ export async function parseAndExtract(params: {
         filePath,
         extractedSymbols,
       );
+    }
+
+    if (adapter.detectTestCases) {
+      let detectionTree = tree;
+      const ownsDetectionTree = !detectionTree && adapter.languageId === "python";
+      try {
+        if (ownsDetectionTree) {
+          detectionTree = adapter.parse(content, filePath);
+        }
+        const normalized = applyTestCaseCandidates({
+          relPath,
+          symbols: symbolsWithNodeIds,
+          calls,
+          candidates: adapter.detectTestCases({
+            tree: detectionTree,
+            content,
+            filePath,
+            symbols: symbolsWithNodeIds,
+          }),
+        });
+        symbolsWithNodeIds = normalized.symbols;
+        calls = normalized.calls;
+        for (const diagnostic of normalized.diagnostics) {
+          logger.warn(diagnostic);
+        }
+      } catch {
+        logger.warn(`${relPath}: test-case detection failed`);
+      } finally {
+        if (ownsDetectionTree && detectionTree) {
+          (detectionTree as unknown as { delete: () => void }).delete();
+        }
+      }
     }
   } catch (error) {
     logger.error(`Fatal parse error for ${fileMeta.path}: ${error}`);

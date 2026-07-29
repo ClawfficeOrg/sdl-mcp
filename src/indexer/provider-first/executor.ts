@@ -4,6 +4,7 @@ import {
   access,
   readdir,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -12,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -39,8 +40,11 @@ import type { ScipDocument, ScipExternalSymbol } from "../../scip/types.js";
 import { logger } from "../../util/logger.js";
 import { hashValue } from "../../util/hashing.js";
 import { getRelativePath, normalizePath } from "../../util/paths.js";
-import type { IndexProgress, IndexProgressSubstage } from "../indexer-init.js";
+import type { TestCaseCandidate } from "../adapter/LanguageAdapter.js";
+import { getAdapterForExtension } from "../adapter/registry.js";
 import type { Pass2ResolverTelemetry } from "../edge-builder/telemetry.js";
+import type { IndexProgress, IndexProgressSubstage } from "../indexer-init.js";
+import type { ExtractedSymbol } from "../treesitter/extractCalls.js";
 import {
   normalizeScipProviderFacts,
   PROVIDER_FIRST_OCCURRENCE_FACT_RETENTION_LIMIT,
@@ -79,7 +83,7 @@ const PROVIDER_FIRST_DOCUMENT_PROGRESS_INTERVAL = 250;
 const PROVIDER_FIRST_SOURCE_LINE_PROGRESS_INTERVAL = 250;
 const PROVIDER_FIRST_PROGRESS_HEARTBEAT_MS = 2_000;
 const PROVIDER_COLLECTION_CACHE_SCHEMA_VERSION = 1;
-const PROVIDER_COLLECTION_CACHE_NORMALIZER_VERSION = 1;
+const PROVIDER_COLLECTION_CACHE_NORMALIZER_VERSION = 2;
 const DEFAULT_PROVIDER_COLLECTION_CACHE_DIR = join(
   homedir(),
   ".sdl-mcp",
@@ -461,6 +465,11 @@ export async function executeProviderFirstScipFull(
     params.recordPhaseTiming,
   );
   const indexedAt = new Date().toISOString();
+  const sourceTextMaxBytes = resolveSourceTextMaxBytes(
+    params.repoId,
+    params.repoRoot,
+    params.config,
+  );
   const cacheContext = params.disableProviderCollectionCache
     ? null
     : providerCollectionCacheContext({
@@ -469,11 +478,7 @@ export async function executeProviderFirstScipFull(
         scip: params.config.scip,
         generatedIndexes: params.generatedIndexes ?? [],
         generatorCacheKey: params.generatorCacheKey,
-        sourceTextMaxBytes: resolveSourceTextMaxBytes(
-          params.repoId,
-          params.repoRoot,
-          params.config,
-        ),
+        sourceTextMaxBytes,
         scannedPaths: params.scannedPaths,
         scannedFiles: params.scannedFiles,
       });
@@ -513,13 +518,30 @@ export async function executeProviderFirstScipFull(
     );
   }
 
-  await measureCollectionPhase("sourceMetadata", () =>
-    hydrateProviderFileFactsFromSource({
-      repoRoot: params.repoRoot,
-      facts: collected.facts,
-      scannedFiles: params.scannedFiles,
-    }),
+  const retainedSourceByPath = await measureCollectionPhase(
+    "sourceMetadata",
+    () =>
+      hydrateProviderFileFactsFromSource({
+        repoRoot: params.repoRoot,
+        facts: collected.facts,
+        scannedFiles: params.scannedFiles,
+        maxFileBytes: sourceTextMaxBytes,
+      }),
   );
+
+  const testCases = cachedCollection
+    ? undefined
+    : await measureCollectionPhase("testCases", () =>
+        collectProviderTestCaseCandidates({
+          repoRoot: params.repoRoot,
+          facts: collected.facts,
+          maxFileBytes: sourceTextMaxBytes,
+          retainedSourceByPath,
+        }),
+      );
+  for (const diagnostic of testCases?.diagnostics ?? []) {
+    appendProviderTestCaseDiagnostic(collected.facts, diagnostic);
+  }
 
   const rows =
     cachedCollection?.rows ??
@@ -528,6 +550,9 @@ export async function executeProviderFirstScipFull(
         facts: collected.facts,
         indexedAt,
         onProgress: params.onProgress,
+        testCaseCandidatesByPath: testCases?.candidatesByPath,
+        onTestCaseDiagnostic: (diagnostic) =>
+          appendProviderTestCaseDiagnostic(collected.facts, diagnostic),
       });
       const shapedRowTotal = providerFirstGraphRowTotal(shapedRows);
       emitProviderFirstProgress(params.onProgress, "providerCollection.rows", {
@@ -616,6 +641,11 @@ export async function executeProviderFirstLspFull(
       : `provider-first-lsp:${Date.now()}`;
   const indexedAt = new Date().toISOString();
   const measurePhase = providerFirstPhaseMeasurer(params.recordPhaseTiming);
+  const sourceTextMaxBytes = resolveSourceTextMaxBytes(
+    params.repoId,
+    params.repoRoot,
+    params.config,
+  );
   const lspConfig = params.config.semanticEnrichment?.providers.lsp;
   const providerLspConfig = params.config.indexing?.providerFirst?.lsp;
   const semanticTimeoutMs = params.config.semanticEnrichment?.timeoutMs;
@@ -635,6 +665,7 @@ export async function executeProviderFirstLspFull(
     ([, server]) => server.enabled !== false,
   );
   const facts: ProviderFactSet = emptyProviderFactSet();
+  const retainedSourceByPath = new Map<string, string>();
   const clientFactory =
     params.clientFactory ??
     ((options: LspClientOptions): ProviderFirstLspClientLike =>
@@ -649,6 +680,8 @@ export async function executeProviderFirstLspFull(
         repoRoot: params.repoRoot,
         server,
         scannedFiles: params.scannedFiles,
+        retainedSourceByPath,
+        maxFileBytes: sourceTextMaxBytes,
         fileLimit:
           params.config.indexing?.providerFirst?.lsp.documentSymbolFileLimit ??
           500,
@@ -899,8 +932,25 @@ export async function executeProviderFirstLspFull(
     }
   }
 
+  const testCases = await measurePhase("lsp.testCases", () =>
+    collectProviderTestCaseCandidates({
+      repoRoot: params.repoRoot,
+      facts,
+      maxFileBytes: sourceTextMaxBytes,
+      retainedSourceByPath,
+    }),
+  );
+  for (const diagnostic of testCases.diagnostics) {
+    appendProviderTestCaseDiagnostic(facts, diagnostic);
+  }
   const rows = await measurePhase("lsp.rows", () =>
-    providerFactsToGraphRows({ facts, indexedAt }),
+    providerFactsToGraphRows({
+      facts,
+      indexedAt,
+      testCaseCandidatesByPath: testCases.candidatesByPath,
+      onTestCaseDiagnostic: (diagnostic) =>
+        appendProviderTestCaseDiagnostic(facts, diagnostic),
+    }),
   );
   validateProviderFirstGraphRows(rows, {
     repoId: params.repoId,
@@ -1019,6 +1069,8 @@ async function collectLspProviderDocuments(params: {
   repoRoot: string;
   server: SemanticEnrichmentLspServerConfig;
   scannedFiles?: readonly ProviderFirstSourceFileMetadata[];
+  retainedSourceByPath: Map<string, string>;
+  maxFileBytes: number;
   fileLimit: number;
 }): Promise<CollectedLspProviderDocument[]> {
   const candidates =
@@ -1031,19 +1083,34 @@ async function collectLspProviderDocuments(params: {
     if (!matchesLspProviderFilePatterns(relPath, params.server.filePatterns)) {
       continue;
     }
-    const absolutePath = resolve(params.repoRoot, relPath);
+    let content = params.retainedSourceByPath.get(relPath);
     let contentBytes: Buffer;
-    try {
-      const fileStat = await stat(absolutePath);
-      if (!fileStat.isFile() || fileStat.size > MAX_FILE_BYTES) continue;
-      contentBytes = await readFile(absolutePath);
-    } catch {
-      continue;
+    let absolutePath: string;
+    if (content === undefined) {
+      const source = await readRepositoryFileBounded(
+        params.repoRoot,
+        relPath,
+        params.maxFileBytes,
+      );
+      if (source.kind !== "ok") continue;
+      absolutePath = source.absolutePath;
+      contentBytes = source.content;
+      content = contentBytes.toString("utf8");
+      params.retainedSourceByPath.set(relPath, content);
+    } else {
+      const resolvedPath = await resolveCanonicalDocumentPath(
+        params.repoRoot,
+        relPath,
+      );
+      if (resolvedPath.kind !== "ok") continue;
+      absolutePath = resolvedPath.absolutePath;
+      contentBytes = Buffer.from(content, "utf8");
+      if (contentBytes.byteLength > params.maxFileBytes) continue;
     }
     documents.push({
       relPath,
       uri: pathToFileURL(absolutePath).toString(),
-      text: contentBytes.toString("utf8"),
+      text: content,
       languageId: documentLanguageIdForLspPath(relPath, params.server),
       contentHash: hash("sha256", contentBytes, "hex"),
       byteSize: contentBytes.byteLength,
@@ -1445,7 +1512,9 @@ async function hydrateProviderFileFactsFromSource(params: {
   repoRoot: string;
   facts: ProviderFactSet;
   scannedFiles?: readonly ProviderFirstSourceFileMetadata[];
-}): Promise<void> {
+  maxFileBytes: number;
+}): Promise<Map<string, string>> {
+  const retainedSourceByPath = new Map<string, string>();
   const scannedByPath = new Map(
     params.scannedFiles?.map((file) => [normalizePath(file.path), file]) ?? [],
   );
@@ -1458,16 +1527,17 @@ async function hydrateProviderFileFactsFromSource(params: {
       continue;
     }
 
-    const sourcePath = resolveDocumentPath(params.repoRoot, relPath);
-    if (!sourcePath) continue;
-    try {
-      const content = await readFile(sourcePath);
-      fact.contentHash = hash("sha256", content, "hex");
-      fact.byteSize = content.byteLength;
-    } catch {
-      // Validation reports the missing raw hash/size with file context.
-    }
+    const source = await readRepositoryFileBounded(
+      params.repoRoot,
+      relPath,
+      params.maxFileBytes,
+    );
+    if (source.kind !== "ok") continue;
+    fact.contentHash = hash("sha256", source.content, "hex");
+    fact.byteSize = source.content.byteLength;
+    retainedSourceByPath.set(relPath, source.content.toString("utf8"));
   }
+  return retainedSourceByPath;
 }
 
 function applyProviderFileFactMetadataToRows(
@@ -1887,6 +1957,210 @@ function providerIdForScipEntry(
 ): string {
   if (label && label.trim().length > 0) return label.trim();
   return `scip:${normalizePath(relIndexPath)}`;
+}
+
+async function readFileBounded(
+  filePath: string,
+  maxFileBytes: number,
+): Promise<Buffer | null> {
+  const handle = await open(filePath, "r");
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > maxFileBytes) return null;
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes <= maxFileBytes) {
+      const chunk = Buffer.allocUnsafe(
+        Math.min(64 * 1024, maxFileBytes - totalBytes + 1),
+      );
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+    }
+    if (totalBytes > maxFileBytes) return null;
+    return Buffer.concat(chunks, totalBytes);
+  } finally {
+    await handle.close();
+  }
+}
+
+type CanonicalDocumentPathResult =
+  | { kind: "ok"; absolutePath: string }
+  | { kind: "outsideRoot" | "readFailed" };
+
+type RepositoryFileReadResult =
+  | { kind: "ok"; absolutePath: string; content: Buffer }
+  | { kind: "outsideRoot" }
+  | { kind: "tooLarge" }
+  | { kind: "readFailed" };
+
+async function resolveCanonicalDocumentPath(
+  repoRoot: string,
+  relPath: string,
+): Promise<CanonicalDocumentPathResult> {
+  const lexicalPath = resolveDocumentPath(repoRoot, relPath);
+  if (!lexicalPath) return { kind: "outsideRoot" };
+  try {
+    const [canonicalRoot, canonicalSource] = await Promise.all([
+      realpath(repoRoot),
+      realpath(lexicalPath),
+    ]);
+    const normalizedRoot = normalizePath(canonicalRoot);
+    const absolutePath = normalizePath(canonicalSource);
+    return isPathInsideRoot(normalizedRoot, absolutePath)
+      ? { kind: "ok", absolutePath }
+      : { kind: "outsideRoot" };
+  } catch {
+    return { kind: "readFailed" };
+  }
+}
+
+async function readRepositoryFileBounded(
+  repoRoot: string,
+  relPath: string,
+  maxFileBytes: number,
+): Promise<RepositoryFileReadResult> {
+  const resolvedPath = await resolveCanonicalDocumentPath(repoRoot, relPath);
+  if (resolvedPath.kind !== "ok") return resolvedPath;
+  try {
+    const content = await readFileBounded(
+      resolvedPath.absolutePath,
+      maxFileBytes,
+    );
+    return content
+      ? { kind: "ok", absolutePath: resolvedPath.absolutePath, content }
+      : { kind: "tooLarge" };
+  } catch {
+    return { kind: "readFailed" };
+  }
+}
+
+export async function collectProviderTestCaseCandidates(params: {
+  repoRoot: string;
+  facts: ProviderFactSet;
+  maxFileBytes: number;
+  retainedSourceByPath?: ReadonlyMap<string, string>;
+}): Promise<{
+  candidatesByPath: Map<string, TestCaseCandidate[]>;
+  diagnostics: string[];
+}> {
+  const candidatesByPath = new Map<string, TestCaseCandidate[]>();
+  const diagnostics: string[] = [];
+  const files = [...params.facts.files].sort((left, right) =>
+    normalizePath(left.relPath).localeCompare(normalizePath(right.relPath)),
+  );
+  const symbolsByPath = new Map<string, ExtractedSymbol[]>();
+  for (const symbol of params.facts.symbols) {
+    if (!symbol.range) continue;
+    const relPath = normalizePath(symbol.relPath);
+    const symbols = symbolsByPath.get(relPath) ?? [];
+    symbols.push({
+      nodeId: symbol.symbolId,
+      kind: symbol.symbolKind,
+      name: symbol.name,
+      exported: true,
+      range: symbol.range,
+    });
+    symbolsByPath.set(relPath, symbols);
+  }
+
+  for (const file of files) {
+    const relPath = normalizePath(file.relPath);
+    const adapter = getAdapterForExtension(extname(relPath));
+    if (
+      !adapter?.detectTestCases ||
+      (adapter.languageId !== "typescript" && adapter.languageId !== "python")
+    ) {
+      continue;
+    }
+
+    let content: string;
+    const retainedSource = params.retainedSourceByPath?.get(relPath);
+    if (retainedSource !== undefined) {
+      if (Buffer.byteLength(retainedSource, "utf8") > params.maxFileBytes) continue;
+      content = retainedSource;
+    } else {
+      const source = await readRepositoryFileBounded(
+        params.repoRoot,
+        relPath,
+        params.maxFileBytes,
+      );
+      if (source.kind === "outsideRoot") {
+        diagnostics.push(`${relPath}: test-case source path outside repository`);
+        continue;
+      }
+      if (source.kind === "readFailed") {
+        diagnostics.push(`${relPath}: test-case source read failed`);
+        continue;
+      }
+      if (source.kind === "tooLarge") continue;
+      content = source.content.toString("utf8");
+    }
+
+    let tree: ReturnType<typeof adapter.parse> = null;
+    try {
+      if (adapter.languageId === "python") {
+        tree = adapter.parse(content, relPath);
+      }
+      const symbols = symbolsByPath.get(relPath) ?? [];
+      const candidates = adapter.detectTestCases({
+        tree,
+        content,
+        filePath: relPath,
+        symbols,
+      });
+      if (candidates.length > 0) {
+        candidatesByPath.set(relPath, candidates);
+      }
+    } catch {
+      diagnostics.push(`${relPath}: test-case detection failed`);
+    } finally {
+      if (tree) {
+        (tree as unknown as { delete: () => void }).delete();
+      }
+    }
+  }
+
+  diagnostics.sort((left, right) => left.localeCompare(right));
+  return { candidatesByPath, diagnostics };
+}
+
+function appendProviderTestCaseDiagnostic(
+  facts: ProviderFactSet,
+  diagnostic: string,
+): void {
+  const separator = diagnostic.indexOf(": ");
+  const relPath = normalizePath(
+    separator >= 0 ? diagnostic.slice(0, separator) : diagnostic,
+  );
+  const file = facts.files.find(
+    (candidate) => normalizePath(candidate.relPath) === relPath,
+  );
+  if (!file) return;
+
+  const diagnosticId = hashValue({
+    code: "semantic-test-case",
+    diagnostic,
+  });
+  if (facts.diagnostics.some((entry) => entry.diagnosticId === diagnosticId)) {
+    return;
+  }
+  facts.diagnostics.push({
+    repoId: file.repoId,
+    generationId: file.generationId,
+    providerType: file.providerType,
+    providerId: file.providerId,
+    providerVersion: file.providerVersion,
+    emittedAt: file.emittedAt,
+    kind: "diagnostic",
+    diagnosticId,
+    relPath,
+    message: diagnostic,
+    severity: "warning",
+    code: "semantic-test-case",
+  });
 }
 
 function emptyProviderFactSet(): ProviderFactSet {

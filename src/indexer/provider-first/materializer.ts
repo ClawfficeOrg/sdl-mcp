@@ -4,11 +4,16 @@ import type { EdgeRow, FileRow, SymbolRow } from "../../db/ladybug-queries.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import { deleteProviderReplacementSymbols } from "../../db/ladybug-provider-first.js";
 import type { EdgeType, SymbolKind } from "../../domain/types.js";
+import { serializeTestCaseFacet } from "../../util/test-case.js";
 import {
   dropFtsIndex,
   ensureFtsIndexForNonEmptyTable,
 } from "../../retrieval/index-lifecycle.js";
 import { generateFileId, hashValue } from "../../util/hashing.js";
+import { generateSymbolId } from "../fingerprints.js";
+import type { TestCaseCandidate } from "../adapter/LanguageAdapter.js";
+import { applyTestCaseCandidates } from "../test-case-normalizer.js";
+import type { SymbolWithNodeId } from "../worker.js";
 import { normalizePath } from "../../util/paths.js";
 import { canonicalizeLanguageId } from "../language.js";
 import { resolveSymbolEnrichment } from "../symbol-enrichment.js";
@@ -60,6 +65,11 @@ export interface ProviderFirstGraphRows {
 export interface ProviderFactsToGraphRowsOptions {
   facts: ProviderFactSet;
   indexedAt?: string;
+  testCaseCandidatesByPath?: ReadonlyMap<
+    string,
+    readonly TestCaseCandidate[]
+  >;
+  onTestCaseDiagnostic?: (diagnostic: string) => void;
   onProgress?: (progress: {
     stage: IndexProgress["stage"];
     current: number;
@@ -152,9 +162,15 @@ export function providerFactsToGraphRows(
   );
   shapedRows += files.length;
   emitProviderRowsProgress(options, shapedRows, totalRows, "files shaped");
-  const symbols = options.facts.symbols.map((fact) =>
+  const providerSymbols = options.facts.symbols.map((fact) =>
     symbolFactToRow(fact, fileByPath, indexedAt),
   );
+  const symbols = augmentProviderTestCases({
+    options,
+    providerSymbols,
+    fileByPath,
+    indexedAt,
+  });
   shapedRows += symbols.length;
   emitProviderRowsProgress(options, shapedRows, totalRows, "symbols shaped");
   const externalSymbols = options.facts.externalSymbols.map((fact) =>
@@ -504,6 +520,117 @@ function fileFactToRow(
     byteSize: fact.byteSize ?? -1,
     lastIndexedAt: indexedAt,
   };
+}
+
+function augmentProviderTestCases(params: {
+  options: ProviderFactsToGraphRowsOptions;
+  providerSymbols: readonly SymbolRow[];
+  fileByPath: ReadonlyMap<string, FileFact>;
+  indexedAt: string;
+}): SymbolRow[] {
+  const candidatesByPath = params.options.testCaseCandidatesByPath;
+  if (!candidatesByPath || candidatesByPath.size === 0) {
+    return [...params.providerSymbols];
+  }
+
+  const symbols = [...params.providerSymbols];
+  const ordinaryIndexesByPath = new Map<string, number[]>();
+  for (const [index, fact] of params.options.facts.symbols.entries()) {
+    const relPath = normalizePath(fact.relPath);
+    const indexes = ordinaryIndexesByPath.get(relPath) ?? [];
+    indexes.push(index);
+    ordinaryIndexesByPath.set(relPath, indexes);
+  }
+  const entries = [...candidatesByPath.entries()].sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [candidatePath, candidates] of entries) {
+    const relPath = normalizePath(candidatePath);
+    const ordinaryIndexes = ordinaryIndexesByPath.get(relPath) ?? [];
+    const ordinarySymbols: SymbolWithNodeId[] = ordinaryIndexes.map((index) => {
+      const row = symbols[index];
+      return {
+        nodeId: `provider:${row.symbolId}`,
+        kind: row.kind as SymbolWithNodeId["kind"],
+        name: row.name,
+        exported: row.exported,
+        range: {
+          startLine: row.rangeStartLine,
+          startCol: row.rangeStartCol,
+          endLine: row.rangeEndLine,
+          endCol: row.rangeEndCol,
+        },
+        astFingerprint: row.astFingerprint,
+      };
+    });
+    const normalized = applyTestCaseCandidates({
+      relPath,
+      symbols: ordinarySymbols,
+      calls: [],
+      candidates,
+    });
+    for (const diagnostic of normalized.diagnostics) {
+      params.options.onTestCaseDiagnostic?.(diagnostic);
+    }
+    for (const [ordinaryIndex, symbolIndex] of ordinaryIndexes.entries()) {
+      const testCase = normalized.symbols[ordinaryIndex].testCase;
+      const testCaseJson = testCase ? serializeTestCaseFacet(testCase) : null;
+      symbols[symbolIndex] = { ...symbols[symbolIndex], testCaseJson };
+    }
+
+    const fileFact = params.fileByPath.get(relPath);
+    if (!fileFact) continue;
+    for (const symbol of normalized.symbols.slice(ordinaryIndexes.length)) {
+      if (!symbol.testCase) continue;
+      const astFingerprint = symbol.astFingerprint ?? "";
+      const enrichment = resolveSymbolEnrichment({
+        kind: symbol.kind,
+        name: symbol.name,
+        relPath,
+        summary: "",
+      });
+      symbols.push({
+        symbolId: generateSymbolId(
+          fileFact.repoId,
+          relPath,
+          symbol.kind,
+          symbol.name,
+          astFingerprint,
+        ),
+        repoId: fileFact.repoId,
+        fileId: fileFact.fileId,
+        kind: symbol.kind,
+        name: symbol.name,
+        exported: false,
+        visibility: "private",
+        language: canonicalizeLanguageId(fileFact.languageId, relPath),
+        rangeStartLine: symbol.range.startLine,
+        rangeStartCol: symbol.range.startCol,
+        rangeEndLine: symbol.range.endLine,
+        rangeEndCol: symbol.range.endCol,
+        astFingerprint,
+        signatureJson: buildProviderSignatureJson(
+          symbol.kind,
+          symbol.name,
+          undefined,
+        ),
+        summary: "",
+        invariantsJson: null,
+        sideEffectsJson: null,
+        summaryQuality: 0,
+        summarySource: "sdl:test-case",
+        roleTagsJson: enrichment.roleTagsJson,
+        testCaseJson: serializeTestCaseFacet(symbol.testCase) ?? null,
+        searchText: enrichment.searchText,
+        external: false,
+        scipSymbol: null,
+        source: "treesitter",
+        symbolStatus: "real",
+        updatedAt: params.indexedAt,
+      });
+    }
+  }
+  return symbols;
 }
 
 function symbolFactToRow(

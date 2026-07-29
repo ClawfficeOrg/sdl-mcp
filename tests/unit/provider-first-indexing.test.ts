@@ -55,9 +55,11 @@ import {
 } from "../../dist/indexer/indexer-pass1-policy.js";
 import { createProviderSymbolId } from "../../dist/indexer/provider-first/ids.js";
 import {
+  executeProviderFirstLspFull,
   executeProviderFirstScipIncremental,
   executeProviderFirstScipFull,
   resolveProviderFirstExecutionPlan,
+  type ProviderFirstLspClientLike,
 } from "../../dist/indexer/provider-first/executor.js";
 import { createLspProviderCacheKey } from "../../dist/indexer/provider-first/lsp-cache.js";
 import {
@@ -70,6 +72,11 @@ import { resolveProviderFirstPipeline } from "../../dist/indexer/provider-first/
 import { normalizeScipProviderFacts } from "../../dist/indexer/provider-first/scip-normalizer.js";
 import { BatchPersistAccumulator } from "../../dist/indexer/parser/batch-persist.js";
 import { processFileFromRustResult } from "../../dist/indexer/parser/rust-process-file.js";
+import { detectTypeScriptTestCases } from "../../dist/indexer/typescript-test-cases.js";
+import {
+  getAdapterForExtension,
+  loadBuiltInAdapters,
+} from "../../dist/indexer/adapter/registry.js";
 import { stageProviderFirstShadowBuild } from "../../dist/indexer/provider-first/shadow-build.js";
 import { finalizeProviderFirstShadowDb } from "../../dist/indexer/provider-first/shadow-finalization.js";
 import {
@@ -6711,18 +6718,16 @@ describe("provider-first indexing foundation", () => {
       }
 
       mkdirSync(join(realRepoRoot, "src"), { recursive: true });
-      writeFileSync(
-        join(realRepoRoot, "src", "index.ts"),
-        [
-          "export function main() {",
-          "  return helper();",
-          "}",
-          "",
-          "export function helper() {",
-          "  return 1;",
-          "}",
-        ].join("\n"),
-      );
+      const sourceContent = [
+        "export function main() {",
+        "  return helper();",
+        "}",
+        "",
+        "export function helper() {",
+        "  return 1;",
+        "}",
+      ].join("\n");
+      writeFileSync(join(realRepoRoot, "src", "index.ts"), sourceContent);
       await writeTestScipIndex(join(realRepoRoot, "index.scip"), {
         metadata: {
           toolName: "scip-fixture",
@@ -6770,6 +6775,13 @@ describe("provider-first indexing foundation", () => {
       const result = await executeProviderFirstScipFull({
         repoId: "repo",
         repoRoot,
+        scannedFiles: [
+          {
+            path: "src/index.ts",
+            size: Buffer.byteLength(sourceContent, "utf8"),
+            contentHash: createHash("sha256").update(sourceContent).digest("hex"),
+          },
+        ],
         config: {
           scip: ScipConfigSchema.parse({
             enabled: true,
@@ -12287,3 +12299,510 @@ function createFakeConnection(
 function countStatements(statements: string[], fragment: string): number {
   return statements.filter((statement) => statement.includes(fragment)).length;
 }
+
+
+it("materializes semantic cases from nonconventional provider paths without rewriting edges", () => {
+  const relPath = "src/embedded-cases.ts";
+  const content = readFileSync(
+    join(
+      process.cwd(),
+      "tests",
+      "fixtures",
+      "semantic-test-cases",
+      "sample.test.ts",
+    ),
+    "utf8",
+  );
+  const candidates = detectTypeScriptTestCases({ content, filePath: relPath });
+  const emittedAt = "2026-07-29T00:00:00.000Z";
+  const base = {
+    repoId: "provider-test-cases",
+    generationId: "gen-test-cases",
+    providerType: "scip" as const,
+    providerId: "scip-typescript",
+    providerVersion: "1.0.0",
+    emittedAt,
+  };
+  const facts: ProviderFactSet = {
+    files: [
+      {
+        ...base,
+        kind: "file",
+        fileId: "provider-test-cases:src/embedded-cases.ts",
+        relPath,
+        languageId: "typescript",
+        contentHash: "3".repeat(64),
+        byteSize: Buffer.byteLength(content, "utf8"),
+      },
+    ],
+    symbols: [
+      {
+        ...base,
+        kind: "symbol",
+        symbolId: "provider:case-target",
+        providerSymbolId: "scip caseTarget",
+        name: "caseTarget",
+        symbolKind: "function",
+        relPath,
+        range: { startLine: 5, startCol: 0, endLine: 5, endCol: 30 },
+        documentation: [],
+        external: false,
+      },
+    ],
+    occurrences: [],
+    edges: [
+      {
+        ...base,
+        kind: "edge",
+        sourceSymbolId: "provider:case-target",
+        targetSymbolId: "provider:case-target",
+        edgeType: "call",
+        resolution: "exact",
+        confidence: 1,
+        dedupeKey: "unchanged-provider-owner",
+        relPath,
+      },
+    ],
+    externalSymbols: [],
+    diagnostics: [],
+    coverage: [],
+    providerRuns: [],
+  };
+
+  const rows = providerFactsToGraphRows({
+    facts,
+    indexedAt: emittedAt,
+    testCaseCandidatesByPath: new Map([[relPath, candidates]]),
+  });
+  const cases = rows.symbols.filter((symbol) => symbol.testCaseJson !== null);
+  assert.equal(cases.length, 2);
+  assert.deepEqual(
+    cases.map((symbol) => symbol.astFingerprint),
+    candidates.map((candidate) =>
+      candidate.mode === "synthetic" ? candidate.sourceFingerprint : "",
+    ),
+  );
+  assert.notEqual(cases[0]?.symbolId, cases[1]?.symbolId);
+  assert.ok(cases.every((symbol) => symbol.scipSymbol === null));
+  assert.equal(rows.edges[0]?.fromSymbolId, "provider:case-target");
+});
+
+it("preserves provider rows and reports ambiguous test-case attachment", () => {
+  const relPath = "src/test-like-content.py";
+  const emittedAt = "2026-07-29T00:00:00.000Z";
+  const base = {
+    repoId: "provider-test-cases",
+    generationId: "gen-ambiguous",
+    providerType: "scip" as const,
+    providerId: "scip-python",
+    providerVersion: "1.0.0",
+    emittedAt,
+  };
+  const facts: ProviderFactSet = {
+    files: [
+      {
+        ...base,
+        kind: "file",
+        fileId: "provider-test-cases:src/test-like-content.py",
+        relPath,
+        languageId: "python",
+        contentHash: "4".repeat(64),
+        byteSize: 64,
+      },
+    ],
+    symbols: [0, 1].map((index) => ({
+      ...base,
+      kind: "symbol" as const,
+      symbolId: `provider:ambiguous:${index}`,
+      providerSymbolId: `scip ambiguous ${index}`,
+      name: "test_named_case",
+      symbolKind: "function" as const,
+      relPath,
+      range: { startLine: 1, startCol: 0, endLine: 8, endCol: 0 },
+      documentation: [],
+      external: false,
+    })),
+    occurrences: [],
+    edges: [],
+    externalSymbols: [],
+    diagnostics: [],
+    coverage: [],
+    providerRuns: [],
+  };
+  const diagnostics: string[] = [];
+  const rows = providerFactsToGraphRows({
+    facts,
+    indexedAt: emittedAt,
+    testCaseCandidatesByPath: new Map([
+      [
+        relPath,
+        [
+          {
+            mode: "attach" as const,
+            targetName: "test_named_case",
+            targetKinds: ["function" as const],
+            constructRange: {
+              startLine: 1,
+              startCol: 0,
+              endLine: 8,
+              endCol: 0,
+            },
+            testCase: {
+              framework: "pytest",
+              title: "test_named_case",
+            },
+          },
+        ],
+      ],
+    ]),
+    onTestCaseDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.ok(rows.symbols.every((symbol) => symbol.testCaseJson === null));
+  assert.deepEqual(diagnostics, [
+    "src/test-like-content.py: test-case attach \"test_named_case\" matched 2 symbols",
+  ]);
+});
+
+
+it("reuses the first LSP source revision for test-case augmentation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "sdl-provider-lsp-revision-"));
+  const relPath = "src/revision.test.ts";
+  const retainedContent = 'test("retained revision", () => {});\n';
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, relPath), retainedContent, "utf8");
+  const oversizedPath = "src/oversized.test.ts";
+  const oversizedContent = "x".repeat(512);
+  writeFileSync(join(root, oversizedPath), oversizedContent, "utf8");
+  const externalRoot = mkdtempSync(join(tmpdir(), "sdl-provider-lsp-external-"));
+  const escapedPath = "src/escaped.test.ts";
+  const escapedContent = 'test("escaped source", () => {});\n';
+  const externalPath = join(externalRoot, "escaped.test.ts");
+  writeFileSync(externalPath, escapedContent, "utf8");
+  symlinkSync(externalPath, join(root, escapedPath), "file");
+  const openedDocuments: string[] = [];
+
+  const client: ProviderFirstLspClientLike = {
+    start: async () => ({
+      capabilities: { documentSymbolProvider: false },
+    }),
+    openDocument: async (document) => {
+      openedDocuments.push(document.text);
+      if (document.text !== retainedContent) return;
+      writeFileSync(
+        join(root, relPath),
+        "export const changedRevision = true;\n",
+        "utf8",
+      );
+    },
+    documentSymbol: async () => [],
+    diagnostics: () => [],
+    dispose: async () => {},
+  };
+
+  try {
+    const result = await executeProviderFirstLspFull({
+      repoId: "provider-lsp-revision",
+      repoRoot: root,
+      scannedFiles: [
+        { path: relPath, size: 1, contentHash: "1".repeat(64) },
+        { path: oversizedPath, size: 1, contentHash: "2".repeat(64) },
+        { path: escapedPath, size: 1, contentHash: "3".repeat(64) },
+      ],
+      config: {
+        semanticEnrichment: SemanticEnrichmentConfigSchema.parse({
+          enabled: true,
+          providers: {
+            lsp: {
+              enabled: true,
+              servers: {
+                first: {
+                  serverId: "first",
+                  command: "noop",
+                  languages: ["typescript"],
+                  filePatterns: ["**/*.ts"],
+                  documentSessionMode: "document",
+                },
+                second: {
+                  serverId: "second",
+                  command: "noop",
+                  languages: ["typescript"],
+                  filePatterns: ["**/*.ts"],
+                  documentSessionMode: "document",
+                },
+              },
+            },
+          },
+        }),
+        indexing: IndexingConfigSchema.parse({ pipeline: "providerFirst" }),
+        repos: [
+          RepoConfigSchema.parse({
+            repoId: "provider-lsp-revision",
+            rootPath: root,
+            languages: ["ts"],
+            maxFileBytes: 128,
+          }),
+        ],
+      } as AppConfig,
+      clientFactory: () => client,
+    });
+
+    assert.deepEqual(openedDocuments, [retainedContent, retainedContent]);
+    const testCases = result.rows.symbols.filter(
+      (symbol) => symbol.testCaseJson !== null,
+    );
+    assert.equal(testCases.length, 1);
+    assert.equal(
+      testCases[0]?.testCaseJson,
+      '{"framework":"jest","title":"retained revision"}',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(externalRoot, { recursive: true, force: true });
+  }
+});
+
+it("rejects oversized and symlink-escaped SCIP first reads", async () => {
+  const outcomes: string[] = [];
+  for (const kind of ["oversized", "symlink"] as const) {
+    const root = mkdtempSync(join(tmpdir(), `sdl-provider-scip-${kind}-`));
+    const externalRoot =
+      kind === "symlink"
+        ? mkdtempSync(join(tmpdir(), "sdl-provider-scip-external-"))
+        : null;
+    const relPath = "src/case.test.ts";
+    mkdirSync(join(root, "src"), { recursive: true });
+    if (kind === "oversized") {
+      writeFileSync(join(root, relPath), "x".repeat(512), "utf8");
+    } else {
+      const externalPath = join(externalRoot!, "case.test.ts");
+      writeFileSync(
+        externalPath,
+        'test("escaped source", () => {});\n',
+        "utf8",
+      );
+      symlinkSync(externalPath, join(root, relPath), "file");
+    }
+
+    try {
+      await writeTestScipIndex(join(root, "index.scip"), {
+        metadata: { toolName: "scip-fixture", toolVersion: "1.0.0" },
+        documents: [
+          {
+            language: "typescript",
+            relativePath: relPath,
+            occurrences: [],
+            symbols: [],
+          },
+        ],
+      });
+      try {
+        await executeProviderFirstScipFull({
+          repoId: `provider-scip-${kind}`,
+          repoRoot: root,
+          disableProviderCollectionCache: true,
+          config: {
+            scip: ScipConfigSchema.parse({
+              enabled: true,
+              indexes: [{ path: "index.scip" }],
+            }),
+            indexing: IndexingConfigSchema.parse({ pipeline: "providerFirst" }),
+            repos: [
+              RepoConfigSchema.parse({
+                repoId: `provider-scip-${kind}`,
+                rootPath: root,
+                languages: ["ts"],
+                maxFileBytes: 128,
+              }),
+            ],
+          } as AppConfig,
+        });
+        outcomes.push(`${kind}:fulfilled`);
+      } catch {
+        outcomes.push(`${kind}:rejected`);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      if (externalRoot) {
+        rmSync(externalRoot, { recursive: true, force: true });
+      }
+    }
+  }
+
+  assert.deepEqual(outcomes, ["oversized:rejected", "symlink:rejected"]);
+});
+
+it("collects bounded provider test cases and reports deterministic failures", async () => {
+  const executor = await import(
+    "../../dist/indexer/provider-first/executor.js"
+  );
+  assert.equal(typeof executor.collectProviderTestCaseCandidates, "function");
+  if (typeof executor.collectProviderTestCaseCandidates !== "function") return;
+
+  loadBuiltInAdapters();
+  const root = mkdtempSync(join(tmpdir(), "sdl-provider-test-cases-"));
+  const relPath = "src/embedded-cases.ts";
+  const missingPath = "src/missing-cases.ts";
+  const content = readFileSync(
+    join(
+      process.cwd(),
+      "tests",
+      "fixtures",
+      "semantic-test-cases",
+      "sample.test.ts",
+    ),
+    "utf8",
+  );
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, relPath), content, "utf8");
+  const emittedAt = "2026-07-29T00:00:00.000Z";
+  const base = {
+    repoId: "provider-test-cases",
+    generationId: "gen-collector",
+    providerType: "scip" as const,
+    providerId: "scip-typescript",
+    providerVersion: "1.0.0",
+    emittedAt,
+  };
+  const facts: ProviderFactSet = {
+    files: [
+      {
+        ...base,
+        kind: "file",
+        fileId: `provider-test-cases:${relPath}`,
+        relPath,
+        languageId: "typescript",
+        contentHash: "5".repeat(64),
+        byteSize: Buffer.byteLength(content, "utf8"),
+      },
+      {
+        ...base,
+        kind: "file",
+        fileId: `provider-test-cases:${missingPath}`,
+        relPath: missingPath,
+        languageId: "typescript",
+        contentHash: "6".repeat(64),
+        byteSize: 32,
+      },
+    ],
+    symbols: [],
+    occurrences: [],
+    edges: [],
+    externalSymbols: [],
+    diagnostics: [],
+    coverage: [],
+    providerRuns: [],
+  };
+
+  try {
+    const collected = await executor.collectProviderTestCaseCandidates({
+      repoRoot: root,
+      facts,
+      maxFileBytes: Number.MAX_SAFE_INTEGER,
+    });
+    assert.equal(collected.candidatesByPath.get(relPath)?.length, 2);
+    assert.deepEqual(collected.diagnostics, [
+      "src/missing-cases.ts: test-case source read failed",
+    ]);
+
+    const overLimitPath = "src/over-configured-limit.ts";
+    writeFileSync(join(root, overLimitPath), content, "utf8");
+    const bounded = await executor.collectProviderTestCaseCandidates({
+      repoRoot: root,
+      facts: {
+        ...facts,
+        files: [
+          {
+            ...facts.files[0]!,
+            fileId: `provider-test-cases:${overLimitPath}`,
+            relPath: overLimitPath,
+          },
+        ],
+      },
+      maxFileBytes: Buffer.byteLength(content, "utf8") - 1,
+    });
+    assert.equal(bounded.candidatesByPath.size, 0);
+    assert.deepEqual(bounded.diagnostics, []);
+
+    const staleSizePath = "src/stale-size.ts";
+    writeFileSync(join(root, staleSizePath), content, "utf8");
+    const staleSize = await executor.collectProviderTestCaseCandidates({
+      repoRoot: root,
+      facts: {
+        ...facts,
+        files: [
+          {
+            ...facts.files[0]!,
+            fileId: `provider-test-cases:${staleSizePath}`,
+            relPath: staleSizePath,
+            byteSize: 1,
+          },
+        ],
+      },
+      maxFileBytes: Buffer.byteLength(content, "utf8") - 1,
+    });
+    assert.equal(staleSize.candidatesByPath.size, 0);
+    assert.deepEqual(staleSize.diagnostics, []);
+
+    const escaped = await executor.collectProviderTestCaseCandidates({
+      repoRoot: root,
+      facts: {
+        ...facts,
+        files: [
+          {
+            ...facts.files[0]!,
+            fileId: "provider-test-cases:../escaped.ts",
+            relPath: "../escaped.ts",
+            byteSize: 1,
+          },
+        ],
+      },
+      maxFileBytes: Number.MAX_SAFE_INTEGER,
+    });
+    assert.equal(escaped.candidatesByPath.size, 0);
+    assert.deepEqual(escaped.diagnostics, [
+      "../escaped.ts: test-case source path outside repository",
+    ]);
+
+    const retainedPath = "src/retained-revision.ts";
+    const retained = await executor.collectProviderTestCaseCandidates({
+      repoRoot: root,
+      facts: {
+        ...facts,
+        files: [
+          {
+            ...facts.files[0]!,
+            fileId: `provider-test-cases:${retainedPath}`,
+            relPath: retainedPath,
+          },
+        ],
+      },
+      maxFileBytes: Number.MAX_SAFE_INTEGER,
+      retainedSourceByPath: new Map([[retainedPath, content]]),
+    });
+    assert.equal(retained.candidatesByPath.get(retainedPath)?.length, 2);
+    assert.deepEqual(retained.diagnostics, []);
+
+    const adapter = getAdapterForExtension(".ts");
+    assert.ok(adapter?.detectTestCases);
+    const detectTestCases = adapter.detectTestCases;
+    adapter.detectTestCases = () => {
+      throw new Error("detector failure");
+    };
+    try {
+      const failed = await executor.collectProviderTestCaseCandidates({
+        repoRoot: root,
+        facts: { ...facts, files: [facts.files[0]!] },
+        maxFileBytes: Number.MAX_SAFE_INTEGER,
+      });
+      assert.equal(failed.candidatesByPath.size, 0);
+      assert.deepEqual(failed.diagnostics, [
+        "src/embedded-cases.ts: test-case detection failed",
+      ]);
+    } finally {
+      adapter.detectTestCases = detectTestCases;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

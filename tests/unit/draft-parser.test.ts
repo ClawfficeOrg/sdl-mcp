@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -153,4 +153,91 @@ describe("parseDraftFile", () => {
       _setDraftSymbolFallbackObserverForTests();
     }
   });
+
+
+  it("normalizes static test cases from retained draft content", async () => {
+    const content = readFileSync(
+      join(
+        process.cwd(),
+        "tests",
+        "fixtures",
+        "semantic-test-cases",
+        "sample.test.ts",
+      ),
+      "utf8",
+    );
+    const result = await parseDraftFile({
+      repoId: "draft-test-case-repo",
+      repoRoot: process.cwd(),
+      filePath: "src/embedded-cases.ts",
+      content,
+      languages: ["ts"],
+      language: "typescript",
+      version: 1,
+    });
+
+    const cases = result.symbols.filter(
+      (symbol) => symbol.testCaseJson !== null,
+    );
+    assert.equal(cases.length, 2);
+    assert.deepEqual(
+      cases.map((symbol) => ({
+        name: symbol.name,
+        range: [
+          symbol.rangeStartLine,
+          symbol.rangeStartCol,
+          symbol.rangeEndLine,
+          symbol.rangeEndCol,
+        ],
+        testCaseJson: symbol.testCaseJson,
+      })),
+      [
+        {
+          name: "duplicate case",
+          range: [13, 2, 21, 4],
+          testCaseJson:
+            '{"framework":"jest","title":"duplicate case","suitePath":["outer suite"]}',
+        },
+        {
+          name: "duplicate case",
+          range: [23, 2, 25, 4],
+          testCaseJson:
+            '{"framework":"jest","title":"duplicate case","suitePath":["outer suite"]}',
+        },
+      ],
+    );
+    assert.ok(cases.every((symbol) => symbol.symbolId.length > 0));
+    assert.notEqual(cases[0]?.symbolId, cases[1]?.symbolId);
+    assert.ok(cases.every((symbol) => symbol.astFingerprint.length > 0));
+
+    const caseTarget = result.symbols.find(
+      (symbol) => symbol.name === "caseTarget",
+    );
+    const helperTarget = result.symbols.find(
+      (symbol) => symbol.name === "helperTarget",
+    );
+    const nestedHelper = result.symbols.find(
+      (symbol) => symbol.name === "nestedHelper",
+    );
+    assert.ok(caseTarget && helperTarget && nestedHelper);
+    assert.equal(
+      result.edges.filter(
+        (edge) =>
+          edge.edgeType === "call" &&
+          edge.toSymbolId === caseTarget.symbolId &&
+          cases.some((testCase) => testCase.symbolId === edge.fromSymbolId),
+      ).length,
+      2,
+    );
+    assert.ok(
+      result.edges.some(
+        (edge) =>
+          edge.edgeType === "call" &&
+          edge.fromSymbolId === nestedHelper.symbolId &&
+          edge.toSymbolId === helperTarget.symbolId,
+      ),
+    );
+  });
+
+
 });

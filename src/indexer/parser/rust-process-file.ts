@@ -7,6 +7,7 @@ import { prefetchFileExports } from "../../graph/prefetch.js";
 import { readFileAsync } from "../../util/asyncFs.js";
 import { logger } from "../../util/logger.js";
 import { normalizePath } from "../../util/paths.js";
+import { generateSymbolId } from "../fingerprints.js";
 import {
   isTsCallResolutionFile,
   resolveImportTargets,
@@ -18,6 +19,8 @@ import type {
   TsCallResolver,
 } from "../edge-builder.js";
 import { getAdapterForExtension } from "../adapter/registry.js";
+import { applyTestCaseCandidates } from "../test-case-normalizer.js";
+import type { SymbolWithNodeId } from "../worker.js";
 import type { FileMetadata } from "../fileScanner.js";
 import type { RustParseResult } from "../rustIndexer.js";
 import { buildSymbolAndEdgeRows } from "./build-rows.js";
@@ -222,6 +225,51 @@ export async function processFileFromRustResult(params: {
       }
     }
 
+    let normalizedSymbols: SymbolWithNodeId[] = rustResult.symbols.map(
+      (symbol) => ({
+        nodeId: symbol.nodeId,
+        kind: symbol.kind as import("./types.js").SymbolKindLiteral,
+        name: symbol.name,
+        exported: symbol.exported,
+        range: symbol.range,
+        signature: symbol.signature,
+        visibility: symbol.visibility,
+        testCase: symbol.testCase,
+        astFingerprint: symbol.astFingerprint,
+      }),
+    );
+    let normalizedCalls = rustResult.calls;
+    if (adapter?.detectTestCases) {
+      let detectionTree: ReturnType<typeof adapter.parse> = null;
+      try {
+        if (adapter.languageId === "python") {
+          detectionTree = adapter.parse(content, filePath);
+        }
+        const normalized = applyTestCaseCandidates({
+          relPath,
+          symbols: normalizedSymbols,
+          calls: normalizedCalls,
+          candidates: adapter.detectTestCases({
+            tree: detectionTree,
+            content,
+            filePath,
+            symbols: normalizedSymbols,
+          }),
+        });
+        normalizedSymbols = normalized.symbols;
+        normalizedCalls = normalized.calls;
+        for (const diagnostic of normalized.diagnostics) {
+          logger.warn(diagnostic);
+        }
+      } catch {
+        logger.warn(`${relPath}: test-case detection failed`);
+      } finally {
+        if (detectionTree) {
+          (detectionTree as unknown as { delete: () => void }).delete();
+        }
+      }
+    }
+
     // C1: cache pass-1 extraction outputs for pass-2 reuse. TS/JS reuses the
     // full extraction; C-family resolvers reuse only source text/imports and
     // still perform their stricter pass-2 call extraction.
@@ -232,17 +280,9 @@ export async function processFileFromRustResult(params: {
       skipCallResolution
     ) {
       storePass1Extraction(params.pass1Extractions, relPath, {
-        symbolsWithNodeIds: rustResult.symbols.map((extracted) => ({
-          nodeId: extracted.nodeId,
-          kind: extracted.kind as import("./types.js").SymbolKindLiteral,
-          name: extracted.name,
-          exported: extracted.exported,
-          range: extracted.range,
-          signature: extracted.signature,
-          visibility: extracted.visibility,
-        })),
+        symbolsWithNodeIds: normalizedSymbols,
         imports: rustResult.imports,
-        calls: rustResult.calls,
+        calls: normalizedCalls,
         content,
       });
     }
@@ -266,27 +306,40 @@ export async function processFileFromRustResult(params: {
     });
 
     // ── Symbol details from Rust-native metadata ─────────────────
-    const symbolDetails: SymbolDetail[] = rustResult.symbols.map(
-      (extracted) => ({
-        extractedSymbol: {
-          nodeId: extracted.nodeId,
-          kind: extracted.kind as import("./types.js").SymbolKindLiteral,
-          name: extracted.name,
-          exported: extracted.exported,
-          range: extracted.range,
-          signature: extracted.signature,
-          visibility: extracted.visibility,
-          testCase: extracted.testCase,
-        },
-        astFingerprint: extracted.astFingerprint,
-        symbolId: extracted.symbolId,
-        nativeSummary: extracted.summary,
-        nativeInvariantsJson: extracted.invariantsJson,
-        nativeSideEffectsJson: extracted.sideEffectsJson,
-        nativeRoleTagsJson: extracted.roleTagsJson,
-        nativeSearchText: extracted.searchText,
-      }),
+    const nativeSymbolByNodeId = new Map(
+      rustResult.symbols.map((symbol) => [symbol.nodeId, symbol]),
     );
+    const symbolDetails: SymbolDetail[] = normalizedSymbols.map((symbol) => {
+      const nativeSymbol = nativeSymbolByNodeId.get(symbol.nodeId);
+      const astFingerprint = symbol.astFingerprint ?? "";
+      return {
+        extractedSymbol: {
+          nodeId: symbol.nodeId,
+          kind: symbol.kind,
+          name: symbol.name,
+          exported: symbol.exported,
+          range: symbol.range,
+          signature: symbol.signature,
+          visibility: symbol.visibility,
+          testCase: symbol.testCase,
+        },
+        astFingerprint,
+        symbolId:
+          nativeSymbol?.symbolId ??
+          generateSymbolId(
+            repoId,
+            relPath,
+            symbol.kind,
+            symbol.name,
+            astFingerprint,
+          ),
+        nativeSummary: nativeSymbol?.summary,
+        nativeInvariantsJson: nativeSymbol?.invariantsJson,
+        nativeSideEffectsJson: nativeSymbol?.sideEffectsJson,
+        nativeRoleTagsJson: nativeSymbol?.roleTagsJson,
+        nativeSearchText: nativeSymbol?.searchText,
+      };
+    });
 
     const { nodeIdToSymbolId, nameToSymbolIds } =
       buildSymbolIndexMaps(symbolDetails);
@@ -298,7 +351,7 @@ export async function processFileFromRustResult(params: {
     // lookup here using the nameToSymbolIds map buildSymbolIndexMaps just
     // returned. Unique-match writes calleeSymbolId + isResolved; ambiguous
     // name writes candidateCount only.
-    for (const call of rustResult.calls) {
+    for (const call of normalizedCalls) {
       if (call.isResolved) continue;
       if (!call.calleeIdentifier) continue;
       const dotIdx = call.calleeIdentifier.lastIndexOf(".");
@@ -359,7 +412,7 @@ export async function processFileFromRustResult(params: {
       nameToSymbolIds,
       existingSymbolsById,
       importResolution,
-      calls: rustResult.calls,
+      calls: normalizedCalls,
       edgeSourceNodeIds,
       languageId,
       symbolIndex,

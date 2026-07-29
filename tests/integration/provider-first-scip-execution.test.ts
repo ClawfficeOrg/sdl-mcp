@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import {
   providerFactsToGraphRows,
 } from "../../dist/indexer/provider-first/materializer.js";
 import { normalizeScipProviderFacts } from "../../dist/indexer/provider-first/scip-normalizer.js";
+import { detectTypeScriptTestCases } from "../../dist/indexer/typescript-test-cases.js";
 
 const REPO_ID = "provider-first-scip-execution";
 const NOW = "2026-05-25T12:00:00.000Z";
@@ -188,6 +189,70 @@ describe("provider-first SCIP materialization", () => {
     ]);
   });
 
+  it("persists normalized semantic test cases through the real DB path", async () => {
+    graphDbPath = mkdtempSync(join(tmpdir(), "sdl-provider-first-db-"));
+    await initRepo(graphDbPath);
+
+    const relPath = "src/embedded-cases.ts";
+    const content = readFileSync(
+      join(
+        process.cwd(),
+        "tests",
+        "fixtures",
+        "semantic-test-cases",
+        "sample.test.ts",
+      ),
+      "utf8",
+    );
+    const facts = normalizeScipProviderFacts({
+      repoId: REPO_ID,
+      generationId: "gen-test-cases",
+      providerId: "scip-typescript",
+      providerVersion: "1.0.0",
+      sourceTextByPath: new Map([[relPath, content]]),
+      documents: [
+        {
+          language: "typescript",
+          relativePath: relPath,
+          occurrences: [],
+          symbols: [],
+        },
+      ],
+      externalSymbols: [],
+    });
+    const candidates = detectTypeScriptTestCases({ content, filePath: relPath });
+    await materializeFacts(facts, new Map([[relPath, candidates]]));
+
+    const conn = await getLadybugConn();
+    const cases = await ladybugDb.queryAll<{
+      astFingerprint: string;
+      scipSymbol: string | null;
+      source: string;
+      testCaseJson: string;
+    }>(
+      conn,
+      `MATCH (s:Symbol)
+       WHERE s.repoId = $repoId AND s.testCaseJson IS NOT NULL
+       RETURN s.astFingerprint AS astFingerprint,
+              s.scipSymbol AS scipSymbol,
+              s.source AS source,
+              s.testCaseJson AS testCaseJson
+       ORDER BY s.rangeStartLine, s.rangeStartCol`,
+      { repoId: REPO_ID },
+    );
+    assert.equal(cases.length, 2);
+    assert.ok(cases.every((testCase) => testCase.astFingerprint.length > 0));
+    assert.ok(cases.every((testCase) => testCase.scipSymbol === null));
+    assert.ok(cases.every((testCase) => testCase.source === "treesitter"));
+    assert.ok(
+      cases.every(
+        (testCase) =>
+          JSON.parse(testCase.testCaseJson).framework ===
+          candidates[0]?.testCase.framework,
+      ),
+    );
+  });
+
   it("prunes stale SCIP external symbols during a full provider materialization", async () => {
     graphDbPath = mkdtempSync(join(tmpdir(), "sdl-provider-first-db-"));
     await initRepo(graphDbPath);
@@ -326,12 +391,20 @@ async function initRepo(graphDbPath: string): Promise<void> {
 
 async function materializeFacts(
   facts: ReturnType<typeof normalizeScipProviderFacts>,
+  testCaseCandidatesByPath?: ReadonlyMap<
+    string,
+    ReturnType<typeof detectTypeScriptTestCases>
+  >,
 ): Promise<void> {
   for (const file of facts.files) {
     file.contentHash ??= "0".repeat(64);
     file.byteSize ??= 128;
   }
-  const rows = providerFactsToGraphRows({ facts, indexedAt: NOW });
+  const rows = providerFactsToGraphRows({
+    facts,
+    indexedAt: NOW,
+    testCaseCandidatesByPath,
+  });
   await withWriteConn(async (conn) => {
     await materializeProviderFacts(conn, rows);
   });

@@ -35,6 +35,7 @@ import {
   generateSummary,
 } from "../indexer/summaries.js";
 import type { SymbolWithNodeId } from "../indexer/worker.js";
+import { applyTestCaseCandidates } from "../indexer/test-case-normalizer.js";
 import { hashContent } from "../util/hashing.js";
 import { getAbsolutePathFromRepoRoot, normalizePath } from "../util/paths.js";
 
@@ -171,7 +172,7 @@ export async function parseDraftFile(
       extractedSymbols = [];
     }
 
-    const symbolsWithNodeIds: SymbolWithNodeId[] = extractedSymbols.map(
+    let symbolsWithNodeIds: SymbolWithNodeId[] = extractedSymbols.map(
       (symbol) => ({
         nodeId: symbol.nodeId,
         kind: symbol.kind,
@@ -185,12 +186,35 @@ export async function parseDraftFile(
       }),
     );
     const imports = adapter.extractImports(tree, input.content, absolutePath);
-    const calls = adapter.extractCalls(
+    let calls = adapter.extractCalls(
       tree,
       input.content,
       absolutePath,
       symbolsWithNodeIds,
     );
+
+    if (adapter.detectTestCases) {
+      try {
+        const normalized = applyTestCaseCandidates({
+          relPath,
+          symbols: symbolsWithNodeIds,
+          calls,
+          candidates: adapter.detectTestCases({
+            tree,
+            content: input.content,
+            filePath: absolutePath,
+            symbols: symbolsWithNodeIds,
+          }),
+        });
+        symbolsWithNodeIds = normalized.symbols;
+        calls = normalized.calls;
+        for (const diagnostic of normalized.diagnostics) {
+          logger.warn(diagnostic);
+        }
+      } catch {
+        logger.warn(`${relPath}: test-case detection failed`);
+      }
+    }
 
     const importResolution =
       imports.length > 0
