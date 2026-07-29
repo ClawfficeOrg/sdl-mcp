@@ -3,6 +3,7 @@ import { BaseAdapter } from "./BaseAdapter.js";
 import type {
   AdapterResolvedCall,
   CallResolutionContext,
+  TestCaseCandidate,
 } from "./LanguageAdapter.js";
 import type {
   ExtractedSymbol,
@@ -13,6 +14,7 @@ import { extractSymbols as extractSymbolsImpl } from "../treesitter/extractSymbo
 import { extractImports as extractImportsImpl } from "../treesitter/extractImports.js";
 import { extractCalls as extractCallsImpl } from "../treesitter/extractCalls.js";
 import { createClearCacheFunction } from "./BaseAdapter.js";
+import { detectTypeScriptTestCases } from "../typescript-test-cases.js";
 import {
   BUILTIN_GLOBAL_NAMESPACES,
   NODE_BUILTIN_MODULE_NAMES,
@@ -21,6 +23,15 @@ import {
 class TypeScriptAdapter extends BaseAdapter {
   languageId = "typescript";
   fileExtensions = [".ts", ".tsx", ".js", ".jsx"] as const;
+
+  detectTestCases(params: {
+    tree: Tree | null;
+    content: string;
+    filePath: string;
+    symbols: readonly ExtractedSymbol[];
+  }): TestCaseCandidate[] {
+    return detectTypeScriptTestCases(params);
+  }
 
   extractSymbols(
     tree: Tree,

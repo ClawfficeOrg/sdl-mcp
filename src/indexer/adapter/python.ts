@@ -3,6 +3,7 @@ import { BaseAdapter } from "./BaseAdapter.js";
 import type {
   AdapterResolvedCall,
   CallResolutionContext,
+  TestCaseCandidate,
 } from "./LanguageAdapter.js";
 import type {
   ExtractedSymbol,
@@ -12,6 +13,7 @@ import type { ExtractedImport } from "../treesitter/extractImports.js";
 import { createQuery } from "../treesitter/grammarLoader.js";
 import { createClearCacheFunction } from "./BaseAdapter.js";
 import { findEnclosingSymbol as findEnclosingSymbolUtil } from "../treesitter/symbolUtils.js";
+import { normalizeTestCaseFacet } from "../../util/test-case.js";
 
 const PYTHON_STDLIB_MODULES = new Set([
   "os",
@@ -44,9 +46,129 @@ function isStdLibModule(moduleName: string): boolean {
   return PYTHON_STDLIB_MODULES.has(firstPart);
 }
 
+function sameRange(
+  left: ExtractedSymbol["range"],
+  right: ExtractedSymbol["range"],
+): boolean {
+  return (
+    left.startLine === right.startLine &&
+    left.startCol === right.startCol &&
+    left.endLine === right.endLine &&
+    left.endCol === right.endCol
+  );
+}
+
+function enclosingClasses(node: SyntaxNode): SyntaxNode[] {
+  const classes: SyntaxNode[] = [];
+  for (let current = node.parent; current; current = current.parent) {
+    if (current.type === "class_definition") classes.unshift(current);
+  }
+  return classes;
+}
+
+function decoratorTexts(node: SyntaxNode): string[] {
+  const decorated = node.parent?.type === "decorated_definition" ? node.parent : null;
+  return decorated
+    ? decorated.namedChildren
+        .filter((child) => child.type === "decorator")
+        .map((child) => child.text)
+    : [];
+}
+
+function detectPythonTestCases(
+  tree: Tree,
+  symbols: readonly ExtractedSymbol[],
+): TestCaseCandidate[] {
+  const candidates: TestCaseCandidate[] = [];
+
+  const visit = (node: SyntaxNode): void => {
+    if (node.type === "function_definition") {
+      const title = extractFunctionName(node);
+      if (title?.startsWith("test_")) {
+        const range = extractRange(node);
+        const matching = symbols.filter(
+          (symbol) =>
+            (symbol.kind === "function" || symbol.kind === "method") &&
+            sameRange(symbol.range, range),
+        );
+        if (matching.length === 1) {
+          const classes = enclosingClasses(node);
+          const suitePath = classes.flatMap((classNode) => {
+            const name = extractClassName(classNode);
+            return name ? [name] : [];
+          });
+          const framework = classes.some((classNode) =>
+            /(?:^|[,(]\s*)unittest\.TestCase(?:\s*[,)]|$)/u.test(
+              classNode.childForFieldName("superclasses")?.text ?? "",
+            ),
+          )
+            ? "unittest"
+            : "pytest";
+          const decorators = decoratorTexts(node);
+          const modifiers = [
+            ...(decorators.some((decorator) =>
+              /^@(?:pytest\.mark\.(?:skip|skipif)|unittest\.(?:skip|skipIf|skipUnless))\b/u.test(
+                decorator,
+              ),
+            )
+              ? (["skip"] as const)
+              : []),
+            ...(decorators.some((decorator) =>
+              /^@pytest\.mark\.parametrize\b/u.test(decorator),
+            )
+              ? (["parameterized"] as const)
+              : []),
+          ];
+          const testCase = normalizeTestCaseFacet({
+            framework,
+            title,
+            suitePath,
+            modifiers,
+          });
+          if (testCase) {
+            const target = matching[0];
+            candidates.push({
+              mode: "attach",
+              targetName: target.name,
+              targetKinds: [target.kind as "function" | "method"],
+              constructRange: range,
+              testCase,
+            });
+          }
+        }
+      }
+    }
+
+    for (const child of node.namedChildren) visit(child);
+  };
+
+  visit(tree.rootNode);
+  return candidates.sort(
+    (left, right) =>
+      left.constructRange.startLine - right.constructRange.startLine ||
+      left.constructRange.startCol - right.constructRange.startCol ||
+      left.constructRange.endLine - right.constructRange.endLine ||
+      left.constructRange.endCol - right.constructRange.endCol,
+  );
+}
+
 class PythonAdapter extends BaseAdapter {
   languageId = "python";
   fileExtensions = [".py"] as const;
+
+  detectTestCases(params: {
+    tree: Tree | null;
+    content: string;
+    filePath: string;
+    symbols: readonly ExtractedSymbol[];
+  }): TestCaseCandidate[] {
+    const tree =
+      params.tree ??
+      (/^\s*(?:async\s+)?def\s+test_/mu.test(params.content)
+        ? this.parse(params.content, params.filePath)
+        : null);
+    return tree ? detectPythonTestCases(tree, params.symbols) : [];
+  }
 
   extractSymbols(
     tree: Tree,

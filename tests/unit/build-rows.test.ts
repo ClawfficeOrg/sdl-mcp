@@ -8,7 +8,6 @@ const TEST_CONTENT = [
   'it.only("keeps sdl.info callable", () => {});',
   "export function helper() {}",
 ].join("\n");
-const TEST_TITLE_BLOCK = "registration contract\nkeeps sdl.info callable";
 
 function detail(
   nodeId: string,
@@ -109,7 +108,7 @@ describe("buildSymbolAndEdgeRows import fanout", () => {
     assert.equal(selected, sourceIds);
   });
 
-  it("appends the same static test title block to fallback and native module search text", async () => {
+  it("keeps module search text canonical for fallback and native rows", async () => {
     const { buildSymbolAndEdgeRows } = await import(
       "../../dist/indexer/parser/build-rows.js"
     );
@@ -124,18 +123,12 @@ describe("buildSymbolAndEdgeRows import fanout", () => {
 
     assert.ok(fallbackModule);
     assert.ok(fallbackFunction);
-    const expectedSuffix = `\n${TEST_TITLE_BLOCK}`;
-    const fallbackBaseSearchText = fallbackModule.searchText.endsWith(
-      expectedSuffix,
-    )
-      ? fallbackModule.searchText.slice(0, -expectedSuffix.length)
-      : fallbackModule.searchText;
     const nativeParams = testBuildRowsParams(
       fallbackParams.symbolDetails.map((symbolDetail) =>
         symbolDetail.extractedSymbol.kind === "module"
           ? {
               ...symbolDetail,
-              nativeSearchText: fallbackBaseSearchText,
+              nativeSearchText: fallbackModule.searchText,
             }
           : symbolDetail,
       ),
@@ -150,8 +143,10 @@ describe("buildSymbolAndEdgeRows import fanout", () => {
 
     assert.ok(nativeModule);
     assert.ok(nativeFunction);
-    assert.ok(fallbackModule.searchText.endsWith(expectedSuffix));
-    assert.ok(nativeModule.searchText.endsWith(expectedSuffix));
+    for (const module of [fallbackModule, nativeModule]) {
+      assert.equal(module.searchText.includes("registration contract"), false);
+      assert.equal(module.searchText.includes("keeps sdl.info callable"), false);
+    }
     assert.equal(nativeModule.searchText, fallbackModule.searchText);
     assert.equal(nativeFunction.searchText, fallbackFunction.searchText);
     assert.deepEqual(
@@ -167,10 +162,6 @@ describe("buildSymbolAndEdgeRows import fanout", () => {
     assert.equal(
       withoutModule.symbolsToUpsert[0]?.searchText,
       fallbackFunction.searchText,
-    );
-    assert.equal(
-      withoutModule.symbolsToUpsert[0]?.searchText.endsWith(expectedSuffix),
-      false,
     );
   });
 });
