@@ -92,6 +92,17 @@
       }
     },
     {
+      "tool": "sdl.symbol.getCard",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "refsMode": "off",
+        "symbolRef": {
+          "name": "keeps sdl.info callable and discoverable in exclusive Code Mode",
+          "file": "tests/unit/code-mode-tool-validation.test.ts"
+        }
+      }
+    },
+    {
       "tool": "sdl.code.getSkeleton",
       "args": {
         "repoId": "{REPO_ID}",

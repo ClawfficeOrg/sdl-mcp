@@ -67,6 +67,7 @@ const PublicRepoOverviewFullResponseSchema = RepoOverviewResponseSchema.options[
     stats: true,
     directories: true,
     clusters: true,
+    layers: true,
   })
   .strict();
 
@@ -390,6 +391,12 @@ let legB: Leg;
 before(async () => {
   ensureBuiltServer();
   cpSync(SOURCE_FIXTURE_REPO, FIXTURE_REPO, { recursive: true });
+  const contractTestDir = join(FIXTURE_REPO, "tests", "unit");
+  mkdirSync(contractTestDir, { recursive: true });
+  cpSync(
+    resolve(__dirname, "../unit/code-mode-tool-validation.test.ts"),
+    join(contractTestDir, "code-mode-tool-validation.test.ts"),
+  );
   writeConfig();
   rmSync(DIFF_DIR, { recursive: true, force: true });
   rmSync(GRAPH_DB_PATH, { recursive: true, force: true });
@@ -452,6 +459,26 @@ test("BYTE-STABILITY SCOPE: ref-compacting context calls disable session refs", 
     const args = call.args as Record<string, unknown>;
     assert.equal(args.refsMode, "off", `${call.tool} must opt out of session refs`);
   }
+});
+
+test("SEMANTIC TEST CASE: persisted card retains the exact contract title", () => {
+  const title =
+    "keeps sdl.info callable and discoverable in exclusive Code Mode";
+  const ordinal = fixtures.toolCalls.findIndex(
+    (call) =>
+      call.tool === "sdl.symbol.getCard" &&
+      (call.args as { symbolRef?: { name?: string } }).symbolRef?.name === title,
+  );
+  assert.notEqual(ordinal, -1);
+  const call = fixtures.toolCalls[ordinal];
+  assert.ok(call);
+  const args = materializeArgs(call.args);
+  const serialized = legA.results.get(callKey(call.tool, args, ordinal))?.[0];
+  assert.ok(serialized);
+  const response = JSON.parse(serialized) as {
+    structuredContent?: { card?: { testCase?: { title?: string } } };
+  };
+  assert.equal(response.structuredContent?.card?.testCase?.title, title);
 });
 
 test("SESSION BOUNDARY: refsMode auto may compact repeated evidence", async () => {
