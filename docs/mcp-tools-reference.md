@@ -463,7 +463,7 @@ Fetch a single symbol card by ID or natural reference with ETag support.
 
 Provide exactly one of `symbolId` or `symbolRef`.
 
-The returned card includes identity, signature, summary, invariants, side effects, dependency edges (imports/calls), metrics, and (when available) cluster/process metadata (`card.cluster`, `card.processes`). `metrics.canonicalTest` (if available) contains the file path, distance, and proximity of the nearest associated test.
+The returned card includes identity, signature, summary, invariants, side effects, dependency edges (imports/calls), metrics, and (when available) cluster/process metadata (`card.cluster`, `card.processes`). `metrics.canonicalTest` (if available) contains the file path, distance, and proximity of the nearest associated test. A detected test case adds an optional `card.testCase` facet with its `framework`, `title`, and optional `suitePath`, `category`, and `modifiers`.
 
 **Response:** Either `{ card: SymbolCard }` or `{ notModified: true, etag, ledgerVersion }`.
 
@@ -974,6 +974,9 @@ there is no mode selector or nested options object.
 Unknown root keys and unknown budget keys are rejected.
 
 Flat focus fields are authoritative seed priorities, not output boundaries.
+
+Semantic test-case facets add normalized titles, suite names, frameworks, categories, and modifiers to the existing symbol FTS text. A valid facet makes a symbol test evidence for the existing card and hot-path rungs; SDL-MCP does not add a test-only retrieval lane or scan source at query time. When `includeTests: false`, SDL-MCP filters unpinned test candidates identified by a valid facet or a test-like path. Explicit focus pins remain eligible, and `includeTests: true` admits test candidates. Canonical card and context output remains deterministic.
+
 
 **Response:**
 

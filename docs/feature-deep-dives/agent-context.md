@@ -29,7 +29,20 @@ The input is flat and strict. Unknown root keys and unknown `budget` keys are re
 
 Focus fields are authoritative priorities, not output boundaries. An exact indexed or overlay file in `focusPaths` can add its symbols to the existing bounded Tier-0 allocation. A directory is soft scope: after fusion bounds the candidate pool, it stable-partitions that pool without changing scores or provenance. Existing Tier-0 pins remain first, followed by unpinned in-directory rows in fused order, then remaining rows in fused order. Directory scope does not widen lanes, oversample, or rerun retrieval. Missing and tombstoned paths have no effect.
 
-For JavaScript and TypeScript test files, bounded static titles from `describe`, `it`, and `test` participate in module lexical-search metadata. A dotted literal such as `sdl.info` can center a hot path only after the engine selects a module or symbol; it is not a retrieval lane. Existing indexed test files need a forced full reindex to receive this metadata because incremental indexing is content-hash driven. This is not a schema migration and adds no configuration.
+Semantic test cases remain ordinary symbols with an optional `testCase` card facet containing a framework, title, and optional suite path, category, and modifiers. JavaScript and TypeScript detectors cover `node:test`, Jest, and Vitest; Python detectors cover pytest and unittest. Python `test_*` functions and methods attach the facet to their existing structural symbols and retain their IDs. Every statically titled JavaScript or TypeScript `node:test`, Jest, or Vitest call instead emits a synthetic ordinary `function` symbol that covers the complete call construct, including calls with named callbacks. Other language detectors remain independent future additions.
+
+```mermaid
+flowchart LR
+    Detector["JS/TS call or Python test_*"] --> Facet["Normalize and persist<br/>testCase facet"]
+    Facet --> Card["Public Symbol card"]
+    Facet --> Candidate["Existing symbol FTS candidate"]
+    Candidate --> Filter{"includeTests"}
+    Filter -->|true| Evidence["Eligible card / hot-path evidence"]
+    Filter -->|false| Skip["Filter unpinned test candidates"]
+    Pins["Explicit focus pins"] -->|retained| Evidence
+```
+
+The facet adds normalized test titles, suite names, frameworks, categories, and modifiers to the existing symbol FTS text and supplies evidence through the existing card and hot-path rungs. It does not create a test-only lane or query-time source scan. A valid facet makes a symbol a test candidate even outside a test-like path, so `includeTests: false` filters unpinned candidates while explicit focus pins remain eligible; `includeTests: true` admits them. Directory focus and dotted literals such as `sdl.info` retain their existing behavior: directory scope only stable-partitions the bounded fused pool, and a dotted literal centers a hot path only after symbol selection.
 
 ```json
 {
@@ -115,7 +128,7 @@ Evidence rungs stop at `card`, `skeleton`, and `hotPath`. Raw code windows remai
 
 ## Determinism And Wrappers
 
-SDL-MCP computes the ETag from the complete canonical payload before applying session refs, packed wire encoding, or generic response-artifact wrapping. Repeated inline JSON and packed responses with `refsMode: "off"` are byte-stable against an unchanged graph.
+SDL-MCP computes the ETag from the complete canonical payload before applying session refs, packed wire encoding, or generic response-artifact wrapping. Repeated inline JSON and packed responses with `refsMode: "off"` are byte-stable against an unchanged graph, including populated semantic test-case facets.
 
 `responseMode: "auto"` or `"handle"` can return a generic `response.get` artifact containing the complete canonical payload. The context engine does not create its own continuation or describe only a trimmed first page.
 

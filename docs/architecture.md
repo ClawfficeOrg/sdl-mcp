@@ -174,6 +174,14 @@ flowchart TD
 
 **Native Rust engine** (`native/src/extract/`) — optional, mirrors all TS adapters at near-native speed via napi-rs.
 
+### Semantic test-case facets
+
+Semantic test cases remain ordinary symbols with an optional public `testCase` facet. The facet records a framework, title, and optional suite path, category, and modifiers without introducing a `test` structural kind. Initial detectors cover JavaScript and TypeScript `node:test`, Jest, and Vitest cases plus Python pytest and unittest cases; other language detectors can be added independently.
+
+Across adapters, attach candidates preserve the existing structural symbol ID, while synthetic candidates represent statically titled test constructs. Python `test_*` functions and methods attach the facet to their existing `function` or `method` symbols. In contrast, every statically titled JavaScript or TypeScript `node:test`, Jest, or Vitest call emits a synthetic ordinary `function` symbol, including calls with named callbacks; that symbol covers the complete call construct.
+
+Legacy, native, provider-first, and live-index pipelines pass through the same normalization and persistence boundary, so existing symbol FTS and hot-path evidence can use the facet without a test-only retrieval lane or query-time source scan.
+
 ### Pass 2: Cross-File Resolution
 
 Sequential, cross-file. Resolves raw call identifiers to specific symbol IDs using the pass-2 resolver registry (`src/indexer/pass2/registry.ts`):
@@ -221,7 +229,7 @@ SDL-MCP uses LadybugDB (Kuzu engine, npm alias `kuzu`) as the sole persistence l
 2. `graphDatabase.path` in config
 3. Default: `<configDir>/sdl-mcp-graph.lbug`
 
-**Schema** (`src/db/ladybug-schema.ts`) — idempotent DDL runs on startup. No migration files needed.
+**Schema** (`src/db/ladybug-schema.ts`) — idempotent DDL and versioned migrations run on startup. Schema version 24 adds semantic test-case metadata to symbol and version records, but the nullable migration cannot backfill synthetic symbols from already indexed source. Stop SDL-MCP and build a fresh graph with `sdl-mcp index --force --safe-rebuild <absolute-new-path>` after upgrading; use a new absolute candidate path rather than rebuilding the active graph in place.
 
 **Connection pool:**
 
