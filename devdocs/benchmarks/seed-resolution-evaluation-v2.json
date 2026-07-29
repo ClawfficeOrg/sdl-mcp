@@ -1,0 +1,401 @@
+{
+  "schemaVersion": 2,
+  "corpus": {
+    "version": 2,
+    "source": "tests/benchmark/context-quality-cases.json",
+    "sha256": "ef756a66143cbc4d3001c33f8086a7916c70867544b1a6c91ecffe68502d66c0",
+    "caseCount": 4
+  },
+  "baseline": {
+    "gitHead": "87941f2a121871b7128ca1589d660c54ada5a0ad",
+    "evaluatedSourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "sourceHashes": {
+      "src/context/engine.ts": "32b689acf6bdf2617da4b8cf86afd63d7b9c930f10f50dcb9d4542c750dc4361",
+      "src/graph/slice/start-node-resolver.ts": "180a7020659ad3c52e4595bee0b1d2257e264b24bf9dbe4abc7bd29b46a67e70",
+      "src/retrieval/identifier-extraction.ts": "475acdf8dc8f603e650137ab129a8dc1d15139c6711d87e4529f568b9de5da84",
+      "src/retrieval/orchestrator.ts": "7935907df1421099cfeb4587d0e8433637c22eac7a8426474217bfc03610f24d",
+      "src/retrieval/seed-resolver.ts": "662604e2076e58cd0f46055298f8296bf63ecb2e4433d714a2a76c714d41efdb"
+    },
+    "platform": "win32-x64",
+    "node": "v24.14.0",
+    "providerModelSettings": "not used; seed parsing is pure"
+  },
+  "cases": [
+    {
+      "id": "debug-precise-feedback-boost",
+      "taskType": "debug",
+      "focusPaths": [
+        "src/retrieval/feedback-boost.ts"
+      ],
+      "contextRetrieval": {
+        "rankedMentions": [
+          "queryFeedbackBoosts",
+          "FeedbackBoosts",
+          "returns",
+          "stale",
+          "boost",
+          "scores",
+          "after",
+          "feedback"
+        ],
+        "recall": 1,
+        "evidence": "shared identifier extraction, capped in stable order"
+      },
+      "sliceStartNodes": {
+        "rankedTaskTokens": [
+          {
+            "token": "soft-deleted.",
+            "rank": 4
+          },
+          {
+            "token": "seeding.",
+            "rank": 4
+          },
+          {
+            "token": "queryfeedbackboosts",
+            "rank": 1
+          },
+          {
+            "token": "influences",
+            "rank": 1
+          },
+          {
+            "token": "feedback",
+            "rank": 1
+          },
+          {
+            "token": "returns",
+            "rank": 0
+          },
+          {
+            "token": "entries",
+            "rank": 0
+          },
+          {
+            "token": "deleted",
+            "rank": 0
+          },
+          {
+            "token": "context",
+            "rank": 0
+          },
+          {
+            "token": "scores",
+            "rank": 0
+          },
+          {
+            "token": "stale",
+            "rank": 0
+          },
+          {
+            "token": "boost",
+            "rank": 0
+          },
+          {
+            "token": "after",
+            "rank": 0
+          },
+          {
+            "token": "debug",
+            "rank": 0
+          },
+          {
+            "token": "still",
+            "rank": 0
+          }
+        ],
+        "recall": 1,
+        "evidence": "slice token rank, length, then graph symbol matching"
+      }
+    },
+    {
+      "id": "debug-precise-executor-card-rung",
+      "taskType": "debug",
+      "focusPaths": [
+        "src/agent/executor.ts"
+      ],
+      "contextRetrieval": {
+        "rankedMentions": [
+          "executeCardRung",
+          "selectTopSymbols",
+          "CardRung",
+          "TopSymbols",
+          "fails",
+          "silently",
+          "returns",
+          "empty"
+        ],
+        "recall": 1,
+        "evidence": "shared identifier extraction, capped in stable order"
+      },
+      "sliceStartNodes": {
+        "rankedTaskTokens": [
+          {
+            "token": "array.",
+            "rank": 3
+          },
+          {
+            "token": "rung.",
+            "rank": 3
+          },
+          {
+            "token": "selecttopsymbols",
+            "rank": 1
+          },
+          {
+            "token": "executecardrung",
+            "rank": 1
+          },
+          {
+            "token": "silently",
+            "rank": 1
+          },
+          {
+            "token": "evidence",
+            "rank": 1
+          },
+          {
+            "token": "returns",
+            "rank": 0
+          },
+          {
+            "token": "control",
+            "rank": 0
+          },
+          {
+            "token": "fails",
+            "rank": 0
+          },
+          {
+            "token": "empty",
+            "rank": 0
+          },
+          {
+            "token": "debug",
+            "rank": 0
+          },
+          {
+            "token": "leads",
+            "rank": 0
+          },
+          {
+            "token": "flow",
+            "rank": 0
+          },
+          {
+            "token": "zero",
+            "rank": 0
+          },
+          {
+            "token": "card",
+            "rank": 0
+          }
+        ],
+        "recall": 1,
+        "evidence": "slice token rank, length, then graph symbol matching"
+      }
+    },
+    {
+      "id": "debug-precise-planner-budget",
+      "taskType": "debug",
+      "focusPaths": [
+        "src/agent/planner.ts"
+      ],
+      "contextRetrieval": {
+        "rankedMentions": [
+          "adjustForBudget",
+          "maxTokens",
+          "hotPath",
+          "ForBudget",
+          "trims",
+          "rungs",
+          "incorrectly",
+          "budget"
+        ],
+        "recall": 1,
+        "evidence": "shared identifier extraction, capped in stable order"
+      },
+      "sliceStartNodes": {
+        "rankedTaskTokens": [
+          {
+            "token": "hotpath.",
+            "rank": 4
+          },
+          {
+            "token": "adjustforbudget",
+            "rank": 1
+          },
+          {
+            "token": "incorrectly",
+            "rank": 1
+          },
+          {
+            "token": "maxtokens",
+            "rank": 1
+          },
+          {
+            "token": "leaving",
+            "rank": 0
+          },
+          {
+            "token": "budget",
+            "rank": 0
+          },
+          {
+            "token": "trims",
+            "rank": 0
+          },
+          {
+            "token": "rungs",
+            "rank": 0
+          },
+          {
+            "token": "small",
+            "rank": 0
+          },
+          {
+            "token": "debug",
+            "rank": 0
+          },
+          {
+            "token": "tasks",
+            "rank": 0
+          },
+          {
+            "token": "card",
+            "rank": 0
+          },
+          {
+            "token": "even",
+            "rank": 0
+          },
+          {
+            "token": "need",
+            "rank": 0
+          }
+        ],
+        "recall": 1,
+        "evidence": "slice token rank, length, then graph symbol matching"
+      }
+    },
+    {
+      "id": "debug-broad-entity-search-fallback",
+      "taskType": "debug",
+      "focusPaths": [
+        "src/agent/context-engine.ts",
+        "src/agent/executor.ts"
+      ],
+      "contextRetrieval": {
+        "rankedMentions": [
+          "entitySearch",
+          "buildContext",
+          "extractIdentifiersFromText",
+          "IdentifiersFromText",
+          "returns",
+          "zero",
+          "results",
+          "task"
+        ],
+        "recall": 1,
+        "evidence": "shared identifier extraction, capped in stable order"
+      },
+      "sliceStartNodes": {
+        "rankedTaskTokens": [
+          {
+            "token": "domain-specific",
+            "rank": 4
+          },
+          {
+            "token": "dropped.",
+            "rank": 4
+          },
+          {
+            "token": "symbol.",
+            "rank": 3
+          },
+          {
+            "token": "extractidentifiersfromtext",
+            "rank": 1
+          },
+          {
+            "token": "entitysearch",
+            "rank": 1
+          },
+          {
+            "token": "buildcontext",
+            "rank": 1
+          },
+          {
+            "token": "fallback",
+            "rank": 1
+          },
+          {
+            "token": "relevant",
+            "rank": 1
+          },
+          {
+            "token": "returns",
+            "rank": 0
+          },
+          {
+            "token": "results",
+            "rank": 0
+          },
+          {
+            "token": "keyword",
+            "rank": 0
+          },
+          {
+            "token": "filters",
+            "rank": 0
+          },
+          {
+            "token": "search",
+            "rank": 0
+          },
+          {
+            "token": "terms",
+            "rank": 0
+          },
+          {
+            "token": "slice",
+            "rank": 0
+          },
+          {
+            "token": "debug",
+            "rank": 0
+          },
+          {
+            "token": "zero",
+            "rank": 0
+          },
+          {
+            "token": "uses",
+            "rank": 0
+          },
+          {
+            "token": "like",
+            "rank": 0
+          },
+          {
+            "token": "out",
+            "rank": 0
+          }
+        ],
+        "recall": 1,
+        "evidence": "slice token rank, length, then graph symbol matching"
+      }
+    }
+  ],
+  "quality": {
+    "metric": "labeled seed recall within each retained retrieval interface",
+    "contextRetrievalRecall": 1,
+    "sliceStartNodeRecall": 1
+  },
+  "observedMedianPolicyLatencyMs": {
+    "contextRetrieval": 0.0225,
+    "sliceStartNodes": 0.0079
+  },
+  "reproduction": "npm run benchmark:seed-resolution",
+  "check": "npm run build && node --experimental-strip-types scripts/evaluate-seed-resolution.ts --check"
+}

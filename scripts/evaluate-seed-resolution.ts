@@ -64,10 +64,14 @@ function sourceHashes(): Record<string, string> {
   );
 }
 
+function normalizeRecallToken(value: string): string {
+  return value.toLowerCase().replace(/^\p{P}+|\p{P}+$/gu, "");
+}
+
 function recall(actual: readonly string[], expected: readonly string[]): number {
-  const actualSet = new Set(actual.map((item) => item.toLowerCase()));
+  const actualSet = new Set(actual.map(normalizeRecallToken));
   const hits = expected.filter((item) =>
-    actualSet.has(item.toLowerCase()),
+    actualSet.has(normalizeRecallToken(item)),
   ).length;
   return expected.length === 0
     ? 1
