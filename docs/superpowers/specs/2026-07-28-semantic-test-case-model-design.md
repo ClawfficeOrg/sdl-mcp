@@ -1,6 +1,6 @@
 # Semantic Test Case Model Design
 
-**Status:** Proposed
+**Status:** Approved
 
 **Date:** 2026-07-28
 
