@@ -1657,3 +1657,56 @@ describe("ContextEngineV2 orchestration", () => {
     );
   });
 });
+
+it("treats only successfully parsed durable facets as semantic tests", async () => {
+  const { isTestCandidate } = await import(
+    "../../dist/retrieval/task-query-ranking.js"
+  );
+  const { parseTestCaseFacetJson } = await import(
+    "../../dist/util/test-case.js"
+  );
+  const values = [
+    '{"framework":"node:test","title":"semantic case"}',
+    null,
+    undefined,
+    "{malformed",
+  ] as const;
+
+  assert.deepEqual(
+    values.map((value) =>
+      isTestCandidate(
+        "src/server.ts",
+        parseTestCaseFacetJson(value) !== undefined,
+      ),
+    ),
+    [true, false, false, false],
+  );
+});
+
+it("keeps pre-facet task-scoped ranking unchanged", async () => {
+  const { compareTaskScopedCandidates } = await import(
+    "../../dist/retrieval/task-query-ranking.js"
+  );
+  const source = {
+    filePath: "src/server.ts",
+    kind: "function",
+    exported: true,
+    name: "handleServer",
+  };
+  const testHelper = {
+    filePath: "tests/server-helper.ts",
+    kind: "function",
+    exported: false,
+    name: "serverHelper",
+  };
+  const baseline = compareTaskScopedCandidates("server", source, testHelper);
+
+  assert.equal(
+    compareTaskScopedCandidates(
+      "server",
+      { ...source, hasTestCaseFacet: false },
+      { ...testHelper, hasTestCaseFacet: false },
+    ),
+    baseline,
+  );
+});

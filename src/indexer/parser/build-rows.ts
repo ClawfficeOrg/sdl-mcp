@@ -278,6 +278,7 @@ export async function buildSymbolAndEdgeRows(
       relPath,
       summary,
       signature: extractedSymbol.signature,
+      testCase: extractedSymbol.testCase,
       nativeRoleTagsJson: nativeRoleTagsJson || undefined,
       nativeSearchText: nativeSearchText || undefined,
     });

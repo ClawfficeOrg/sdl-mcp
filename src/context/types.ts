@@ -44,6 +44,7 @@ export interface ContextV2Request {
 export interface ContextCandidate {
   symbolId: string;
   path: string;
+  hasTestCaseFacet?: boolean;
   rank: number;
   tier: ContextTier;
   lanes: ContextLaneId[];

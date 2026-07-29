@@ -295,6 +295,7 @@ export async function parseDraftFile(
         relPath,
         summary,
         signature: extractedSymbol.signature,
+        testCase: extractedSymbol.testCase,
       });
 
       return {

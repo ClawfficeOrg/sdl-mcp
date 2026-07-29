@@ -677,3 +677,313 @@ it("reports source positions from the focus-partitioned candidate order", async 
     "vector:nomic": [1, 4],
   });
 });
+
+const TASK7_TEST_CASE_JSON =
+  '{"framework":"node:test","title":"semantic case"}';
+
+function makeTask7CandidateSymbol(
+  symbolId: string,
+  fileId: string,
+  testCaseJson: string | null | undefined,
+) {
+  const row = {
+    symbolId,
+    repoId: "repo",
+    fileId,
+    kind: "function",
+    name: symbolId,
+    exported: true,
+    visibility: "public",
+    language: "typescript",
+    rangeStartLine: 1,
+    rangeStartCol: 0,
+    rangeEndLine: 2,
+    rangeEndCol: 1,
+    astFingerprint: `fingerprint-${symbolId}`,
+    signatureJson: null,
+    summary: null,
+    invariantsJson: null,
+    sideEffectsJson: null,
+    roleTagsJson: null,
+    searchText: `facet ${symbolId}`,
+    updatedAt: "2026-07-27T00:00:00.000Z",
+  };
+  return testCaseJson === undefined ? row : { ...row, testCaseJson };
+}
+
+function makeTask7CandidateFile(fileId: string, relPath: string) {
+  return {
+    fileId,
+    repoId: "repo",
+    relPath,
+    contentHash: `hash-${fileId}`,
+    language: "typescript",
+    byteSize: 64,
+    lastIndexedAt: null,
+    directory: relPath.split("/").slice(0, -1).join("/"),
+  };
+}
+
+function makeTask7CandidateCollection(symbolIds: string[]) {
+  return {
+    conn: {} as Connection,
+    rankings: symbolIds.length > 0
+      ? [
+          {
+            source: "fts" as const,
+            entityType: "symbol" as const,
+            ranks: new Map(
+              symbolIds.map((symbolId, index) => [symbolId, index + 1]),
+            ),
+            candidateCount: symbolIds.length,
+          },
+        ]
+      : [],
+    capabilities: {
+      fts: true,
+      fileSummaryFts: false,
+      vectorNomic: false,
+      vectorJinaCode: false,
+      coveragePermille: { symbolVector: 0, fileSummaryVector: 0 },
+    },
+    rrfK: 60,
+    limit: 10,
+    config: { fusion: { weights: { fts: 1, vector: 1, overlay: 1 } } },
+    fusionLatencyMs: 0,
+  };
+}
+
+function makeTask7QueryContext() {
+  return {
+    connection: {} as Connection,
+    laneOutcomes: new Map(),
+    healthPromises: new Map(),
+    embeddingPromises: new Map(),
+  };
+}
+
+function makeTask7EmptyOverlay() {
+  return {
+    repoId: "repo",
+    touchedFileIds: new Set<string>(),
+    symbolsById: new Map(),
+    filesById: new Map(),
+    outgoingEdgesBySymbolId: new Map(),
+    contentByFileId: new Map(),
+  };
+}
+
+it("filters durable semantic test facets through the real candidate flow", async (t) => {
+  const states = [
+    ["durable-valid", TASK7_TEST_CASE_JSON],
+    ["durable-null", null],
+    ["durable-absent", undefined],
+    ["durable-malformed", "{malformed"],
+  ] as const;
+  const symbols = new Map(
+    states.map(([symbolId, testCaseJson]) => [
+      symbolId,
+      makeTask7CandidateSymbol(symbolId, `file-${symbolId}`, testCaseJson),
+    ]),
+  );
+  const files = new Map(
+    states.map(([symbolId]) => [
+      `file-${symbolId}`,
+      makeTask7CandidateFile(`file-${symbolId}`, `src/${symbolId}.ts`),
+    ]),
+  );
+  const symbolIds = states.map(([symbolId]) => symbolId);
+
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      collectEntitySourceRankings: async () =>
+        makeTask7CandidateCollection(symbolIds),
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      getSearchableSymbolsByIds: async () => symbols,
+      getFilesByIds: async () => files,
+    },
+  });
+
+  const { searchContextCandidates } = await import(
+    "../../dist/retrieval/context-candidate-search.js?durable-test-facet-matrix"
+  );
+  const withoutTests = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "facet",
+      limit: 10,
+      includeFileSummary: false,
+      includeTests: false,
+      symbolsPerFileSummary: 1,
+    },
+    makeTask7QueryContext(),
+    makeTask7EmptyOverlay(),
+  );
+  const withTests = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "facet",
+      limit: 10,
+      includeFileSummary: false,
+      includeTests: true,
+      symbolsPerFileSummary: 1,
+    },
+    makeTask7QueryContext(),
+    makeTask7EmptyOverlay(),
+  );
+
+  assert.deepEqual(
+    withoutTests.rows.map((candidate) => candidate.symbolId),
+    ["durable-null", "durable-absent", "durable-malformed"],
+  );
+  assert.deepEqual(
+    withTests.rows.map((candidate) => candidate.symbolId),
+    symbolIds,
+  );
+});
+
+it("preserves pinned test candidates while filtering unpinned tests", async (t) => {
+  const states = [
+    ["pinned-semantic", "src/server.ts", TASK7_TEST_CASE_JSON],
+    ["pinned-path", "tests/pinned-helper.ts", null],
+    ["unpinned-semantic", "src/unpinned.ts", TASK7_TEST_CASE_JSON],
+    ["unpinned-path", "tests/unpinned-helper.ts", null],
+  ] as const;
+  const symbols = new Map(
+    states.map(([symbolId, _relPath, testCaseJson]) => [
+      symbolId,
+      makeTask7CandidateSymbol(symbolId, `file-${symbolId}`, testCaseJson),
+    ]),
+  );
+  const files = new Map(
+    states.map(([symbolId, relPath]) => [
+      `file-${symbolId}`,
+      makeTask7CandidateFile(`file-${symbolId}`, relPath),
+    ]),
+  );
+  const symbolIds = states.map(([symbolId]) => symbolId);
+  const pinnedSymbolIds = ["pinned-semantic", "pinned-path"];
+
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      collectEntitySourceRankings: async () =>
+        makeTask7CandidateCollection(symbolIds),
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      getSearchableSymbolsByIds: async () => symbols,
+      getFilesByIds: async () => files,
+    },
+  });
+
+  const { searchContextCandidates } = await import(
+    "../../dist/retrieval/context-candidate-search.js?pinned-test-exemption"
+  );
+  const result = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "facet",
+      limit: 10,
+      includeFileSummary: false,
+      includeTests: false,
+      symbolsPerFileSummary: 1,
+      pinnedSymbolIds,
+      exactIdentifierSymbolIds: pinnedSymbolIds,
+    },
+    makeTask7QueryContext(),
+    makeTask7EmptyOverlay(),
+  );
+
+  assert.deepEqual(
+    result.rows.map((candidate) => candidate.symbolId),
+    pinnedSymbolIds,
+  );
+});
+
+it("filters overlay semantic test facets through the real candidate flow", async (t) => {
+  const states = [
+    ["overlay-valid", TASK7_TEST_CASE_JSON],
+    ["overlay-null", null],
+    ["overlay-absent", undefined],
+    ["overlay-malformed", "{malformed"],
+  ] as const;
+  const symbols = new Map(
+    states.map(([symbolId, testCaseJson]) => [
+      symbolId,
+      makeTask7CandidateSymbol(symbolId, `file-${symbolId}`, testCaseJson),
+    ]),
+  );
+  const files = new Map(
+    states.map(([symbolId]) => [
+      `file-${symbolId}`,
+      makeTask7CandidateFile(`file-${symbolId}`, `src/${symbolId}.ts`),
+    ]),
+  );
+  const symbolIds = states.map(([symbolId]) => symbolId);
+
+  t.mock.module("../../dist/retrieval/orchestrator.js", {
+    namedExports: {
+      collectEntitySourceRankings: async () => makeTask7CandidateCollection([]),
+    },
+  });
+  t.mock.module("../../dist/db/ladybug-queries.js", {
+    namedExports: {
+      getSearchableSymbolsByIds: async () => new Map(),
+      getFilesByIds: async () => new Map(),
+    },
+  });
+
+  const { searchContextCandidates } = await import(
+    "../../dist/retrieval/context-candidate-search.js?overlay-test-facet-matrix"
+  );
+  const overlay = {
+    repoId: "repo",
+    touchedFileIds: new Set(files.keys()),
+    symbolsById: symbols,
+    filesById: files,
+    outgoingEdgesBySymbolId: new Map(),
+    contentByFileId: new Map(),
+  };
+  const withoutTests = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "facet",
+      limit: 10,
+      includeFileSummary: false,
+      includeTests: false,
+      symbolsPerFileSummary: 1,
+    },
+    makeTask7QueryContext(),
+    overlay,
+  );
+  const withTests = await searchContextCandidates(
+    {} as Connection,
+    {
+      repoId: "repo",
+      query: "facet",
+      limit: 10,
+      includeFileSummary: false,
+      includeTests: true,
+      symbolsPerFileSummary: 1,
+    },
+    makeTask7QueryContext(),
+    overlay,
+  );
+
+  assert.deepEqual(
+    withoutTests.rows.map((candidate) => candidate.symbolId).sort(),
+    ["overlay-absent", "overlay-malformed", "overlay-null"],
+  );
+  assert.deepEqual(
+    withTests.rows.map((candidate) => candidate.symbolId).sort(),
+    [...symbolIds].sort(),
+  );
+});

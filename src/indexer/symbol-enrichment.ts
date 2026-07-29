@@ -1,3 +1,4 @@
+import type { TestCaseFacet } from "../domain/types.js";
 import { caseFoldedPathKey, normalizePath } from "../util/paths.js";
 
 interface SignatureParamLike {
@@ -14,6 +15,7 @@ interface ResolveSymbolEnrichmentParams {
   relPath: string;
   summary: string | null;
   signature?: SignatureLike | null;
+  testCase?: TestCaseFacet | null;
   nativeRoleTagsJson?: string | null;
   nativeSearchText?: string | null;
 }
@@ -25,6 +27,8 @@ interface BuildSearchTextParams {
   summary: string | null;
   signature?: SignatureLike | null;
   roleTags: string[];
+  testCase?: TestCaseFacet | null;
+  baseSearchText?: string | null;
 }
 
 export function resolveSymbolEnrichment(
@@ -44,6 +48,7 @@ export function resolveSymbolEnrichment(
     roleTags,
     roleTagsJson: roleTags.length > 0 ? JSON.stringify(roleTags) : null,
     searchText:
+      params.testCase === undefined &&
       typeof params.nativeSearchText === "string" &&
       params.nativeSearchText.trim().length > 0
         ? params.nativeSearchText.trim()
@@ -54,6 +59,8 @@ export function resolveSymbolEnrichment(
             summary: params.summary,
             signature: params.signature,
             roleTags,
+            testCase: params.testCase,
+            baseSearchText: params.nativeSearchText,
           }),
   };
 }
@@ -155,13 +162,30 @@ export function extractRoleTags(
 }
 
 export function buildSearchText(params: BuildSearchTextParams): string {
-  const parts = [
+  const baseSearchTerms = params.baseSearchText?.trim().split(/\s+/) ?? [];
+  const parts = baseSearchTerms.length > 0 ? [
+    ...baseSearchTerms,
+    params.testCase?.title ?? "",
+    ...splitIdentifierLikeText(params.testCase?.title ?? ""),
+    ...(params.testCase?.suitePath ?? []),
+    ...(params.testCase?.suitePath ?? []).flatMap(splitIdentifierLikeText),
+    params.testCase?.framework ?? "",
+    params.testCase?.category ?? "",
+    ...(params.testCase?.modifiers ?? []),
+  ] : [
     params.name,
     ...splitIdentifierLikeText(params.name),
     params.summary?.trim() ?? "",
     ...splitIdentifierLikeText(params.summary ?? ""),
     params.kind,
     ...params.roleTags,
+    params.testCase?.title ?? "",
+    ...splitIdentifierLikeText(params.testCase?.title ?? ""),
+    ...(params.testCase?.suitePath ?? []),
+    ...(params.testCase?.suitePath ?? []).flatMap(splitIdentifierLikeText),
+    params.testCase?.framework ?? "",
+    params.testCase?.category ?? "",
+    ...(params.testCase?.modifiers ?? []),
     ...splitPathTokens(params.relPath),
     ...extractSignatureTerms(params.signature),
   ];

@@ -213,3 +213,18 @@ describe("Context V2 database boundary", () => {
     assert.match(pprSource, /return \[\s*\.\.\.pinned,/);
   });
 });
+
+describe("semantic test-case candidate boundary", () => {
+  it("parses durable facet JSON only while normalizing candidates", () => {
+    assert.match(
+      candidateSearchSource,
+      /parseTestCaseFacetJson\([\s\S]*?testCaseJson/,
+    );
+    assert.match(candidateSearchSource, /hasTestCaseFacet:\s*boolean/);
+    assert.match(candidateSearchSource, /isTestCandidate\(/);
+    assert.doesNotMatch(
+      candidateSearchSource,
+      /rows:\s*orderedRows\.map\([\s\S]*testCaseJson/,
+    );
+  });
+});

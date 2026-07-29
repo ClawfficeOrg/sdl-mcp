@@ -575,7 +575,17 @@ function augmentProviderTestCases(params: {
     for (const [ordinaryIndex, symbolIndex] of ordinaryIndexes.entries()) {
       const testCase = normalized.symbols[ordinaryIndex].testCase;
       const testCaseJson = testCase ? serializeTestCaseFacet(testCase) : null;
-      symbols[symbolIndex] = { ...symbols[symbolIndex], testCaseJson };
+      const current = symbols[symbolIndex];
+      const searchText = resolveSymbolEnrichment({
+        kind: current.kind,
+        name: current.name,
+        relPath: candidatePath,
+        summary: current.summary,
+        nativeRoleTagsJson: current.roleTagsJson,
+        nativeSearchText: current.searchText,
+        testCase,
+      }).searchText;
+      symbols[symbolIndex] = { ...current, testCaseJson, searchText };
     }
 
     const fileFact = params.fileByPath.get(relPath);
@@ -587,6 +597,7 @@ function augmentProviderTestCases(params: {
         kind: symbol.kind,
         name: symbol.name,
         relPath,
+        testCase: symbol.testCase,
         summary: "",
       });
       symbols.push({

@@ -88,3 +88,34 @@ describe("symbol enrichment", () => {
     assert.strictEqual(config.roleTagsJson, JSON.stringify(["config"]));
   });
 });
+
+it("appends semantic test-case terms after role tags without changing legacy text", async () => {
+  const { buildSearchText } = await import(
+    "../../dist/indexer/symbol-enrichment.js"
+  );
+  const params = {
+    kind: "function",
+    name: "handleLoginRequest",
+    relPath: "src/api/auth-handler.ts",
+    summary: "Handle login requests",
+    signature: { params: [{ name: "authRequest" }] },
+    roleTags: ["handler", "entrypoint"],
+  };
+
+  assert.strictEqual(
+    buildSearchText(params),
+    "handleloginrequest handle login request handle login requests requests function handler entrypoint src api auth ts authrequest",
+  );
+  assert.strictEqual(
+    buildSearchText({
+      ...params,
+      testCase: {
+        framework: "node:test",
+        title: "keeps sdl.info callable",
+        suitePath: ["Code Mode"],
+        modifiers: ["only"],
+      },
+    }),
+    "handleloginrequest handle login request handle login requests requests function handler entrypoint keeps sdl.info callable keeps sdl info callable code mode code mode node:test only src api auth ts authrequest",
+  );
+});

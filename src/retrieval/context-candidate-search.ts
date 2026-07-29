@@ -12,8 +12,9 @@ import {
   type OverlaySnapshot,
 } from "../live-index/overlay-reader.js";
 import { logger } from "../util/logger.js";
+import { parseTestCaseFacetJson } from "../util/test-case.js";
 import { normalizePath } from "../util/paths.js";
-import { isTestLikePath } from "./task-query-ranking.js";
+import { isTestCandidate } from "./task-query-ranking.js";
 import {
   rrfFuseContextCandidates,
   type ContextCandidateSource,
@@ -58,6 +59,7 @@ export interface ContextCandidateSearchOptions {
 export interface ContextCandidateSearchRow {
   symbolId: string;
   filePath: string;
+  hasTestCaseFacet: boolean;
   score: number;
   source: ContextCandidateSource;
   tier: 0 | 1;
@@ -149,7 +151,7 @@ async function mapFileSummariesToSymbols(
       !file ||
       file.repoId !== options.repoId ||
       overlaySnapshot.touchedFileIds.has(fileId) ||
-      (!options.includeTests && isTestLikePath(file.relPath))
+      (!options.includeTests && isTestCandidate(file.relPath, false))
     ) {
       continue;
     }
@@ -376,7 +378,10 @@ export async function searchContextCandidates(
             !overlaySnapshot.touchedFileIds.has(symbol.fileId)) &&
           (pinnedIdSet.has(symbol.symbolId) ||
             options.includeTests ||
-            !isTestLikePath(file.relPath))
+            !isTestCandidate(
+              file.relPath,
+              parseTestCaseFacetJson(symbol.testCaseJson) !== undefined,
+            ))
         );
       })
       .map((symbol) => symbol.symbolId),
@@ -399,7 +404,14 @@ export async function searchContextCandidates(
     options.query,
     eligibleDirectIds,
   ).filter(
-    (row) => options.includeTests || !isTestLikePath(row.filePath),
+    (row) =>
+      options.includeTests ||
+      !isTestCandidate(
+        row.filePath,
+        parseTestCaseFacetJson(
+          overlaySnapshot.symbolsById.get(row.symbolId)?.testCaseJson,
+        ) !== undefined,
+      ),
   );
   if (overlayRows.length > 0) {
     filteredRankings.push({
@@ -456,9 +468,21 @@ export async function searchContextCandidates(
       overlay?.filePath ??
       (symbol ? files.get(symbol.fileId)?.relPath : undefined);
     if (!filePath) continue;
+    const hasTestCaseFacet =
+      parseTestCaseFacetJson(
+        (symbol ?? overlaySnapshot.symbolsById.get(item.symbolId))?.testCaseJson,
+      ) !== undefined;
+    if (
+      !pinnedIdSet.has(item.symbolId) &&
+      !options.includeTests &&
+      isTestCandidate(filePath, hasTestCaseFacet)
+    ) {
+      continue;
+    }
     rows.push({
       symbolId: item.symbolId,
       filePath,
+      hasTestCaseFacet,
       score: item.score,
       source: item.source,
       tier: pinnedIdSet.has(item.symbolId) ? 0 : 1,

@@ -26,7 +26,7 @@ import {
   autoExtractMentions,
   resolveSeedSymbols,
 } from "../retrieval/seed-resolver.js";
-import { isTestLikePath } from "../retrieval/task-query-ranking.js";
+import { isTestCandidate } from "../retrieval/task-query-ranking.js";
 import type {
   ContextCandidateSource,
   ContextSourceRanks,
@@ -38,6 +38,7 @@ import type {
 } from "../retrieval/types.js";
 import { assertGraphRetrievalAvailable } from "../services/graph-retrieval-availability.js";
 import { normalizePath } from "../util/paths.js";
+import { parseTestCaseFacetJson } from "../util/test-case.js";
 import {
   hydrateContextBundles,
   prepareContextHydrationPlan,
@@ -632,6 +633,8 @@ async function buildMetadataCandidates(
     candidates.push({
       symbolId,
       path,
+      hasTestCaseFacet:
+        parseTestCaseFacetJson(symbol.testCaseJson) !== undefined,
       rank: candidates.length + 1,
       tier,
       lanes: [...lanes],
@@ -941,6 +944,7 @@ async function defaultRetrieve(
     (row, index) => ({
       symbolId: row.symbolId,
       path: row.filePath,
+      hasTestCaseFacet: row.hasTestCaseFacet,
       rank: index + 1,
       tier: row.tier,
       lanes: lanesFromCandidateProvenance(row.provenance),
@@ -1022,7 +1026,8 @@ export async function defaultExpand(
     request.includeTests ?? getTaskProfile(request.taskType).includeTests;
   const eligibleExpanded = expanded.filter(
     (candidate) =>
-      includeTests || !isTestLikePath(candidate.path),
+      includeTests ||
+      !isTestCandidate(candidate.path, candidate.hasTestCaseFacet === true),
   );
   return [
     ...candidates,

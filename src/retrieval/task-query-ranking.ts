@@ -5,6 +5,7 @@ export interface TaskScopedCandidate {
   kind: string;
   exported: boolean;
   name?: string;
+  hasTestCaseFacet?: boolean;
 }
 
 function stemToken(token: string): string {
@@ -35,6 +36,13 @@ export function isTestLikePath(filePath: string): boolean {
     || normalized.startsWith("tests/")
     || normalized.includes(".test.")
     || normalized.includes(".spec.");
+}
+
+export function isTestCandidate(
+  filePath: string,
+  hasTestCaseFacet: boolean,
+): boolean {
+  return hasTestCaseFacet || isTestLikePath(filePath);
 }
 
 function pathDomainScore(query: string, filePath: string): number {
@@ -77,7 +85,7 @@ function kindScore(kind: string): number {
 function candidateScore(query: string, candidate: TaskScopedCandidate): number {
   let score = pathDomainScore(query, candidate.filePath);
 
-  if (!isTestLikePath(candidate.filePath)) {
+  if (!isTestCandidate(candidate.filePath, candidate.hasTestCaseFacet === true)) {
     score += 3;
   } else {
     score -= 6;
