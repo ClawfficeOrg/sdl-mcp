@@ -32,6 +32,8 @@ handles remain session-scoped, while manual and response-artifact projections
 expose stable capability or content metadata rather than process start times,
 runtime versions, expiry times, or session-key hashes. Error responses follow
 the same rule so a repeated invalid call is as cache-stable as a successful one.
+Traversal and realpath checks therefore keep resolved host paths in operational
+logs only; model-facing errors use stable, path-free descriptions.
 
 Workflow continuation data receives the same deterministic model projection as the first page. Zero-identifier-match hot-path fallbacks are omitted because adjacent source text does not prove identifier relevance. Internal `$N` result piping continues to use raw step data, so response shaping never changes workflow semantics. Persisted runtime artifacts remain byte-faithful after configured redaction; only default model-facing excerpts remove leading command-prompt echoes and recognized Node test-duration suffixes.
 

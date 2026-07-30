@@ -12,6 +12,7 @@ import {
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import { handleFileRead } from "../../dist/mcp/tools/file-read.js";
 import { handleResponseGet } from "../../dist/mcp/tools/response.js";
+import { registerCodeModeTools } from "../../dist/code-mode/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -65,6 +66,53 @@ describe("sdl.file.read token usage metadata", () => {
     if (existsSync(testDir)) {
       rmSync(testDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps sdl.file traversal errors free of host paths", async () => {
+    let fileHandler: ((args: unknown) => Promise<unknown>) | undefined;
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        if (name === "sdl.file") fileHandler = handler;
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      { liveIndex: undefined } as never,
+      {
+        enabled: true,
+        exclusive: true,
+        maxWorkflowSteps: 20,
+        maxWorkflowTokens: 50_000,
+        maxWorkflowDurationMs: 30_000,
+        ladderValidation: "warn",
+        etagCaching: true,
+      },
+    );
+
+    assert.ok(fileHandler);
+    await assert.rejects(
+      () => fileHandler?.({ op: "read", repoId, filePath: "../outside.md" }) as Promise<unknown>,
+      (error: unknown) => {
+        const modelFacing = JSON.stringify({
+          name: (error as Error).name,
+          message: (error as Error).message,
+          code: (error as { code?: string }).code,
+        });
+        assert.match(modelFacing, /ValidationError/);
+        assert.match(
+          modelFacing,
+          /Path traversal detected: target escapes repository root/,
+        );
+        assert.doesNotMatch(modelFacing, /test-file-read-tool|outside\.md|[A-Z]:[\\\\/]/i);
+        return true;
+      },
+    );
   });
 
   it("attaches sliced-range raw token baseline for targeted reads", async () => {

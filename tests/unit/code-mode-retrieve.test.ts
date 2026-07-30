@@ -15,6 +15,7 @@ import {
   RETRIEVE_ACTION_BY_OP,
   RetrieveRequestSchema,
 } from "../../dist/code-mode/retrieve.js";
+import { projectExclusiveCodeModeRecovery } from "../../dist/code-mode/action-reference-projection.js";
 
 function createTestConfig() {
   return {
@@ -400,6 +401,397 @@ describe("sdl.retrieve", () => {
         wireFormat: "auto",
       },
     ]);
+  });
+
+  it("projects exclusive recovery guidance onto callable Code Mode gateways", async () => {
+    const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const actionMap = {
+      "code.needWindow": {
+        schema: z.object({ repoId: z.string(), symbolId: z.string() }).passthrough(),
+        handler: async () => ({
+          approved: true,
+          whyDenied: [
+            'Try sdl.retrieve op:"codeSkeleton" or sdl.symbol.getCard instead.',
+          ],
+          downgradeGuidance:
+            "Set policy.allowBreakGlass=true via sdl.policy.set, or call sdl.code.getSkeleton.",
+          nextBestAction: {
+            tool: "sdl.code.getHotPath",
+            args: {
+              repoId: "repo",
+              symbolId: "sym",
+              identifiersToFind: ["run"],
+            },
+          },
+        }),
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      {},
+      { ...createTestConfig(), exclusive: true },
+      actionMap as never,
+    );
+    const result = await handlers.get("sdl.retrieve")?.({
+      repoId: "repo",
+      op: "codeNeedWindow",
+      args: {
+        symbolId: "sym",
+        reason: "Need the guarded branch.",
+        expectedLines: 20,
+        identifiersToFind: ["run"],
+      },
+    });
+    const projected = JSON.stringify(result);
+
+    assert.doesNotMatch(
+      projected,
+      /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.(?:search|getCard)|policy\.set)/,
+    );
+    assert.match(projected, /sdl\.retrieve/);
+    assert.match(projected, /op:\\"symbolGetCard/);
+    assert.match(projected, /sdl\.workflow/);
+  });
+
+  it("projects exclusive recovery errors without changing their type", async () => {
+    const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const originalError = Object.assign(
+      new ValidationError("Symbol not found. Use sdl.symbol.search."),
+      {
+        fallbackTools: ["sdl.symbol.search", "sdl.action.search"],
+        fallbackRationale: "Use sdl.symbol.search to find the symbol.",
+      },
+    );
+    const actionMap = {
+      "symbol.search": {
+        schema: z.object({ repoId: z.string(), query: z.string() }).passthrough(),
+        handler: async () => {
+          throw originalError;
+        },
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      {},
+      { ...createTestConfig(), exclusive: true },
+      actionMap as never,
+    );
+
+    await assert.rejects(
+      () =>
+        handlers.get("sdl.retrieve")?.({
+          repoId: "repo",
+          op: "symbolSearch",
+          args: { query: "missing" },
+        }) as Promise<unknown>,
+      (error: unknown) => {
+        assert.strictEqual(error, originalError);
+        const projected = JSON.stringify({
+          message: (error as Error).message,
+          fallbackTools: (error as typeof originalError).fallbackTools,
+          fallbackRationale: (error as typeof originalError).fallbackRationale,
+        });
+        assert.doesNotMatch(
+          projected,
+          /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.search|policy\.set)/,
+        );
+        assert.deepEqual((error as typeof originalError).fallbackTools, [
+          "sdl.retrieve",
+          "sdl.action.search",
+        ]);
+        assert.match(projected, /op:\\?"symbolSearch/);
+        return true;
+      },
+    );
+  });
+
+  it("projects exclusive workflow recovery guidance onto callable gateways", async () => {
+    const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const actionMap = {
+      "code.needWindow": {
+        schema: z.object({ repoId: z.string(), symbolId: z.string() }).passthrough(),
+        handler: async () => ({
+          approved: true,
+          downgradeGuidance:
+            "Set policy.allowBreakGlass=true via sdl.policy.set, or call sdl.code.getSkeleton.",
+          nextBestAction: {
+            tool: "sdl.code.getHotPath",
+            args: {
+              repoId: "repo",
+              symbolId: "sym",
+              identifiersToFind: ["run"],
+            },
+          },
+        }),
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      {},
+      { ...createTestConfig(), exclusive: true },
+      actionMap as never,
+    );
+    const result = await handlers.get("sdl.workflow")?.({
+      repoId: "repo",
+      steps: [
+        {
+          fn: "codeNeedWindow",
+          args: {
+            symbolId: "sym",
+            reason: "Need the guarded branch.",
+            expectedLines: 20,
+            identifiersToFind: ["run"],
+          },
+        },
+      ],
+    });
+    const projected = JSON.stringify(result);
+
+    assert.doesNotMatch(
+      projected,
+      /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.search|policy\.set)/,
+    );
+    assert.match(projected, /sdl\.retrieve/);
+    assert.match(projected, /sdl\.workflow/);
+  });
+
+  it("projects exclusive workflow failure traces onto callable gateways", async () => {
+    const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const actionMap = {
+      "symbol.search": {
+        schema: z.object({ repoId: z.string(), query: z.string() }).passthrough(),
+        handler: async () => {
+          throw new ValidationError(
+            "Symbol not found. Use sdl.symbol.search to find valid IDs.",
+          );
+        },
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      {},
+      { ...createTestConfig(), exclusive: true },
+      actionMap as never,
+    );
+    const result = await handlers.get("sdl.workflow")?.({
+      repoId: "repo",
+      steps: [
+        {
+          fn: "symbolSearch",
+          args: { query: "missing" },
+        },
+      ],
+    });
+    const projected = JSON.stringify(result);
+
+    assert.doesNotMatch(projected, /sdl\.symbol\.search/);
+    assert.match(projected, /sdl\.retrieve/);
+    assert.match(projected, /op:\\?"symbolSearch/);
+  });
+
+  it("preserves flat recovery guidance outside exclusive Code Mode", async () => {
+    const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const payload = {
+      downgradeGuidance: "Call sdl.code.getSkeleton.",
+    };
+    const actionMap = {
+      "code.needWindow": {
+        schema: z.object({ repoId: z.string(), symbolId: z.string() }).passthrough(),
+        handler: async () => payload,
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      {},
+      createTestConfig(),
+      actionMap as never,
+    );
+    const result = await handlers.get("sdl.retrieve")?.({
+      repoId: "repo",
+      op: "codeNeedWindow",
+      args: {
+        symbolId: "sym",
+        reason: "Need the guarded branch.",
+        expectedLines: 20,
+        identifiersToFind: ["run"],
+      },
+    });
+
+    assert.strictEqual(result, payload);
+    assert.match(JSON.stringify(result), /sdl\.code\.getSkeleton/);
+  });
+
+  it("projects recovery references returned through workflow continuations", async () => {
+    const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        handler: (args: unknown) => Promise<unknown>,
+      ) {
+        handlers.set(name, handler);
+      },
+    };
+    const actionMap = {
+      "code.needWindow": {
+        schema: z.object({ repoId: z.string(), symbolId: z.string() }).passthrough(),
+        handler: async () => ({
+          padding: "x".repeat(5_000),
+          recovery: [
+            {
+              fallbackRationale: "Use sdl.symbol.search to recover.",
+              nextBestAction: {
+                tool: "sdl.code.getSkeleton",
+                args: { repoId: "repo", symbolId: "sym" },
+              },
+              nextCalls: [
+                {
+                  tool: "sdl.code.getHotPath",
+                  args: { repoId: "repo", symbolId: "sym" },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer as never,
+      {},
+      { ...createTestConfig(), exclusive: true },
+      actionMap as never,
+    );
+    const result = await handlers.get("sdl.workflow")?.({
+      repoId: "repo",
+      steps: [
+        {
+          fn: "codeNeedWindow",
+          args: { symbolId: "sym" },
+          maxResponseTokens: 50,
+        },
+        {
+          fn: "workflowContinuationGet",
+          args: {
+            handle: "$0.truncatedResponse.continuationHandle",
+            path: "recovery",
+            limit: 1,
+          },
+        },
+      ],
+    });
+    const projected = JSON.stringify(result);
+
+    assert.doesNotMatch(
+      projected,
+      /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.search|policy\.set)/,
+    );
+    const continuationData = (
+      result as {
+        results: Array<{ result?: { data?: unknown } }>;
+      }
+    ).results[1]?.result?.data;
+    assert.deepEqual(continuationData, [
+      {
+        fallbackRationale: 'Use sdl.retrieve op:"symbolSearch" to recover.',
+      nextBestAction: {
+        tool: "sdl.retrieve",
+        args: {
+          repoId: "repo",
+          op: "codeSkeleton",
+          args: { symbolId: "sym" },
+        },
+      },
+      nextCalls: [
+        {
+          tool: "sdl.retrieve",
+          args: {
+            repoId: "repo",
+            op: "codeHotPath",
+            args: { symbolId: "sym" },
+          },
+        },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves inherited action names unmapped while projecting valid next calls", () => {
+    const inherited = { tool: "__proto__", args: { symbolId: "sym" } };
+    const result = projectExclusiveCodeModeRecovery({
+      nextBestAction: inherited,
+      nextCalls: [
+        { tool: "sdl.code.getSkeleton", args: { symbolId: "sym" } },
+        inherited,
+      ],
+    }, "repo");
+
+    assert.strictEqual(result.nextBestAction, inherited);
+    assert.deepEqual(result.nextCalls[0], {
+      tool: "sdl.retrieve",
+      args: {
+        repoId: "repo",
+        op: "codeSkeleton",
+        args: { symbolId: "sym" },
+      },
+    });
+    assert.strictEqual(result.nextCalls[1], inherited);
   });
 
   it("registers sdl.retrieve as a top-level Code Mode tool", () => {

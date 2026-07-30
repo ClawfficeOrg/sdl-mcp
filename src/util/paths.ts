@@ -116,7 +116,7 @@ export function validatePathWithinRoot(root: string, target: string): string {
     !comparisonTarget.startsWith(rootPrefix)
   ) {
     throw new ValidationError(
-      `Path traversal detected: ${target} escapes repository root`,
+      "Path traversal detected: target escapes repository root",
     );
   }
 
@@ -149,7 +149,7 @@ export async function validatePathWithinRootAsync(
   const prefix = cmpRoot.endsWith("/") ? cmpRoot : cmpRoot + "/";
   if (cmpTarget !== cmpRoot && !cmpTarget.startsWith(prefix)) {
     throw new ValidationError(
-      "Symlink escape detected: " + target + " resolves outside repository root",
+      "Symlink escape detected: target resolves outside repository root",
     );
   }
   return absoluteTarget;

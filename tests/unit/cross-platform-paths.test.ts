@@ -1,5 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { ValidationError } from "../../dist/domain/errors.js";
 import {
   normalizePath,
   caseFoldedPathKey,
@@ -7,6 +11,7 @@ import {
   safeJoin,
   getAbsolutePathFromRepoRoot,
   validatePathWithinRoot,
+  validatePathWithinRootAsync,
 } from "../../dist/util/paths.js";
 
 describe("Cross-Platform Path Utilities", () => {
@@ -259,6 +264,53 @@ describe("Cross-Platform Path Utilities", () => {
       assert.doesNotThrow(() =>
         validatePathWithinRoot("C:/Repo", "c:/repo/src/index.ts"),
       );
+    });
+
+    it("keeps traversal errors stable without disclosing host paths", () => {
+      const cases = [
+        ["C:/synthetic-root-a", "D:/outside/secret.ts"],
+        ["/synthetic/root-b", "/synthetic/outside/secret.ts"],
+        ["/synthetic/root-c", "../secret.ts"],
+      ] as const;
+      const messages = cases.map(([root, target]) => {
+        try {
+          validatePathWithinRoot(root, target);
+          assert.fail("Expected traversal rejection");
+        } catch (error) {
+          assert.ok(error instanceof ValidationError);
+          assert.doesNotMatch(error.message, /synthetic|outside|secret|[A-Z]:[\\/]/i);
+          return error.message;
+        }
+      });
+
+      assert.deepEqual(messages, [messages[0], messages[0], messages[0]]);
+    });
+
+    it("keeps symlink escape errors free of resolved host paths", async () => {
+      const base = mkdtempSync(join(tmpdir(), "sdl-path-safety-"));
+      const root = join(base, "repo");
+      const outside = join(base, "outside");
+      const link = join(root, "escape");
+      mkdirSync(root);
+      mkdirSync(outside);
+      symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+
+      try {
+        await assert.rejects(
+          () => validatePathWithinRootAsync(root, link),
+          (error: unknown) => {
+            assert.ok(error instanceof ValidationError);
+            assert.equal(
+              error.message,
+              "Symlink escape detected: target resolves outside repository root",
+            );
+            assert.doesNotMatch(error.message, /sdl-path-safety-/i);
+            return true;
+          },
+        );
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
     });
   });
 });

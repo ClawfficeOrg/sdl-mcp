@@ -18,6 +18,7 @@ import {
 import type { MCPServer, ToolContext } from "../server.js";
 import { estimateTokens } from "../util/tokenize.js";
 
+import { withExclusiveCodeModeRecoveryProjection } from "./action-reference-projection.js";
 import {
   buildCatalog,
   rankCatalog,
@@ -498,7 +499,11 @@ export function registerCodeModeTools(
     RETRIEVE_DESCRIPTION,
     RetrieveRequestSchema,
     async (rawArgs: unknown, context?: ToolContext) =>
-      handleRetrieve(rawArgs, actionMap, context),
+      withExclusiveCodeModeRecoveryProjection(
+        config.exclusive,
+        () => handleRetrieve(rawArgs, actionMap, context),
+        rawArgs,
+      ),
     buildRetrieveWireSchema(actionMap),
     undefined,
     RetrieveOutputSchema,
@@ -524,14 +529,19 @@ export function registerCodeModeTools(
         ? WorkflowTraceOptionsSchema.parse(rawObject.trace)
         : undefined;
 
-      return executeWorkflow(
-        parsed.request,
-        workflowActionMap,
-        config,
-        context,
-        traceOpts,
-        (fn, result, args) =>
-          projectWorkflowChildResultForModel(fn, result, rawObject, args),
+      return withExclusiveCodeModeRecoveryProjection(
+        config.exclusive,
+        () =>
+          executeWorkflow(
+            parsed.request,
+            workflowActionMap,
+            config,
+            context,
+            traceOpts,
+            (fn, result, args) =>
+              projectWorkflowChildResultForModel(fn, result, rawObject, args),
+          ),
+        rawArgs,
       );
     },
     buildCompactJsonSchema(WorkflowRequestSchema),
@@ -555,7 +565,11 @@ export function registerCodeModeTools(
     FILE_GATEWAY_DESCRIPTION,
     FileGatewayRequestSchema,
     async (rawArgs: unknown, context?: ToolContext) =>
-      handleFileGateway(rawArgs, context),
+      withExclusiveCodeModeRecoveryProjection(
+        config.exclusive,
+        () => handleFileGateway(rawArgs, context),
+        rawArgs,
+      ),
     {
       type: "object",
       properties: {
