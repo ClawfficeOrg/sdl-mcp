@@ -158,6 +158,13 @@ describe("withWindowsFtsRuntime", () => {
     );
   });
 
+  it("preloads the Windows runtime while Database.init replays FTS WAL state", () => {
+    assert.match(
+      ladybugSource,
+      /const initResult = await withWindowsFtsRuntime\(\(\) => openingDb!\.init\(\)\);[\s\S]*?if \(isWindowsFtsRuntimeUnavailable\(initResult\)\) \{[\s\S]*?await openingDb\.init\(\);/u,
+    );
+  });
+
   it("bypasses preloading outside Windows x64 and forwards the load result", async () => {
     let calls = 0;
     const result = await withWindowsFtsRuntime(async () => {

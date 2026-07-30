@@ -498,7 +498,11 @@ export async function getLadybugDb(
       // LadybugDB constructs lazily: WAL replay and storage validation happen
       // during init/first use, so do not publish an open database before this
       // boundary completes.
-      await openingDb.init();
+      // WAL replay can auto-load FTS before SDL reaches its explicit LOAD.
+      const initResult = await withWindowsFtsRuntime(() => openingDb!.init());
+      if (isWindowsFtsRuntimeUnavailable(initResult)) {
+        await openingDb.init();
+      }
       dbInstance = openingDb;
       currentDbPath = normalizedPath;
       logger.info("LadybugDB database opened", {
