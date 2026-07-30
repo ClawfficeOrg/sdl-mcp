@@ -328,7 +328,7 @@ describe("release regression guards", () => {
 
     assert.match(
       source,
-      /astFingerprint:\s*extracted\.astFingerprint,\s*symbolId:\s*extracted\.symbolId,/,
+      /const astFingerprint\s*=\s*symbol\.astFingerprint\s*\?\?\s*"";[\s\S]*symbolId:\s*nativeSymbol\?\.symbolId\s*\?\?/,
       "Rust pass-1 should use native symbol identity instead of regenerating",
     );
   });

@@ -240,17 +240,13 @@ export async function processFileFromRustResult(params: {
     );
     let normalizedCalls = rustResult.calls;
     if (adapter?.detectTestCases) {
-      let detectionTree: ReturnType<typeof adapter.parse> = null;
       try {
-        if (adapter.languageId === "python") {
-          detectionTree = adapter.parse(content, filePath);
-        }
         const normalized = applyTestCaseCandidates({
           relPath,
           symbols: normalizedSymbols,
           calls: normalizedCalls,
           candidates: adapter.detectTestCases({
-            tree: detectionTree,
+            tree: null,
             content,
             filePath,
             symbols: normalizedSymbols,
@@ -263,10 +259,6 @@ export async function processFileFromRustResult(params: {
         }
       } catch {
         logger.warn(`${relPath}: test-case detection failed`);
-      } finally {
-        if (detectionTree) {
-          (detectionTree as unknown as { delete: () => void }).delete();
-        }
       }
     }
 

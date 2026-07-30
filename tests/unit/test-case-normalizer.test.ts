@@ -65,6 +65,18 @@ function syntheticCandidate(params: {
 }
 
 describe("applyTestCaseCandidates", () => {
+  it("leaves calls untouched when there are no candidates", () => {
+    const inputCall = call("existing-owner", range(3, 2, 3, 8));
+    const result = applyTestCaseCandidates({
+      relPath: "src/example.ts",
+      symbols: [symbol("enclosing", "enclosing", range(1, 0, 5, 1))],
+      calls: [inputCall],
+      candidates: [],
+    });
+
+    assert.deepEqual(result.calls, [inputCall]);
+  });
+
   it("attaches only the facet and preserves the existing symbol ID", () => {
     const original = symbol("ordinary-node", "test_named", range(2, 0, 4, 1));
     const inputSymbols = [original];
@@ -75,10 +87,11 @@ describe("applyTestCaseCandidates", () => {
       fileMeta: { path: "tests/example.py", size: 10, mtime: 0 },
     })[0];
 
+    const inputCall = call("existing-owner", range(3, 2, 3, 8));
     const result = applyTestCaseCandidates({
       relPath: "tests/example.py",
       symbols: inputSymbols,
-      calls: [],
+      calls: [inputCall],
       candidates: [
         {
           mode: "attach",
@@ -97,6 +110,7 @@ describe("applyTestCaseCandidates", () => {
     })[0];
 
     assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(result.calls, [inputCall]);
     assert.notStrictEqual(result.symbols, inputSymbols);
     assert.deepEqual(result.symbols, [
       { ...original, testCase: { framework: "pytest", title: "test_named" } },
@@ -293,6 +307,12 @@ describe("applyTestCaseCandidates", () => {
   it("assigns calls to the smallest enclosing ordinary or synthetic function", () => {
     const outer = symbol("outer", "outer", range(1, 0, 20, 1));
     const nested = symbol("nested", "nested", range(8, 2, 10, 3));
+    const overlappingNonOwner = symbol(
+      "overlap",
+      "overlap",
+      range(6, 0, 7, 0),
+      "variable",
+    );
     const candidate = syntheticCandidate({
       name: "case",
       constructRange: range(5, 0, 15, 1),
@@ -300,14 +320,18 @@ describe("applyTestCaseCandidates", () => {
     });
     const result = applyTestCaseCandidates({
       relPath: "tests/example.ts",
-      symbols: [outer, nested],
-      calls: [call("outer", range(6, 2, 6, 8)), call("outer", range(9, 4, 9, 10))],
+      symbols: [outer, nested, overlappingNonOwner],
+      calls: [
+        call("outer", range(6, 2, 6, 8)),
+        call("nested", range(9, 4, 9, 10)),
+        call("existing-outside", range(18, 2, 18, 8)),
+      ],
       candidates: [candidate],
     });
 
     assert.deepEqual(
       result.calls.map(({ callerNodeId }) => callerNodeId),
-      [candidate.nodeId, nested.nodeId],
+      [candidate.nodeId, nested.nodeId, "existing-outside"],
     );
   });
 
@@ -316,7 +340,7 @@ describe("applyTestCaseCandidates", () => {
     const result = applyTestCaseCandidates({
       relPath: "tests/example.ts",
       symbols: [symbol("z-ordinary", "z", tiedRange), symbol("a-ordinary", "a", tiedRange)],
-      calls: [call("global", range(3, 2, 3, 8))],
+      calls: [call("z-ordinary", range(3, 2, 3, 8))],
       candidates: [
         syntheticCandidate({
           name: "case",

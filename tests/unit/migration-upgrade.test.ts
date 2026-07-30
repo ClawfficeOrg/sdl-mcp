@@ -59,6 +59,7 @@ async function createV4Database(dbPath: string): Promise<void> {
     `CREATE NODE TABLE IF NOT EXISTS File (fileId STRING PRIMARY KEY, relPath STRING, contentHash STRING, language STRING, byteSize INT64, lastIndexedAt STRING, directory STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY, kind STRING, name STRING, exported BOOLEAN, visibility STRING, language STRING, rangeStartLine INT64, rangeStartCol INT64, rangeEndLine INT64, rangeEndCol INT64, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING, roleTagsJson STRING, searchText STRING, updatedAt STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS Metrics (symbolId STRING PRIMARY KEY, fanIn INT64 DEFAULT 0, fanOut INT64 DEFAULT 0, churn30d INT64 DEFAULT 0, testRefsJson STRING, updatedAt STRING)`,
+    `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
     `CREATE REL TABLE IF NOT EXISTS FILE_IN_REPO (FROM File TO Repo)`,
     `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_FILE (FROM Symbol TO File)`,
@@ -93,6 +94,7 @@ async function createV8DatabaseWithoutSummaryMetadata(
     `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY, kind STRING, name STRING, exported BOOLEAN, visibility STRING, language STRING, rangeStartLine INT64, rangeStartCol INT64, rangeEndLine INT64, rangeEndCol INT64, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING, roleTagsJson STRING, searchText STRING, updatedAt STRING, embeddingJinaCode STRING, embeddingJinaCodeCardHash STRING, embeddingJinaCodeUpdatedAt STRING, embeddingNomic STRING, embeddingNomicCardHash STRING, embeddingNomicUpdatedAt STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS Cluster (clusterId STRING PRIMARY KEY, repoId STRING, label STRING, symbolCount INT32 DEFAULT 0, cohesionScore DOUBLE DEFAULT 0.0, versionId STRING, createdAt STRING, searchText STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS Process (processId STRING PRIMARY KEY, repoId STRING, entrySymbolId STRING, label STRING, depth INT32 DEFAULT 0, versionId STRING, createdAt STRING, searchText STRING)`,
+    `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
     `CREATE REL TABLE IF NOT EXISTS FILE_IN_REPO (FROM File TO Repo)`,
     `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_FILE (FROM Symbol TO File)`,
@@ -164,6 +166,7 @@ async function createV15DatabaseWithLegacyScipExternal(
     `CREATE NODE TABLE IF NOT EXISTS Repo (repoId STRING PRIMARY KEY, rootPath STRING, configJson STRING, createdAt STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS File (fileId STRING PRIMARY KEY, relPath STRING, contentHash STRING, language STRING, byteSize INT64, lastIndexedAt STRING, directory STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY, repoId STRING, kind STRING, name STRING, exported BOOLEAN, visibility STRING, language STRING, rangeStartLine INT64, rangeStartCol INT64, rangeEndLine INT64, rangeEndCol INT64, astFingerprint STRING, signatureJson STRING, summary STRING, summaryQuality DOUBLE DEFAULT 0.0, summarySource STRING DEFAULT 'unknown', invariantsJson STRING, sideEffectsJson STRING, roleTagsJson STRING, searchText STRING, updatedAt STRING, embeddingMiniLM STRING, embeddingMiniLMCardHash STRING, embeddingMiniLMUpdatedAt STRING, embeddingMiniLMVec DOUBLE[768], embeddingNomic STRING, embeddingNomicCardHash STRING, embeddingNomicUpdatedAt STRING, embeddingJinaCode STRING, embeddingJinaCodeCardHash STRING, embeddingJinaCodeUpdatedAt STRING, embeddingNomicVec DOUBLE[768], embeddingJinaCodeVec DOUBLE[768], external BOOL DEFAULT false, scipSymbol STRING, source STRING DEFAULT 'treesitter', packageName STRING, packageVersion STRING)`,
+    `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
     `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
     `CREATE REL TABLE IF NOT EXISTS FILE_IN_REPO (FROM File TO Repo)`,
     `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_FILE (FROM Symbol TO File)`,
@@ -502,6 +505,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
       `CREATE NODE TABLE IF NOT EXISTS Repo (repoId STRING PRIMARY KEY, rootPath STRING, configJson STRING, createdAt STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY, repoId STRING, kind STRING, name STRING, exported BOOLEAN, visibility STRING, language STRING, rangeStartLine INT64, rangeStartCol INT64, rangeEndLine INT64, rangeEndCol INT64, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING, roleTagsJson STRING, searchText STRING, updatedAt STRING, external BOOL DEFAULT false, symbolStatus STRING DEFAULT 'real', placeholderKind STRING, placeholderTarget STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS File (fileId STRING PRIMARY KEY, relPath STRING, contentHash STRING, language STRING, byteSize INT64, lastIndexedAt STRING, directory STRING)`,
+      `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
       `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_REPO (FROM Symbol TO Repo)`,
       `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_FILE (FROM Symbol TO File)`,
@@ -576,6 +580,8 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
 
     for (const stmt of [
       `CREATE NODE TABLE IF NOT EXISTS Repo (repoId STRING PRIMARY KEY, rootPath STRING, configJson STRING, createdAt STRING)`,
+      `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY)`,
+      `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
       `CREATE (r:Repo {repoId: 'repo-1', rootPath: '/repo', configJson: '{}', createdAt: '${now}'})`,
       `CREATE (sv:SchemaVersion {id: 'current', schemaVersion: 17, createdAt: '${now}', updatedAt: '${now}'})`,
@@ -636,6 +642,8 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
 
     for (const stmt of [
       `CREATE NODE TABLE IF NOT EXISTS Repo (repoId STRING PRIMARY KEY, rootPath STRING, configJson STRING, createdAt STRING)`,
+      `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY)`,
+      `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
       `CREATE (r:Repo {repoId: 'repo-1', rootPath: '/repo', configJson: '{}', createdAt: '${now}'})`,
       `CREATE (sv:SchemaVersion {id: 'current', schemaVersion: 18, createdAt: '${now}', updatedAt: '${now}'})`,
@@ -791,6 +799,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
       `CREATE NODE TABLE IF NOT EXISTS Repo (repoId STRING PRIMARY KEY, rootPath STRING, configJson STRING, createdAt STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS File (fileId STRING PRIMARY KEY, relPath STRING, contentHash STRING, language STRING, byteSize INT64, lastIndexedAt STRING, directory STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS Symbol (symbolId STRING PRIMARY KEY, kind STRING, name STRING, exported BOOLEAN, visibility STRING, language STRING, rangeStartLine INT64, rangeStartCol INT64, rangeEndLine INT64, rangeEndCol INT64, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING, roleTagsJson STRING, searchText STRING, updatedAt STRING)`,
+      `CREATE NODE TABLE IF NOT EXISTS SymbolVersion (id STRING PRIMARY KEY, versionId STRING, symbolId STRING, astFingerprint STRING, signatureJson STRING, summary STRING, invariantsJson STRING, sideEffectsJson STRING)`,
       `CREATE NODE TABLE IF NOT EXISTS SchemaVersion (id STRING PRIMARY KEY, schemaVersion INT64, createdAt STRING, updatedAt STRING)`,
       `CREATE REL TABLE IF NOT EXISTS FILE_IN_REPO (FROM File TO Repo)`,
       `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_FILE (FROM Symbol TO File)`,

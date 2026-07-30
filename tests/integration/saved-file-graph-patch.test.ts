@@ -451,6 +451,8 @@ describe("saved file graph patch", () => {
         external: true,
         placeholderKind: "scip",
         placeholderTarget: providerExternalId,
+        roleTagsJson: null,
+        testCaseJson: null,
       },
     );
   });

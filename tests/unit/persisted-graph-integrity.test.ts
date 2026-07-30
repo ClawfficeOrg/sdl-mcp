@@ -251,6 +251,10 @@ describe("persisted graph integrity", () => {
     );
     assert.strictEqual(canonicalJson(base), canonicalJson(withNull));
     assert.strictEqual(digest(base), digest(withNull));
+
+    const withoutRoles = symbolRow({ roleTagsJson: null });
+    const withEmptyRoles = { ...withoutRoles, roleTagsJson: "" };
+    assert.strictEqual(digest(withoutRoles), digest(withEmptyRoles));
   });
 
   afterEach(async () => {

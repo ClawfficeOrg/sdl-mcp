@@ -394,10 +394,15 @@ const SKIP_PATTERNS = [
   "build-exe", // Build process test.
   "stress-timing-diagnostics", // Stress test only.
   "runner.test.ts", // Meta-test for test runner itself.
+  "tests/fixtures/", // Test inputs, not executable suites.
 ];
 
 const testFiles = allTestFiles.filter((filePath) => {
-  if (SKIP_PATTERNS.some((pattern) => filePath.includes(pattern))) {
+  if (
+    SKIP_PATTERNS.some((pattern) =>
+      filePath.replaceAll("\\", "/").includes(pattern),
+    )
+  ) {
     return false;
   }
   return selectedGroups.size === 0 || selectedGroups.has(testGroupFor(filePath));

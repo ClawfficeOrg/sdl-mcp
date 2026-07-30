@@ -116,18 +116,13 @@ export async function parseAndExtract(params: {
     }
 
     if (adapter.detectTestCases) {
-      let detectionTree = tree;
-      const ownsDetectionTree = !detectionTree && adapter.languageId === "python";
       try {
-        if (ownsDetectionTree) {
-          detectionTree = adapter.parse(content, filePath);
-        }
         const normalized = applyTestCaseCandidates({
           relPath,
           symbols: symbolsWithNodeIds,
           calls,
           candidates: adapter.detectTestCases({
-            tree: detectionTree,
+            tree,
             content,
             filePath,
             symbols: symbolsWithNodeIds,
@@ -140,10 +135,6 @@ export async function parseAndExtract(params: {
         }
       } catch {
         logger.warn(`${relPath}: test-case detection failed`);
-      } finally {
-        if (ownsDetectionTree && detectionTree) {
-          (detectionTree as unknown as { delete: () => void }).delete();
-        }
       }
     }
   } catch (error) {

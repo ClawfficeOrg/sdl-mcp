@@ -1192,6 +1192,10 @@ describe("ContextEngineV2 pure contracts", () => {
                 exported: true,
                 signature: { name: "focus" },
                 summary: "Focus summary",
+                testCase: {
+                  framework: "node:test",
+                  title: "focus behavior",
+                },
                 deps: { imports: [], calls: [] },
                 detailLevel: "signature",
                 version: {
@@ -1213,6 +1217,10 @@ describe("ContextEngineV2 pure contracts", () => {
       name: "focus",
       signature: { name: "focus" },
       summary: "Focus summary",
+      testCase: {
+        framework: "node:test",
+        title: "focus behavior",
+      },
     });
   });
 

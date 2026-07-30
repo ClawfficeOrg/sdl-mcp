@@ -115,6 +115,7 @@ async function mapFileSummariesToSymbols(
   collection: EntitySourceRankingCollection,
   options: ContextCandidateSearchOptions,
   overlaySnapshot: OverlaySnapshot,
+  directSymbolsByRank: readonly SymbolRow[],
 ): Promise<{
   symbolIdsByFileId: Map<string, readonly string[]>;
   symbols: Map<string, SymbolRow>;
@@ -155,12 +156,17 @@ async function mapFileSummariesToSymbols(
     ) {
       continue;
     }
+    const directlyRanked = directSymbolsByRank
+      .filter((symbol) => symbol.fileId === fileId)
+      .slice(0, options.symbolsPerFileSummary);
     const mapped = (
-      await ladybugDb.getSymbolsByFile(
-        collection.conn,
-        fileId,
-        options.symbolsPerFileSummary,
-      )
+      directlyRanked.length > 0
+        ? directlyRanked
+        : await ladybugDb.getSymbolsByFile(
+            collection.conn,
+            fileId,
+            options.symbolsPerFileSummary,
+          )
     ).filter(
       (symbol) =>
         symbol.repoId === options.repoId && symbol.external !== true,
@@ -331,13 +337,22 @@ export async function searchContextCandidates(
       candidateCount: exactIdentifierIds.length,
     });
   }
-  const directIds = [
-    ...new Set(
-      contextRankings
-        .filter((ranking) => ranking.entityType === "symbol")
-        .flatMap((ranking) => [...ranking.ranks.keys()]),
-    ),
-  ].sort();
+  const directRankById = new Map<string, number>();
+  for (const ranking of contextRankings) {
+    if (ranking.entityType !== "symbol") continue;
+    for (const [symbolId, rank] of ranking.ranks) {
+      const current = directRankById.get(symbolId);
+      if (current === undefined || rank < current) {
+        directRankById.set(symbolId, rank);
+      }
+    }
+  }
+  const directIds = [...directRankById]
+    .sort(
+      ([leftId, leftRank], [rightId, rightRank]) =>
+        leftRank - rightRank || leftId.localeCompare(rightId),
+    )
+    .map(([symbolId]) => symbolId);
   const durableDirectSymbols = await ladybugDb.getSearchableSymbolsByIds(
     conn,
     options.repoId,
@@ -431,6 +446,10 @@ export async function searchContextCandidates(
     collection,
     options,
     overlaySnapshot,
+    directIds.flatMap((symbolId) => {
+      const symbol = directSymbols.get(symbolId);
+      return symbol ? [symbol] : [];
+    }),
   );
   const fused = await applyContextPpr(
     conn,

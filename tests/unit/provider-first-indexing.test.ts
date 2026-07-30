@@ -12465,7 +12465,7 @@ it("preserves provider rows and reports ambiguous test-case attachment", () => {
 });
 
 
-it("reuses the first LSP source revision for test-case augmentation", async () => {
+it("reuses retained LSP snapshots and hash-gates overflow reads", async () => {
   const root = mkdtempSync(join(tmpdir(), "sdl-provider-lsp-revision-"));
   const relPath = "src/revision.test.ts";
   const retainedContent = 'test("retained revision", () => {});\n';
@@ -12474,6 +12474,16 @@ it("reuses the first LSP source revision for test-case augmentation", async () =
   const oversizedPath = "src/oversized.test.ts";
   const oversizedContent = "x".repeat(512);
   writeFileSync(join(root, oversizedPath), oversizedContent, "utf8");
+  const fillerPaths = Array.from(
+    { length: 16 },
+    (_, index) => `src/filler-${index}.ts`,
+  );
+  for (const fillerPath of fillerPaths) {
+    writeFileSync(join(root, fillerPath), "x".repeat(128), "utf8");
+  }
+  const overflowPath = "src/overflow.test.ts";
+  const overflowContent = 'test("overflow revision", () => {});\n';
+  writeFileSync(join(root, overflowPath), overflowContent, "utf8");
   const externalRoot = mkdtempSync(join(tmpdir(), "sdl-provider-lsp-external-"));
   const escapedPath = "src/escaped.test.ts";
   const escapedContent = 'test("escaped source", () => {});\n';
@@ -12489,11 +12499,7 @@ it("reuses the first LSP source revision for test-case augmentation", async () =
     openDocument: async (document) => {
       openedDocuments.push(document.text);
       if (document.text !== retainedContent) return;
-      writeFileSync(
-        join(root, relPath),
-        "export const changedRevision = true;\n",
-        "utf8",
-      );
+      rmSync(join(root, relPath), { force: true });
     },
     documentSymbol: async () => [],
     diagnostics: () => [],
@@ -12508,6 +12514,16 @@ it("reuses the first LSP source revision for test-case augmentation", async () =
         { path: relPath, size: 1, contentHash: "1".repeat(64) },
         { path: oversizedPath, size: 1, contentHash: "2".repeat(64) },
         { path: escapedPath, size: 1, contentHash: "3".repeat(64) },
+        ...fillerPaths.map((path) => ({
+          path,
+          size: 128,
+          contentHash: createHash("sha256").update("x".repeat(128)).digest("hex"),
+        })),
+        {
+          path: overflowPath,
+          size: Buffer.byteLength(overflowContent, "utf8"),
+          contentHash: createHash("sha256").update(overflowContent).digest("hex"),
+        },
       ],
       config: {
         semanticEnrichment: SemanticEnrichmentConfigSchema.parse({
@@ -12547,15 +12563,22 @@ it("reuses the first LSP source revision for test-case augmentation", async () =
       clientFactory: () => client,
     });
 
-    assert.deepEqual(openedDocuments, [retainedContent, retainedContent]);
-    const testCases = result.rows.symbols.filter(
-      (symbol) => symbol.testCaseJson !== null,
-    );
-    assert.equal(testCases.length, 1);
     assert.equal(
-      testCases[0]?.testCaseJson,
-      '{"framework":"jest","title":"retained revision"}',
+      openedDocuments.filter((content) => content === retainedContent).length,
+      2,
     );
+    assert.equal(
+      openedDocuments.filter((content) => content === overflowContent).length,
+      2,
+    );
+    const testCases = result.rows.symbols
+      .map((symbol) => symbol.testCaseJson)
+      .filter((testCaseJson): testCaseJson is string => testCaseJson !== null)
+      .sort();
+    assert.deepEqual(testCases, [
+      '{"framework":"jest","title":"overflow revision"}',
+      '{"framework":"jest","title":"retained revision"}',
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(externalRoot, { recursive: true, force: true });
@@ -12639,6 +12662,17 @@ it("collects bounded provider test cases and reports deterministic failures", as
   assert.equal(typeof executor.collectProviderTestCaseCandidates, "function");
   if (typeof executor.collectProviderTestCaseCandidates !== "function") return;
 
+  const retainedLimit = executor._providerSourceRetentionForTesting.create(1);
+  for (let index = 0; index < 17; index++) {
+    executor._providerSourceRetentionForTesting.retain(
+      retainedLimit,
+      `src/file-${index}.ts`,
+      "x",
+    );
+  }
+  assert.equal(retainedLimit.byPath.size, 16);
+  assert.equal(retainedLimit.bytes, 16);
+
   loadBuiltInAdapters();
   const root = mkdtempSync(join(tmpdir(), "sdl-provider-test-cases-"));
   const relPath = "src/embedded-cases.ts";
@@ -12672,7 +12706,7 @@ it("collects bounded provider test cases and reports deterministic failures", as
         fileId: `provider-test-cases:${relPath}`,
         relPath,
         languageId: "typescript",
-        contentHash: "5".repeat(64),
+        contentHash: createHash("sha256").update(content).digest("hex"),
         byteSize: Buffer.byteLength(content, "utf8"),
       },
       {
@@ -12695,6 +12729,48 @@ it("collects bounded provider test cases and reports deterministic failures", as
   };
 
   try {
+    const overflowContent = 'test("overflow", () => {});';
+    const overflowFiles = Array.from({ length: 17 }, (_, index) => {
+      const path = `overflow/case-${index}.ts`;
+      mkdirSync(join(root, "overflow"), { recursive: true });
+      writeFileSync(join(root, path), overflowContent, "utf8");
+      return {
+        ...base,
+        kind: "file" as const,
+        fileId: `provider-test-cases:${path}`,
+        relPath: path,
+        languageId: "typescript",
+        contentHash: "0".repeat(64),
+        byteSize: Buffer.byteLength(overflowContent, "utf8"),
+      };
+    });
+    const overflowFacts: ProviderFactSet = {
+      ...facts,
+      files: overflowFiles,
+    };
+    const hydrated = await executor._providerSourceRetentionForTesting.hydrate({
+      repoRoot: root,
+      facts: overflowFacts,
+      maxFileBytes: Buffer.byteLength(overflowContent, "utf8"),
+    });
+    assert.equal(hydrated.retainedSource.byPath.size, 16);
+    assert.deepEqual([...hydrated.overflowRelPaths], ["overflow/case-16.ts"]);
+    assert.equal(
+      hydrated.overflowTestCases.candidatesByPath.get("overflow/case-16.ts")
+        ?.length,
+      1,
+    );
+    rmSync(join(root, "overflow", "case-16.ts"));
+    const retainedOverflow = await executor.collectProviderTestCaseCandidates({
+      repoRoot: root,
+      facts: overflowFacts,
+      maxFileBytes: Buffer.byteLength(overflowContent, "utf8"),
+      retainedSourceByPath: hydrated.retainedSource.byPath,
+      skipRelPaths: hydrated.overflowRelPaths,
+    });
+    assert.equal(retainedOverflow.candidatesByPath.size, 16);
+    assert.deepEqual(retainedOverflow.diagnostics, []);
+
     const collected = await executor.collectProviderTestCaseCandidates({
       repoRoot: root,
       facts,
@@ -12763,6 +12839,32 @@ it("collects bounded provider test cases and reports deterministic failures", as
     assert.deepEqual(escaped.diagnostics, [
       "../escaped.ts: test-case source path outside repository",
     ]);
+
+    if (process.platform === "linux") {
+      const caseRoot = join(root, "Repo");
+      const caseSibling = join(root, "repo");
+      mkdirSync(caseRoot);
+      mkdirSync(caseSibling);
+      writeFileSync(join(caseSibling, "secret.ts"), content, "utf8");
+      const caseEscaped = await executor.collectProviderTestCaseCandidates({
+        repoRoot: caseRoot,
+        facts: {
+          ...facts,
+          files: [
+            {
+              ...facts.files[0]!,
+              fileId: "provider-test-cases:case-sibling",
+              relPath: "../repo/secret.ts",
+            },
+          ],
+        },
+        maxFileBytes: Number.MAX_SAFE_INTEGER,
+      });
+      assert.equal(caseEscaped.candidatesByPath.size, 0);
+      assert.deepEqual(caseEscaped.diagnostics, [
+        "../repo/secret.ts: test-case source path outside repository",
+      ]);
+    }
 
     const retainedPath = "src/retained-revision.ts";
     const retained = await executor.collectProviderTestCaseCandidates({

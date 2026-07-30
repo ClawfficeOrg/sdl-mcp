@@ -15,6 +15,8 @@ import { createClearCacheFunction } from "./BaseAdapter.js";
 import { findEnclosingSymbol as findEnclosingSymbolUtil } from "../treesitter/symbolUtils.js";
 import { normalizeTestCaseFacet } from "../../util/test-case.js";
 
+const MAX_TEST_CASE_CANDIDATES = 64;
+
 const PYTHON_STDLIB_MODULES = new Set([
   "os",
   "sys",
@@ -139,7 +141,10 @@ function detectPythonTestCases(
       }
     }
 
-    for (const child of node.namedChildren) visit(child);
+    for (const child of node.namedChildren) {
+      if (candidates.length >= MAX_TEST_CASE_CANDIDATES) break;
+      visit(child);
+    }
   };
 
   visit(tree.rootNode);
@@ -162,12 +167,16 @@ class PythonAdapter extends BaseAdapter {
     filePath: string;
     symbols: readonly ExtractedSymbol[];
   }): TestCaseCandidate[] {
-    const tree =
-      params.tree ??
-      (/^\s*(?:async\s+)?def\s+test_/mu.test(params.content)
+    const ownedTree =
+      params.tree === null && /^\s*(?:async\s+)?def\s+test_/mu.test(params.content)
         ? this.parse(params.content, params.filePath)
-        : null);
-    return tree ? detectPythonTestCases(tree, params.symbols) : [];
+        : null;
+    const tree = params.tree ?? ownedTree;
+    try {
+      return tree ? detectPythonTestCases(tree, params.symbols) : [];
+    } finally {
+      (ownedTree as unknown as { delete?: () => void } | null)?.delete?.();
+    }
   }
 
   extractSymbols(

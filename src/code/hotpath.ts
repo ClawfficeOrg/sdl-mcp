@@ -219,14 +219,42 @@ export function buildHotPathExcerpt(
 
   const matchedLineNumbers = Array.from(matchedLines).sort((a, b) => a - b);
   const excerptLineSet = new Set<number>();
-
-  matchedLineNumbers.forEach((lineNum) => {
-    const start = Math.max(0, lineNum - 1 - contextLines);
-    const end = Math.min(lines.length, lineNum + contextLines);
-    for (let i = start; i < end; i++) {
-      excerptLineSet.add(i);
+  let selectionTruncated = false;
+  const tryAddLine = (lineIdx: number): void => {
+    if (lineIdx < 0 || lineIdx >= lines.length || excerptLineSet.has(lineIdx)) {
+      return;
     }
-  });
+    if (excerptLineSet.size >= maxLines) {
+      selectionTruncated = true;
+      return;
+    }
+    const candidateLines = [...excerptLineSet, lineIdx].sort((a, b) => a - b);
+    let candidateTokens = 0;
+    let previousLine: number | null = null;
+    for (const candidateLine of candidateLines) {
+      if (previousLine !== null && candidateLine > previousLine + 1) {
+        const gap = candidateLine - previousLine - 1;
+        candidateTokens += estimateTokenCount(
+          `  // ... (${gap} line${gap === 1 ? "" : "s"} skipped)`,
+        );
+      }
+      candidateTokens += estimateTokenCount(lines[candidateLine]);
+      previousLine = candidateLine;
+    }
+    if (candidateTokens > maxTokens) {
+      selectionTruncated = true;
+      return;
+    }
+    excerptLineSet.add(lineIdx);
+  };
+
+  for (const lineNum of matchedLineNumbers) tryAddLine(lineNum - 1);
+  for (let distance = 1; distance <= contextLines; distance++) {
+    for (const lineNum of matchedLineNumbers) {
+      tryAddLine(lineNum - 1 - distance);
+      tryAddLine(lineNum - 1 + distance);
+    }
+  }
 
   const excerptLineNumbers = Array.from(excerptLineSet).sort((a, b) => a - b);
 
@@ -234,7 +262,7 @@ export function buildHotPathExcerpt(
   let remainingTokens = maxTokens;
   let prevLineIdx: number | null = null;
   let consumedLines = 0;
-  let truncated = false;
+  let truncated = selectionTruncated;
   let lastCodeLineLength = 0;
 
   for (const lineIdx of excerptLineNumbers) {

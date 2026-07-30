@@ -2070,7 +2070,7 @@ function canonicalSymbolFields(
     symbol.external ?? false,
     symbol.placeholderKind ?? "",
     symbol.placeholderTarget ?? "",
-    symbol.roleTagsJson ?? null,
+    symbol.roleTagsJson === "" ? null : symbol.roleTagsJson ?? null,
     symbol.testCaseJson ?? null,
   ];
 }

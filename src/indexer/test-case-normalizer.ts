@@ -172,9 +172,18 @@ export function applyTestCaseCandidates(params: {
   calls: ExtractedCall[];
   diagnostics: string[];
 } {
+  if (params.candidates.length === 0) {
+    return {
+      symbols: [...params.symbols],
+      calls: [...params.calls],
+      diagnostics: [],
+    };
+  }
+
   const symbols = params.symbols.map((symbol) => ({ ...symbol }));
   const ordinaryCount = symbols.length;
   const syntheticNodeIds = new Set<string>();
+  const syntheticSymbols: SymbolWithNodeId[] = [];
   const diagnostics: string[] = [];
 
   // Normalize in source order so adapter traversal order cannot affect rows or IDs.
@@ -209,8 +218,7 @@ export function applyTestCaseCandidates(params: {
       continue;
     }
 
-    syntheticNodeIds.add(candidate.nodeId);
-    symbols.push({
+    const syntheticSymbol: SymbolWithNodeId = {
       nodeId: candidate.nodeId,
       kind: candidate.kind,
       name: candidate.name,
@@ -218,14 +226,46 @@ export function applyTestCaseCandidates(params: {
       range: candidate.constructRange,
       astFingerprint: candidate.sourceFingerprint,
       testCase,
-    });
+    };
+    syntheticNodeIds.add(candidate.nodeId);
+    syntheticSymbols.push(syntheticSymbol);
+    symbols.push(syntheticSymbol);
   }
 
-  // Recompute ownership once across the complete ordinary + synthetic set.
+  if (syntheticSymbols.length === 0) {
+    return {
+      symbols,
+      calls: [...params.calls],
+      diagnostics: diagnostics.sort(compareText),
+    };
+  }
+
+  const ordinarySymbolsByNodeId = new Map(
+    params.symbols.map((symbol) => [symbol.nodeId, symbol] as const),
+  );
+  const preferredOrdinaryByRange = new Map<string, SymbolWithNodeId>();
+  for (const symbol of params.symbols) {
+    const key = JSON.stringify(symbol.range);
+    const current = preferredOrdinaryByRange.get(key);
+    if (!current || compareText(symbol.nodeId, current.nodeId) < 0) {
+      preferredOrdinaryByRange.set(key, symbol);
+    }
+  }
+  // Existing ownership supplies the smallest ordinary range; normalize its tie before synthesis.
   const calls = params.calls.map((call) => {
-    const owner = symbols
-      .filter((symbol) => rangeContains(symbol.range, call.range))
-      .sort((left, right) => compareOwners(left, right, syntheticNodeIds))[0];
+    let owner = ordinarySymbolsByNodeId.get(call.callerNodeId);
+    if (owner) {
+      owner = preferredOrdinaryByRange.get(JSON.stringify(owner.range)) ?? owner;
+    }
+    let affected = false;
+    for (const syntheticSymbol of syntheticSymbols) {
+      if (!rangeContains(syntheticSymbol.range, call.range)) continue;
+      affected = true;
+      if (!owner || compareOwners(syntheticSymbol, owner, syntheticNodeIds) < 0) {
+        owner = syntheticSymbol;
+      }
+    }
+    if (!affected) return call;
     return owner ? { ...call, callerNodeId: owner.nodeId } : { ...call };
   });
 

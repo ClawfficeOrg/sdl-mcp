@@ -191,6 +191,10 @@ export function toMinimalCard(card: SymbolCard): SymbolCard {
     version: card.version,
   };
 
+  if (card.testCase) {
+    minimal.testCase = card.testCase;
+  }
+
   if (card.cluster) {
     minimal.cluster = card.cluster;
   }
@@ -215,6 +219,10 @@ export function toSignatureCard(card: SymbolCard): SymbolCard {
     detailLevel: "signature",
     version: card.version,
   };
+
+  if (card.testCase) {
+    signature.testCase = card.testCase;
+  }
 
   if (card.cluster) {
     signature.cluster = card.cluster;
@@ -266,6 +274,10 @@ export function toDepsCard(card: SymbolCard): SymbolCard {
     detailLevel: "deps",
     version: card.version,
   };
+
+  if (card.testCase) {
+    deps.testCase = card.testCase;
+  }
 
   if (card.cluster) {
     deps.cluster = card.cluster;

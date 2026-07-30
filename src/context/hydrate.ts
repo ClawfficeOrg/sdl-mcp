@@ -117,6 +117,7 @@ function projectCardContent(card: SymbolCard): Record<string, unknown> {
     name: card.name,
     ...(card.signature ? { signature: card.signature } : {}),
     ...(card.summary?.trim() ? { summary: card.summary } : {}),
+    ...(card.testCase ? { testCase: card.testCase } : {}),
   };
 }
 

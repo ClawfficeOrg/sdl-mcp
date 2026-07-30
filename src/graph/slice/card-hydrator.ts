@@ -17,6 +17,7 @@ import { symbolCardCache } from "../cache.js";
 import { toFullCard, toCardAtDetailLevel, uniqueLimit } from "../slice/slice-serializer.js";
 import { getOverlaySnapshot, getTargetNamesWithOverlay, mergeEdgeMapWithOverlay, mergeSymbolRowsWithOverlay, type OverlaySnapshot } from "../../live-index/overlay-reader.js";
 import { safeJsonParse, safeJsonParseOptional, StringArraySchema, SignatureSchema } from "../../util/safeJson.js";
+import { parseTestCaseFacetJson } from "../../util/test-case.js";
 import { buildCallResolution } from "./detail-level.js";
 import { buildSliceDepsBySymbol } from "./edge-projector.js";
 import { captureActiveRepoEpoch } from "../../services/repo-lifecycle.js";
@@ -273,6 +274,7 @@ export async function loadSymbolCards(
       invariants: invariants && invariants.length > 0 ? invariants : undefined,
       sideEffects:
         sideEffects && sideEffects.length > 0 ? sideEffects : undefined,
+      testCase: parseTestCaseFacetJson(symbolRow.testCaseJson),
       cluster: clusterRow
         ? {
             clusterId: clusterRow.clusterId,

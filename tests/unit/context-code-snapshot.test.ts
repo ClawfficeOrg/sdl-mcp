@@ -446,3 +446,24 @@ describe("Context code evidence snapshot identity", () => {
     }
   });
 });
+
+it("keeps later matched lines ahead of surrounding context", async () => {
+  const { buildHotPathExcerpt } = await import(
+    "../../dist/code/hotpath.js"
+  );
+  const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+  lines[1] = "first sdl.workflow match";
+  lines[17] = "last sdl.workflow match";
+
+  const result = buildHotPathExcerpt(
+    lines,
+    new Set([2, 18]),
+    4,
+    20,
+    30,
+    new Set(["sdl.workflow"]),
+  );
+
+  assert.ok(result.excerpt.includes("first sdl.workflow match"));
+  assert.ok(result.excerpt.includes("last sdl.workflow match"));
+});

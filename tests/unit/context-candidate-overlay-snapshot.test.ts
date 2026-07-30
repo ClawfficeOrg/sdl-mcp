@@ -407,6 +407,12 @@ it("bounds FileSummary symbol materialization before candidate mapping", async (
         conn: {} as Connection,
         rankings: [
           {
+            source: "vector:jina",
+            entityType: "symbol",
+            ranks: new Map([["symbol-file-a", 1]]),
+            candidateCount: 1,
+          },
+          {
             source: "fts",
             entityType: "fileSummary",
             ranks: new Map([
@@ -457,7 +463,8 @@ it("bounds FileSummary symbol materialization before candidate mapping", async (
   t.mock.module("../../dist/db/ladybug-queries.js", {
     namedExports: {
       ...ladybugQueries,
-      getSearchableSymbolsByIds: async () => new Map(),
+      getSearchableSymbolsByIds: async () =>
+        new Map([["symbol-file-a", makeSymbol("file-a")]]),
       getFilesByIds: async (_conn: Connection, fileIds: string[]) => {
         fileQueryBatches.push([...fileIds]);
         return new Map(fileIds.map((fileId) => [fileId, makeFile(fileId)]));
@@ -502,7 +509,7 @@ it("bounds FileSummary symbol materialization before candidate mapping", async (
     },
   );
 
-  const candidateFileBatch = fileQueryBatches.find((batch) => batch.length > 0);
+  const candidateFileBatch = fileQueryBatches.find((batch) => batch.length > 1);
   assert.deepEqual(candidateFileBatch, [
     "file-a",
     "file-b",
@@ -510,7 +517,6 @@ it("bounds FileSummary symbol materialization before candidate mapping", async (
     "file-d",
   ]);
   assert.deepEqual(symbolQueryLimits, [
-    ["file-a", 1],
     ["file-b", 1],
     ["file-c", 1],
     ["file-d", 1],

@@ -222,7 +222,7 @@ describe("Native parser chaos", () => {
     }
   });
 
-  it("contains Python parse failures while preserving native rows", async () => {
+  it("skips Python fallback parsing for non-test native content", async () => {
     loadBuiltInAdapters();
     const root = mkdtempSync(join(tmpdir(), "sdl-native-python-parse-"));
     const captured: SymbolRow[] = [];
@@ -308,9 +308,7 @@ describe("Native parser chaos", () => {
       assert.equal(captured.length, 1);
       assert.equal(captured[0]?.symbolId, "native-python-parse:ordinary-helper");
       assert.equal(captured[0]?.testCaseJson, null);
-      assert.deepEqual(warnings, [
-        "src/helpers.py: test-case detection failed",
-      ]);
+      assert.deepEqual(warnings, []);
     } finally {
       adapter.parse = parse;
       logger.warn = warn;

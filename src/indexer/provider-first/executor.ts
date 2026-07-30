@@ -13,7 +13,15 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import {
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -334,6 +342,39 @@ interface ProviderFirstSourceFileMetadata {
   contentHash: string;
 }
 
+const MAX_RETAINED_PROVIDER_SOURCE_BYTES = 64 * 1024 * 1024;
+
+function createRetainedProviderSource(maxFileBytes: number) {
+  // ponytail: cap duplicate source retention; later overflow reads must match the first hash.
+  return {
+    byPath: new Map<string, string>(),
+    bytes: 0,
+    maxBytes: Math.min(
+      MAX_RETAINED_PROVIDER_SOURCE_BYTES,
+      Math.max(0, maxFileBytes) * 16,
+    ),
+  };
+}
+
+function retainProviderSource(
+  retained: ReturnType<typeof createRetainedProviderSource>,
+  relPath: string,
+  content: string,
+): boolean {
+  if (retained.byPath.has(relPath)) return true;
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > retained.maxBytes - retained.bytes) return false;
+  retained.byPath.set(relPath, content);
+  retained.bytes += bytes;
+  return true;
+}
+
+export const _providerSourceRetentionForTesting = {
+  create: createRetainedProviderSource,
+  retain: retainProviderSource,
+  hydrate: hydrateProviderFileFactsFromSource,
+};
+
 type ProviderFirstProgressCallback =
   ExecuteProviderFirstScipFullParams["onProgress"];
 
@@ -518,7 +559,7 @@ export async function executeProviderFirstScipFull(
     );
   }
 
-  const retainedSourceByPath = await measureCollectionPhase(
+  const hydratedSource = await measureCollectionPhase(
     "sourceMetadata",
     () =>
       hydrateProviderFileFactsFromSource({
@@ -529,16 +570,23 @@ export async function executeProviderFirstScipFull(
       }),
   );
 
-  const testCases = cachedCollection
-    ? undefined
-    : await measureCollectionPhase("testCases", () =>
+  let testCases: ProviderTestCaseCollection | undefined;
+  if (!cachedCollection) {
+    testCases = emptyProviderTestCaseCollection();
+    mergeProviderTestCaseCollection(testCases, hydratedSource.overflowTestCases);
+    mergeProviderTestCaseCollection(
+      testCases,
+      await measureCollectionPhase("testCases", () =>
         collectProviderTestCaseCandidates({
           repoRoot: params.repoRoot,
           facts: collected.facts,
           maxFileBytes: sourceTextMaxBytes,
-          retainedSourceByPath,
+          retainedSourceByPath: hydratedSource.retainedSource.byPath,
+          skipRelPaths: hydratedSource.overflowRelPaths,
         }),
-      );
+      ),
+    );
+  }
   for (const diagnostic of testCases?.diagnostics ?? []) {
     appendProviderTestCaseDiagnostic(collected.facts, diagnostic);
   }
@@ -665,7 +713,31 @@ export async function executeProviderFirstLspFull(
     ([, server]) => server.enabled !== false,
   );
   const facts: ProviderFactSet = emptyProviderFactSet();
-  const retainedSourceByPath = new Map<string, string>();
+  const retainedSource = createRetainedProviderSource(sourceTextMaxBytes);
+  const overflowSourceHashes = new Map<string, string>();
+  const testCases = emptyProviderTestCaseCollection();
+  const collectDocumentTestCases = async (
+    providerId: string,
+    documents: readonly CollectedLspProviderDocument[],
+  ): Promise<void> => {
+    const retainedSourceByPath = new Map(
+      documents.map((document) => [normalizePath(document.relPath), document.text]),
+    );
+    const onlyRelPaths = new Set(retainedSourceByPath.keys());
+    mergeProviderTestCaseCollection(
+      testCases,
+      await measurePhase(`lsp.${providerId}.testCases`, () =>
+        collectProviderTestCaseCandidates({
+          repoRoot: params.repoRoot,
+          facts,
+          maxFileBytes: sourceTextMaxBytes,
+          retainedSourceByPath,
+          onlyRelPaths,
+          allowSourceRead: false,
+        }),
+      ),
+    );
+  };
   const clientFactory =
     params.clientFactory ??
     ((options: LspClientOptions): ProviderFirstLspClientLike =>
@@ -680,7 +752,8 @@ export async function executeProviderFirstLspFull(
         repoRoot: params.repoRoot,
         server,
         scannedFiles: params.scannedFiles,
-        retainedSourceByPath,
+        retainedSource,
+        overflowSourceHashes,
         maxFileBytes: sourceTextMaxBytes,
         fileLimit:
           params.config.indexing?.providerFirst?.lsp.documentSymbolFileLimit ??
@@ -784,6 +857,7 @@ export async function executeProviderFirstLspFull(
           },
         }),
       );
+      await collectDocumentTestCases(providerId, documents);
       continue;
     }
 
@@ -908,6 +982,7 @@ export async function executeProviderFirstLspFull(
           },
         }),
       );
+      await collectDocumentTestCases(providerId, documents);
     } catch (error) {
       appendProviderFactSet(
         facts,
@@ -932,14 +1007,6 @@ export async function executeProviderFirstLspFull(
     }
   }
 
-  const testCases = await measurePhase("lsp.testCases", () =>
-    collectProviderTestCaseCandidates({
-      repoRoot: params.repoRoot,
-      facts,
-      maxFileBytes: sourceTextMaxBytes,
-      retainedSourceByPath,
-    }),
-  );
   for (const diagnostic of testCases.diagnostics) {
     appendProviderTestCaseDiagnostic(facts, diagnostic);
   }
@@ -1069,7 +1136,8 @@ async function collectLspProviderDocuments(params: {
   repoRoot: string;
   server: SemanticEnrichmentLspServerConfig;
   scannedFiles?: readonly ProviderFirstSourceFileMetadata[];
-  retainedSourceByPath: Map<string, string>;
+  retainedSource: ReturnType<typeof createRetainedProviderSource>;
+  overflowSourceHashes: Map<string, string>;
   maxFileBytes: number;
   fileLimit: number;
 }): Promise<CollectedLspProviderDocument[]> {
@@ -1083,9 +1151,10 @@ async function collectLspProviderDocuments(params: {
     if (!matchesLspProviderFilePatterns(relPath, params.server.filePatterns)) {
       continue;
     }
-    let content = params.retainedSourceByPath.get(relPath);
-    let contentBytes: Buffer;
+
+    let content = params.retainedSource.byPath.get(relPath);
     let absolutePath: string;
+    let contentBytes: Buffer;
     if (content === undefined) {
       const source = await readRepositoryFileBounded(
         params.repoRoot,
@@ -1096,17 +1165,22 @@ async function collectLspProviderDocuments(params: {
       absolutePath = source.absolutePath;
       contentBytes = source.content;
       content = contentBytes.toString("utf8");
-      params.retainedSourceByPath.set(relPath, content);
+      const contentHash = hash("sha256", contentBytes, "hex");
+      const expectedHash = params.overflowSourceHashes.get(relPath);
+      if (expectedHash !== undefined && expectedHash !== contentHash) continue;
+      if (
+        expectedHash === undefined &&
+        !retainProviderSource(params.retainedSource, relPath, content)
+      ) {
+        params.overflowSourceHashes.set(relPath, contentHash);
+      }
     } else {
-      const resolvedPath = await resolveCanonicalDocumentPath(
-        params.repoRoot,
-        relPath,
-      );
-      if (resolvedPath.kind !== "ok") continue;
-      absolutePath = resolvedPath.absolutePath;
+      const lexicalPath = resolveDocumentPath(params.repoRoot, relPath);
+      if (!lexicalPath) continue;
+      absolutePath = lexicalPath;
       contentBytes = Buffer.from(content, "utf8");
-      if (contentBytes.byteLength > params.maxFileBytes) continue;
     }
+
     documents.push({
       relPath,
       uri: pathToFileURL(absolutePath).toString(),
@@ -1513,8 +1587,15 @@ async function hydrateProviderFileFactsFromSource(params: {
   facts: ProviderFactSet;
   scannedFiles?: readonly ProviderFirstSourceFileMetadata[];
   maxFileBytes: number;
-}): Promise<Map<string, string>> {
-  const retainedSourceByPath = new Map<string, string>();
+}): Promise<{
+  retainedSource: ReturnType<typeof createRetainedProviderSource>;
+  overflowTestCases: ProviderTestCaseCollection;
+  overflowRelPaths: Set<string>;
+}> {
+  const retainedSource = createRetainedProviderSource(params.maxFileBytes);
+  const overflowTestCases = emptyProviderTestCaseCollection();
+  const overflowRelPaths = new Set<string>();
+  const symbolsByPath = buildProviderTestCaseSymbolsByPath(params.facts);
   const scannedByPath = new Map(
     params.scannedFiles?.map((file) => [normalizePath(file.path), file]) ?? [],
   );
@@ -1535,9 +1616,27 @@ async function hydrateProviderFileFactsFromSource(params: {
     if (source.kind !== "ok") continue;
     fact.contentHash = hash("sha256", source.content, "hex");
     fact.byteSize = source.content.byteLength;
-    retainedSourceByPath.set(relPath, source.content.toString("utf8"));
+    const content = source.content.toString("utf8");
+    if (!retainProviderSource(retainedSource, relPath, content)) {
+      overflowRelPaths.add(relPath);
+      try {
+        const candidates = detectProviderTestCasesForSource({
+          relPath,
+          content,
+          symbolsByPath,
+        });
+        if (candidates && candidates.length > 0) {
+          overflowTestCases.candidatesByPath.set(relPath, candidates);
+        }
+      } catch {
+        overflowTestCases.diagnostics.push(
+          `${relPath}: test-case detection failed`,
+        );
+      }
+    }
   }
-  return retainedSourceByPath;
+  overflowTestCases.diagnostics.sort((left, right) => left.localeCompare(right));
+  return { retainedSource, overflowTestCases, overflowRelPaths };
 }
 
 function applyProviderFileFactMetadataToRows(
@@ -1961,12 +2060,24 @@ function providerIdForScipEntry(
 
 async function readFileBounded(
   filePath: string,
+  canonicalRoot: string,
   maxFileBytes: number,
 ): Promise<Buffer | null> {
   const handle = await open(filePath, "r");
   try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile() || metadata.size > maxFileBytes) return null;
+    const [metadata, currentPath] = await Promise.all([
+      handle.stat({ bigint: true }),
+      realpath(filePath),
+    ]);
+    const pathMetadata = await stat(currentPath, { bigint: true });
+    if (
+      !isPathInsideRoot(canonicalRoot, normalizePath(currentPath)) ||
+      metadata.dev !== pathMetadata.dev ||
+      metadata.ino !== pathMetadata.ino
+    ) {
+      throw new Error("provider source identity changed during open");
+    }
+    if (!metadata.isFile() || metadata.size > BigInt(maxFileBytes)) return null;
 
     const chunks: Buffer[] = [];
     let totalBytes = 0;
@@ -1987,7 +2098,7 @@ async function readFileBounded(
 }
 
 type CanonicalDocumentPathResult =
-  | { kind: "ok"; absolutePath: string }
+  | { kind: "ok"; absolutePath: string; canonicalRoot: string }
   | { kind: "outsideRoot" | "readFailed" };
 
 type RepositoryFileReadResult =
@@ -2010,7 +2121,7 @@ async function resolveCanonicalDocumentPath(
     const normalizedRoot = normalizePath(canonicalRoot);
     const absolutePath = normalizePath(canonicalSource);
     return isPathInsideRoot(normalizedRoot, absolutePath)
-      ? { kind: "ok", absolutePath }
+      ? { kind: "ok", absolutePath, canonicalRoot: normalizedRoot }
       : { kind: "outsideRoot" };
   } catch {
     return { kind: "readFailed" };
@@ -2027,6 +2138,7 @@ async function readRepositoryFileBounded(
   try {
     const content = await readFileBounded(
       resolvedPath.absolutePath,
+      resolvedPath.canonicalRoot,
       maxFileBytes,
     );
     return content
@@ -2037,22 +2149,33 @@ async function readRepositoryFileBounded(
   }
 }
 
-export async function collectProviderTestCaseCandidates(params: {
-  repoRoot: string;
-  facts: ProviderFactSet;
-  maxFileBytes: number;
-  retainedSourceByPath?: ReadonlyMap<string, string>;
-}): Promise<{
+interface ProviderTestCaseCollection {
   candidatesByPath: Map<string, TestCaseCandidate[]>;
   diagnostics: string[];
-}> {
-  const candidatesByPath = new Map<string, TestCaseCandidate[]>();
-  const diagnostics: string[] = [];
-  const files = [...params.facts.files].sort((left, right) =>
-    normalizePath(left.relPath).localeCompare(normalizePath(right.relPath)),
-  );
+}
+
+function emptyProviderTestCaseCollection(): ProviderTestCaseCollection {
+  return { candidatesByPath: new Map(), diagnostics: [] };
+}
+
+function mergeProviderTestCaseCollection(
+  target: ProviderTestCaseCollection,
+  source: ProviderTestCaseCollection,
+): void {
+  for (const [relPath, candidates] of source.candidatesByPath) {
+    target.candidatesByPath.set(relPath, candidates);
+  }
+  for (const diagnostic of source.diagnostics) {
+    if (!target.diagnostics.includes(diagnostic)) target.diagnostics.push(diagnostic);
+  }
+  target.diagnostics.sort((left, right) => left.localeCompare(right));
+}
+
+function buildProviderTestCaseSymbolsByPath(
+  facts: ProviderFactSet,
+): Map<string, ExtractedSymbol[]> {
   const symbolsByPath = new Map<string, ExtractedSymbol[]>();
-  for (const symbol of params.facts.symbols) {
+  for (const symbol of facts.symbols) {
     if (!symbol.range) continue;
     const relPath = normalizePath(symbol.relPath);
     const symbols = symbolsByPath.get(relPath) ?? [];
@@ -2065,9 +2188,52 @@ export async function collectProviderTestCaseCandidates(params: {
     });
     symbolsByPath.set(relPath, symbols);
   }
+  return symbolsByPath;
+}
+
+function detectProviderTestCasesForSource(params: {
+  relPath: string;
+  content: string;
+  symbolsByPath: ReadonlyMap<string, readonly ExtractedSymbol[]>;
+}): TestCaseCandidate[] | undefined {
+  const adapter = getAdapterForExtension(extname(params.relPath));
+  if (
+    !adapter?.detectTestCases ||
+    (adapter.languageId !== "typescript" && adapter.languageId !== "python")
+  ) {
+    return undefined;
+  }
+  return adapter.detectTestCases({
+    tree: null,
+    content: params.content,
+    filePath: params.relPath,
+    symbols: params.symbolsByPath.get(params.relPath) ?? [],
+  });
+}
+
+export async function collectProviderTestCaseCandidates(params: {
+  repoRoot: string;
+  facts: ProviderFactSet;
+  maxFileBytes: number;
+  retainedSourceByPath?: ReadonlyMap<string, string>;
+  onlyRelPaths?: ReadonlySet<string>;
+  skipRelPaths?: ReadonlySet<string>;
+  allowSourceRead?: boolean;
+}): Promise<ProviderTestCaseCollection> {
+  const result = emptyProviderTestCaseCollection();
+  const files = [...params.facts.files].sort((left, right) =>
+    normalizePath(left.relPath).localeCompare(normalizePath(right.relPath)),
+  );
+  const symbolsByPath = buildProviderTestCaseSymbolsByPath(params.facts);
 
   for (const file of files) {
     const relPath = normalizePath(file.relPath);
+    if (
+      (params.onlyRelPaths && !params.onlyRelPaths.has(relPath)) ||
+      params.skipRelPaths?.has(relPath)
+    ) {
+      continue;
+    }
     const adapter = getAdapterForExtension(extname(relPath));
     if (
       !adapter?.detectTestCases ||
@@ -2076,55 +2242,55 @@ export async function collectProviderTestCaseCandidates(params: {
       continue;
     }
 
-    let content: string;
-    const retainedSource = params.retainedSourceByPath?.get(relPath);
-    if (retainedSource !== undefined) {
-      if (Buffer.byteLength(retainedSource, "utf8") > params.maxFileBytes) continue;
-      content = retainedSource;
+    let content = params.retainedSourceByPath?.get(relPath);
+    if (content !== undefined) {
+      if (Buffer.byteLength(content, "utf8") > params.maxFileBytes) continue;
     } else {
+      if (params.allowSourceRead === false) continue;
       const source = await readRepositoryFileBounded(
         params.repoRoot,
         relPath,
         params.maxFileBytes,
       );
       if (source.kind === "outsideRoot") {
-        diagnostics.push(`${relPath}: test-case source path outside repository`);
+        result.diagnostics.push(`${relPath}: test-case source path outside repository`);
         continue;
       }
       if (source.kind === "readFailed") {
-        diagnostics.push(`${relPath}: test-case source read failed`);
+        result.diagnostics.push(`${relPath}: test-case source read failed`);
         continue;
       }
       if (source.kind === "tooLarge") continue;
+      const currentHash = hash("sha256", source.content, "hex");
+      if (
+        typeof file.contentHash === "string" &&
+        /^[a-f0-9]{64}$/iu.test(file.contentHash) &&
+        currentHash !== file.contentHash
+      ) {
+        result.diagnostics.push(
+          `${relPath}: test-case source changed during provider collection`,
+        );
+        continue;
+      }
       content = source.content.toString("utf8");
     }
 
-    let tree: ReturnType<typeof adapter.parse> = null;
     try {
-      if (adapter.languageId === "python") {
-        tree = adapter.parse(content, relPath);
-      }
-      const symbols = symbolsByPath.get(relPath) ?? [];
-      const candidates = adapter.detectTestCases({
-        tree,
+      const candidates = detectProviderTestCasesForSource({
+        relPath,
         content,
-        filePath: relPath,
-        symbols,
+        symbolsByPath,
       });
-      if (candidates.length > 0) {
-        candidatesByPath.set(relPath, candidates);
+      if (candidates && candidates.length > 0) {
+        result.candidatesByPath.set(relPath, candidates);
       }
     } catch {
-      diagnostics.push(`${relPath}: test-case detection failed`);
-    } finally {
-      if (tree) {
-        (tree as unknown as { delete: () => void }).delete();
-      }
+      result.diagnostics.push(`${relPath}: test-case detection failed`);
     }
   }
 
-  diagnostics.sort((left, right) => left.localeCompare(right));
-  return { candidatesByPath, diagnostics };
+  result.diagnostics.sort((left, right) => left.localeCompare(right));
+  return result;
 }
 
 function appendProviderTestCaseDiagnostic(
@@ -2560,7 +2726,7 @@ function resolveSourceTextMaxBytes(
   config: AppConfig,
 ): number {
   const normalizedRoot = normalizePath(repoRoot).toLowerCase();
-  const repoConfig = config.repos.find((repo) => {
+  const repoConfig = config.repos?.find((repo) => {
     return (
       repo.repoId === repoId ||
       normalizePath(repo.rootPath).toLowerCase() === normalizedRoot
@@ -2584,11 +2750,10 @@ function isPathInsideRoot(
   normalizedRoot: string,
   candidatePath: string,
 ): boolean {
-  const comparisonRoot = normalizedRoot.toLowerCase();
-  const comparisonPath = normalizePath(candidatePath).toLowerCase();
+  const relPath = relative(normalizedRoot, candidatePath);
   return (
-    comparisonPath === comparisonRoot ||
-    comparisonPath.startsWith(`${comparisonRoot}/`)
+    relPath === "" ||
+    (!isAbsolute(relPath) && relPath !== ".." && !relPath.startsWith(`..${sep}`))
   );
 }
 

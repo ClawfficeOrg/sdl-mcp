@@ -17,6 +17,7 @@ import {
   loadBuiltInAdapters,
 } from "../../dist/indexer/adapter/registry.js";
 import type { LanguageAdapter } from "../../dist/indexer/adapter/LanguageAdapter.js";
+import type { SymbolWithNodeId } from "../../dist/indexer/worker.js";
 import type { ExtractedCall, ExtractedSymbol } from "../../dist/indexer/treesitter/extractCalls.js";
 import type { ExtractedImport } from "../../dist/indexer/treesitter/extractImports.js";
 import {
@@ -324,18 +325,21 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   const tree = adapter.parse(content, absFixture);
   if (!tree) return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: "ts-parse-failed" };
   const rawTsSymbols = adapter.extractSymbols(tree, content, absFixture) as ExtractedSymbol[];
+  const rawTsSymbolsWithFingerprints: SymbolWithNodeId[] = rawTsSymbols.map(
+    (symbol) => ({ ...symbol, astFingerprint: "" }),
+  );
   const tsImports = adapter.extractImports(tree, content, absFixture);
   const rawTsCalls = adapter.extractCalls(tree, content, absFixture, rawTsSymbols);
   const normalizedTs = applyTestCaseCandidates({
     relPath,
-    symbols: rawTsSymbols,
+    symbols: rawTsSymbolsWithFingerprints,
     calls: rawTsCalls,
     candidates:
       adapter.detectTestCases?.({
         tree,
         content,
         filePath: absFixture,
-        symbols: rawTsSymbols,
+        symbols: rawTsSymbolsWithFingerprints,
       }) ?? [],
   });
 
@@ -371,7 +375,7 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   const tsOwnerMap = buildNodeOwnerMap(normalizedTs.symbols);
   const rustOwnerMap = buildNodeOwnerMap(normalizedRust.symbols);
   const rawTsSymbolsWithIds = buildSymbolDetails({
-    symbolsWithNodeIds: rawTsSymbols,
+    symbolsWithNodeIds: rawTsSymbolsWithFingerprints,
     tree,
     repoId: "parity-harness",
     fileMeta,

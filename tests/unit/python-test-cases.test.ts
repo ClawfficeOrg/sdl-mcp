@@ -111,6 +111,68 @@ describe("PythonAdapter.detectTestCases", () => {
     assert.deepEqual(detect(false), detect(true));
   });
 
+  it("deletes only internally parsed fallback trees", () => {
+    const adapter = new PythonAdapter();
+    const retainedTree = adapter.parse(CONTENT, "tests/test_sample.py");
+    assert.ok(retainedTree);
+    const symbols = adapter.extractSymbols(retainedTree, CONTENT, "tests/test_sample.py");
+    let retainedDeleteCount = 0;
+    (retainedTree as unknown as { delete: () => void }).delete = () => {
+      retainedDeleteCount++;
+    };
+    const parse = adapter.parse.bind(adapter);
+    let fallbackDeleteCount = 0;
+    adapter.parse = (...args) => {
+      const fallbackTree = parse(...args);
+      assert.ok(fallbackTree);
+      (fallbackTree as unknown as { delete: () => void }).delete = () => {
+        fallbackDeleteCount++;
+      };
+      return fallbackTree;
+    };
+
+    try {
+      adapter.detectTestCases?.({
+        tree: retainedTree,
+        content: CONTENT,
+        filePath: "tests/test_sample.py",
+        symbols,
+      });
+      assert.equal(retainedDeleteCount, 0);
+
+      adapter.detectTestCases?.({
+        tree: null,
+        content: CONTENT,
+        filePath: "tests/test_sample.py",
+        symbols,
+      });
+      assert.equal(fallbackDeleteCount, 1);
+    } finally {
+      (retainedTree as unknown as { delete: () => void }).delete();
+    }
+  });
+
+  it("caps detection at the first 64 test declarations", () => {
+    const adapter = new PythonAdapter();
+    const content = Array.from(
+      { length: 65 },
+      (_, index) => `def test_${String(index).padStart(2, "0")}():\n    pass`,
+    ).join("\n\n");
+    const tree = adapter.parse(content, "tests/test_many.py");
+    assert.ok(tree);
+    const symbols = adapter.extractSymbols(tree, content, "tests/test_many.py");
+
+    const candidates = adapter.detectTestCases?.({
+      tree,
+      content,
+      filePath: "tests/test_many.py",
+      symbols,
+    });
+
+    assert.equal(candidates?.length, 64);
+    assert.equal(candidates?.at(-1)?.testCase.title, "test_63");
+  });
+
   it("does not parse null-tree content without a test declaration hint", () => {
     const adapter = new PythonAdapter();
     adapter.parse = () => {

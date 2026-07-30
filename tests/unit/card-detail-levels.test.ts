@@ -527,3 +527,24 @@ describe("card detail levels - backward compatibility", () => {
     assert.strictEqual(wireLevel, "full");
   });
 });
+
+describe("card detail levels - semantic test-case facet", () => {
+  it("preserves the facet at every detail level", () => {
+    const testCase = {
+      framework: "node:test",
+      title: "keeps sdl.info callable",
+      suitePath: ["Code Mode"],
+    };
+    const card = { ...FULL_CARD, testCase };
+
+    for (const project of [
+      toMinimalCard,
+      toSignatureCard,
+      toDepsCard,
+      toCompactCard,
+      toFullCard,
+    ]) {
+      assert.deepStrictEqual(project(card).testCase, testCase);
+    }
+  });
+});

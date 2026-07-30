@@ -19,6 +19,8 @@ import {
   getDerivedStateSummary,
 } from "../../dist/db/ladybug-derived-state.js";
 import { LADYBUG_SCHEMA_VERSION } from "../../dist/db/migrations/index.js";
+import * as m024 from "../../dist/db/migrations/m024-add-symbol-test-case.js";
+import { runPendingMigrations } from "../../dist/db/migration-runner.js";
 
 async function createVersion22Database(
   dbPath: string,
@@ -135,6 +137,60 @@ describe("migration: graph integrity revisions and manifest", () => {
       rmSync(root, { recursive: true, force: true });
     }
     root = "";
+  });
+
+  it("does not stamp m024 when core symbol tables are missing", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-integrity-m024-invalid-"));
+    const kuzu = await import("kuzu");
+    const db = new kuzu.Database(join(root, "invalid.lbug"));
+    const conn = new kuzu.Connection(db);
+
+    try {
+      for (const ddl of [
+        `CREATE NODE TABLE DerivedState (
+          repoId STRING PRIMARY KEY,
+          graphIntegrityState STRING,
+          graphIntegrityVersionId STRING,
+          graphIntegrityDigest STRING,
+          graphIntegrityError STRING,
+          graphIntegrityRevision INT64,
+          graphIntegrityVerifiedRevision INT64,
+          graphIntegrityFilelessPruningSupported BOOL,
+          graphIntegrityManifestEstablished BOOL
+        )`,
+        `CREATE NODE TABLE SchemaVersion (
+          id STRING PRIMARY KEY,
+          schemaVersion INT64,
+          createdAt STRING,
+          updatedAt STRING
+        )`,
+      ]) {
+        const result = await conn.query(ddl);
+        (Array.isArray(result) ? result[0] : result).close();
+      }
+      await exec(
+        conn,
+        `CREATE (sv:SchemaVersion {
+           id: 'current',
+           schemaVersion: 23,
+           createdAt: '2026-07-21T00:00:00.000Z',
+           updatedAt: '2026-07-21T00:00:00.000Z'
+         })`,
+      );
+
+      await assert.rejects(
+        runPendingMigrations(conn, 23, [m024]),
+        /Symbol/u,
+      );
+      const schemaVersion = await querySingle<{ schemaVersion: unknown }>(
+        conn,
+        "MATCH (v:SchemaVersion {id: 'current'}) RETURN v.schemaVersion AS schemaVersion",
+      );
+      assert.equal(Number(schemaVersion?.schemaVersion), 23);
+    } finally {
+      await conn.close();
+      await db.close();
+    }
   });
 
   it("migrates a populated m022 graph through m024 without deleting nodes", async () => {
