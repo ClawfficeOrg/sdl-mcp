@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Keep Linux and production runtime guardrails unchanged while accommodating measured Windows CI startup and tail-latency variance.
+**Goal:** Keep Linux and runtime guardrails unchanged while accommodating measured Windows CI tail-latency variance and isolating the PowerShell test from host `cmd.exe` configuration.
 
-**Architecture:** Select the benchmark threshold from the artifact operating system at the existing artifact-construction boundary. Configure the slow-runner allowance inside the single PowerShell integration test so production defaults remain unchanged.
+**Architecture:** Select the benchmark threshold from the artifact operating system at the existing artifact-construction boundary. Disable `cmd.exe` AutoRun processing inside the single PowerShell integration test so host configuration cannot hang the nested command.
 
 **Tech Stack:** TypeScript, Node.js `node:test`, GitHub Actions
 
@@ -63,14 +63,14 @@ Run the command from Step 2.
 
 Expected: PASS.
 
-### Task 2: Isolate the PowerShell integration-test budget
+### Task 2: Isolate the PowerShell integration test from cmd AutoRun
 
 **Files:**
 - Modify: `tests/integration/mcp-runtime-tool.test.ts:318-334`
 
-- [ ] **Step 1: Set the test-local policy and request budget**
+- [ ] **Step 1: Disable cmd AutoRun processing**
 
-Before calling `handleRuntimeExecute`, write a runtime config with `maxDurationMs: 60_000`, invalidate the config cache, and pass `timeoutMs: 60_000` in that request. Do not change production defaults.
+Invoke the nested command as `cmd.exe /d /c ...`. Keep the default runtime budget so a real hang still fails promptly.
 
 - [ ] **Step 2: Run the targeted integration test**
 
@@ -81,7 +81,7 @@ $env:SDL_MCP_DISABLE_NATIVE_ADDON='1'
 node --experimental-strip-types --test --test-name-pattern="persists nested native-command output from PowerShell" tests/integration/mcp-runtime-tool.test.ts
 ```
 
-Expected: PASS with `status: "success"` and both persisted output matches.
+Expected: PASS with `status: "success"` and both persisted output matches. Repeat the focused file five times to detect recurrence before pushing.
 
 ### Task 3: Verify and publish
 
