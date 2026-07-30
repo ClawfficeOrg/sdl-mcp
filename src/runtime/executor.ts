@@ -76,7 +76,6 @@ export function buildScrubbedEnv(
     const pathExt = process.env.PATHEXT;
     const home = process.env.USERPROFILE;
     const temp = process.env.TEMP;
-    const systemRoot = process.env.SYSTEMROOT;
     if (pathExt) {
       env.PATHEXT = pathExt;
     }
@@ -85,9 +84,6 @@ export function buildScrubbedEnv(
     }
     if (temp) {
       env.TEMP = temp;
-    }
-    if (systemRoot) {
-      env.SYSTEMROOT = systemRoot;
     }
   } else {
     const home = process.env.HOME;

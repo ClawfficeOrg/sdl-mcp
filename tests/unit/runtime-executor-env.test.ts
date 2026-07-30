@@ -54,17 +54,4 @@ describe("buildScrubbedEnv with requiredEnvKeys", () => {
       assert.strictEqual(env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
     },
   );
-
-  it(
-    "preserves SYSTEMROOT for nested native commands on Windows",
-    { skip: process.platform !== "win32" },
-    () => {
-      delete process.env.SYSTEMROOT;
-      process.env.SystemRoot = "C:\\Windows";
-
-      const env = buildScrubbedEnv([]);
-
-      assert.strictEqual(env.SYSTEMROOT, "C:\\Windows");
-    },
-  );
 });

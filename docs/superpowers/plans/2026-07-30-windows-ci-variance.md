@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Keep Linux and runtime guardrails unchanged while accommodating measured Windows CI tail-latency variance and preserving the Windows environment required by nested native commands.
+**Goal:** Keep Linux and runtime guardrails unchanged while accommodating measured Windows CI tail-latency variance and avoiding the hosted Windows PowerShell 5 hang.
 
-**Architecture:** Select the benchmark threshold from the artifact operating system at the existing artifact-construction boundary. Preserve `SYSTEMROOT` beside the existing Windows runtime environment keys so nested commands receive the same minimal environment used by the repository's established safe-spawn path.
+**Architecture:** Select the benchmark threshold from the artifact operating system at the existing artifact-construction boundary. Run the Windows-only nested-command integration boundary with the workflow's allowlisted PowerShell 7 executable.
 
 **Tech Stack:** TypeScript, Node.js `node:test`, GitHub Actions
 
@@ -63,30 +63,23 @@ Run the command from Step 2.
 
 Expected: PASS.
 
-### Task 2: Preserve the Windows system root
+### Task 2: Use the workflow PowerShell runtime
 
 **Files:**
-- Modify: `src/runtime/executor.ts:75-91`
-- Modify: `tests/unit/runtime-executor-env.test.ts:46-69`
 - Modify: `tests/integration/mcp-runtime-tool.test.ts:318-334`
 
-- [ ] **Step 1: Add the failing environment regression**
+- [ ] **Step 1: Select PowerShell 7**
 
-Assert that `buildScrubbedEnv` preserves a case-insensitive Windows `SYSTEMROOT` value. Run the unit test before editing the executor and confirm it fails with `undefined`.
+Set `executable: "pwsh.exe"` on the Windows-only request. Keep the original nested `cmd.exe` command and default timeout so the output-persistence and native-resolution contract remains covered.
 
-- [ ] **Step 2: Preserve SYSTEMROOT**
-
-Copy `process.env.SYSTEMROOT` to the scrubbed environment when present. Do not broaden the allowlist or change runtime timeouts.
-
-- [ ] **Step 3: Run the targeted tests**
+- [ ] **Step 2: Run the targeted test**
 
 ```powershell
 $env:SDL_MCP_DISABLE_NATIVE_ADDON='1'
-node --experimental-strip-types --test tests/unit/runtime-executor-env.test.ts
 node --experimental-strip-types --test --test-name-pattern="persists nested native-command output from PowerShell" tests/integration/mcp-runtime-tool.test.ts
 ```
 
-Expected: both pass with `status: "success"` and both persisted output matches.
+Expected: PASS with `status: "success"` and both persisted output matches.
 
 ### Task 3: Verify and publish
 
