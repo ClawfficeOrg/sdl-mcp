@@ -24,6 +24,7 @@ import {
   runSynchronousControl,
   superviseBenchmarkWorker,
   validateBenchmarkWorkRoot,
+  type BenchmarkArtifactInput,
   type BenchmarkPartialProgress,
   type BenchmarkWorkerMessage,
 } from "../../scripts/background-graph-integrity-benchmark.ts";
@@ -895,7 +896,7 @@ describe("background graph integrity benchmark contract", () => {
       concurrentForegroundMs: 120,
       timeoutCount: 0,
       foregroundFullGraphCaptures: 0,
-    };
+    } satisfies BenchmarkArtifactInput;
     const artifact = buildBenchmarkArtifact(artifactInput);
 
     assert.deepEqual(Object.keys(artifact), [

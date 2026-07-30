@@ -330,7 +330,8 @@ export function nearestRankPercentile(
 
 export function evaluateBenchmarkChecks(
   metrics: BenchmarkThresholdInputs,
-  thresholds = DEFAULT_THRESHOLDS,
+  thresholds: Readonly<Record<keyof typeof DEFAULT_THRESHOLDS, number>> =
+    DEFAULT_THRESHOLDS,
 ): BenchmarkCheck[] {
   const ratio =
     metrics.controlForegroundP50Ms > 0
