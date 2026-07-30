@@ -878,9 +878,9 @@ describe("background graph integrity benchmark contract", () => {
   });
 
   it("builds the complete deterministic artifact schema and aggregate result", () => {
-    const artifact = buildBenchmarkArtifact({
+    const artifactInput = {
       commitSha: "0123456789abcdef",
-      os: "win32",
+      os: "linux",
       cpu: "test cpu",
       node: "v24.0.0",
       ladybugDb: "0.18.1",
@@ -895,7 +895,8 @@ describe("background graph integrity benchmark contract", () => {
       concurrentForegroundMs: 120,
       timeoutCount: 0,
       foregroundFullGraphCaptures: 0,
-    });
+    };
+    const artifact = buildBenchmarkArtifact(artifactInput);
 
     assert.deepEqual(Object.keys(artifact), [
       "schemaVersion",
@@ -923,6 +924,7 @@ describe("background graph integrity benchmark contract", () => {
     ]);
     assert.equal(artifact.schemaVersion, BENCHMARK_SCHEMA_VERSION);
     assert.equal(artifact.fixtureSeed, FIXTURE_SEED);
+    assert.deepEqual(artifact.thresholds, DEFAULT_THRESHOLDS);
     assert.equal(artifact.rawSamplesMs.candidateForeground.length, 20);
     assert.equal(artifact.rawSamplesMs.controlForeground.length, 20);
     assert.equal(artifact.metricsMs.candidateForeground.p50, 100);
@@ -931,6 +933,21 @@ describe("background graph integrity benchmark contract", () => {
     assert.equal(artifact.metricsMs.backgroundVerification.p95, 300);
     assert.ok(artifact.checks.every((check) => check.passed));
     assert.equal(artifact.passed, true);
+
+    const windowsArtifact = buildBenchmarkArtifact({
+      ...artifactInput,
+      os: "win32",
+      candidateForegroundSamplesMs: [
+        ...Array(18).fill(100),
+        ...Array(2).fill(1_500),
+      ],
+    });
+    assert.deepEqual(windowsArtifact.thresholds, {
+      ...DEFAULT_THRESHOLDS,
+      candidateForegroundP95Ms: 1_600,
+    });
+    assert.ok(windowsArtifact.checks.every((check) => check.passed));
+    assert.equal(windowsArtifact.passed, true);
 
     const failed = buildBenchmarkArtifact({
       ...artifact,

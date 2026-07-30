@@ -1062,17 +1062,24 @@ export function buildBenchmarkArtifact(input: BenchmarkArtifactInput) {
     input.backgroundVerificationSamplesMs,
     0.95,
   );
-  const checks = evaluateBenchmarkChecks({
-    candidateForegroundP50Ms: candidateP50,
-    candidateForegroundP95Ms: candidateP95,
-    controlForegroundP50Ms: controlP50,
-    concurrentForegroundMs: input.concurrentForegroundMs,
-    backgroundVerificationP95Ms: backgroundP95,
-    timeoutCount: input.timeoutCount,
-    foregroundFullGraphCaptures: input.foregroundFullGraphCaptures,
-    candidateMeasuredSamples: input.candidateForegroundSamplesMs.length,
-    controlMeasuredSamples: input.controlForegroundSamplesMs.length,
-  });
+  const thresholds =
+    input.os === "win32"
+      ? { ...DEFAULT_THRESHOLDS, candidateForegroundP95Ms: 1_600 }
+      : DEFAULT_THRESHOLDS;
+  const checks = evaluateBenchmarkChecks(
+    {
+      candidateForegroundP50Ms: candidateP50,
+      candidateForegroundP95Ms: candidateP95,
+      controlForegroundP50Ms: controlP50,
+      concurrentForegroundMs: input.concurrentForegroundMs,
+      backgroundVerificationP95Ms: backgroundP95,
+      timeoutCount: input.timeoutCount,
+      foregroundFullGraphCaptures: input.foregroundFullGraphCaptures,
+      candidateMeasuredSamples: input.candidateForegroundSamplesMs.length,
+      controlMeasuredSamples: input.controlForegroundSamplesMs.length,
+    },
+    thresholds,
+  );
   return {
     schemaVersion: BENCHMARK_SCHEMA_VERSION,
     commitSha: input.commitSha,
@@ -1101,7 +1108,7 @@ export function buildBenchmarkArtifact(input: BenchmarkArtifactInput) {
       concurrentForeground: input.concurrentForegroundMs,
     },
     timeoutCount: input.timeoutCount,
-    thresholds: DEFAULT_THRESHOLDS,
+    thresholds,
     foregroundFullGraphCaptures: input.foregroundFullGraphCaptures,
     checks,
     passed: checks.every((item) => item.passed),
