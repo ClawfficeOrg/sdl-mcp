@@ -391,6 +391,7 @@ const SKIP_PATTERNS = [
   "sqlite-to-ladybug-migration", // Requires SQLite test data.
   "vscode-buffer-push", // Requires VS Code extension environment.
   "check-benchmark-claims", // Benchmark validation only.
+  "context-quality.test.ts", // Scheduled benchmark with an immutable corpus checkout.
   "build-exe", // Build process test.
   "stress-timing-diagnostics", // Stress test only.
   "runner.test.ts", // Meta-test for test runner itself.

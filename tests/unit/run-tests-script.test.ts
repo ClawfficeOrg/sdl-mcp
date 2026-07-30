@@ -53,4 +53,11 @@ describe("run-tests script parallel suites", () => {
     assert.match(runnerSource, /needsExperimentalModuleMocks\(testFile\)/);
     assert.match(runnerSource, /--experimental-test-module-mocks/);
   });
+
+  it("excludes the pinned context-quality suite from the ordinary runner", () => {
+    assert.match(
+      runnerSource,
+      /const SKIP_PATTERNS = \[[\s\S]*"context-quality\.test\.ts"/,
+    );
+  });
 });
