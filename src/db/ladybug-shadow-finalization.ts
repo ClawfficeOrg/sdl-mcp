@@ -386,7 +386,7 @@ interface SemanticProviderRunCopyRow {
   edgesReplaced: number;
   edgesSkipped: number;
   diagnosticsCount: number;
-  precisionScore: number;
+  precisionScore: number | null;
   cacheHit: boolean;
   canAffectPass2: boolean;
   selected: boolean;
@@ -1123,7 +1123,7 @@ async function readSemanticProviderRunsForRepo(
             coalesce(r.edgesReplaced, 0) AS edgesReplaced,
             coalesce(r.edgesSkipped, 0) AS edgesSkipped,
             coalesce(r.diagnosticsCount, 0) AS diagnosticsCount,
-            coalesce(r.precisionScore, 0.0) AS precisionScore,
+            r.precisionScore AS precisionScore,
             coalesce(r.cacheHit, false) AS cacheHit,
             coalesce(r.canAffectPass2, false) AS canAffectPass2,
             coalesce(r.selected, true) AS selected,
@@ -1154,7 +1154,8 @@ async function readSemanticProviderRunsForRepo(
     edgesReplaced: toNumber(row.edgesReplaced),
     edgesSkipped: toNumber(row.edgesSkipped),
     diagnosticsCount: toNumber(row.diagnosticsCount),
-    precisionScore: toNumber(row.precisionScore),
+    precisionScore:
+      row.precisionScore == null ? null : toNumber(row.precisionScore),
     cacheHit: toBoolean(row.cacheHit),
     canAffectPass2: toBoolean(row.canAffectPass2),
     selected: toBoolean(row.selected),
@@ -1236,6 +1237,13 @@ async function replaceSemanticProvenanceRows(
   const chunkSize = 256;
   for (let i = 0; i < providerRuns.length; i += chunkSize) {
     const rows = providerRuns.slice(i, i + chunkSize);
+    const nullPrecisionRunIds = rows
+      .filter((row) => row.precisionScore === null)
+      .map((row) => row.runId);
+    const copyRows = rows.map((row) => ({
+      ...row,
+      precisionScore: String(row.precisionScore ?? 0.875),
+    }));
     await exec(
       conn,
       `UNWIND $rows AS row
@@ -1260,14 +1268,24 @@ async function replaceSemanticProvenanceRows(
            r.edgesReplaced = row.edgesReplaced,
            r.edgesSkipped = row.edgesSkipped,
            r.diagnosticsCount = row.diagnosticsCount,
-           r.precisionScore = row.precisionScore,
+           r.precisionScore = CAST(row.precisionScore AS DOUBLE),
            r.cacheHit = row.cacheHit,
            r.canAffectPass2 = row.canAffectPass2,
            r.selected = row.selected,
            r.metadataJson = row.metadataJson,
            r.error = row.error`,
-      { rows },
+      { rows: copyRows },
     );
+    if (nullPrecisionRunIds.length > 0) {
+      // Ladybug list parameters require one concrete struct type; restore nullable scores after the typed batch.
+      await exec(
+        conn,
+        `MATCH (r:SemanticProviderRun)
+         WHERE r.runId IN $runIds
+         SET r.precisionScore = null`,
+        { runIds: nullPrecisionRunIds },
+      );
+    }
   }
 
   for (let i = 0; i < diagnostics.length; i += chunkSize) {

@@ -80,7 +80,7 @@ describe("LadybugDB semantic enrichment queries", () => {
     "upserts provider runs, diagnostics, and precision metrics",
     { skip: !ladybugAvailable },
     async () => {
-      await queries.mergeSemanticProviderRun(conn, {
+      const providerRun = {
         runId: "run-1",
         repoId: "repo-1",
         providerType: "scip",
@@ -102,12 +102,13 @@ describe("LadybugDB semantic enrichment queries", () => {
         edgesReplaced: 0,
         edgesSkipped: 1,
         diagnosticsCount: 1,
-        precisionScore: 0.95,
+        precisionScore: 0.875,
         cacheHit: false,
         canAffectPass2: true,
         selected: true,
         metadataJson: '{"tier":"scip"}',
-      });
+      } as const;
+      await queries.mergeSemanticProviderRun(conn, providerRun);
 
       const runs = await queries.getLatestSemanticProviderRuns(conn, "repo-1");
       assert.strictEqual(runs.length, 1);
@@ -115,6 +116,26 @@ describe("LadybugDB semantic enrichment queries", () => {
       assert.strictEqual(runs[0].cacheKey, "cache-1");
       assert.strictEqual(runs[0].canAffectPass2, true);
       assert.strictEqual(runs[0].metadataJson, '{"tier":"scip"}');
+      assert.strictEqual(runs[0].precisionScore, 0.875);
+
+      await queries.mergeSemanticProviderRun(conn, {
+        ...providerRun,
+        precisionScore: undefined,
+      });
+      const [clearedRun] = await queries.getLatestSemanticProviderRuns(
+        conn,
+        "repo-1",
+      );
+      const [rawClearedRun] = await queries.queryAll<{
+        precisionScore: unknown;
+      }>(
+        conn,
+        `MATCH (r:SemanticProviderRun {runId: 'run-1'})
+         RETURN r.precisionScore AS precisionScore`,
+        {},
+      );
+      assert.strictEqual(clearedRun.precisionScore, undefined);
+      assert.strictEqual(rawClearedRun.precisionScore, null);
 
       await queries.mergeSemanticDiagnostics(conn, [
         {

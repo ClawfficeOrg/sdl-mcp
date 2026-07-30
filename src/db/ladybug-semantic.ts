@@ -196,7 +196,7 @@ export async function mergeSemanticProviderRun(
       edgesReplaced: run.edgesReplaced,
       edgesSkipped: run.edgesSkipped,
       diagnosticsCount: run.diagnosticsCount,
-      precisionScore: run.precisionScore ?? 0,
+      precisionScore: run.precisionScore ?? null,
       cacheHit: run.cacheHit ?? false,
       canAffectPass2: run.canAffectPass2 ?? false,
       selected: run.selected ?? true,
@@ -294,7 +294,8 @@ export async function getLatestSemanticProviderRuns(
     edgesReplaced: toNumber(row.edgesReplaced),
     edgesSkipped: toNumber(row.edgesSkipped),
     diagnosticsCount: toNumber(row.diagnosticsCount),
-    precisionScore: toNumber(row.precisionScore),
+    precisionScore:
+      row.precisionScore == null ? undefined : toNumber(row.precisionScore),
     cacheHit: toBoolean(row.cacheHit),
     canAffectPass2: toBoolean(row.canAffectPass2),
     selected:

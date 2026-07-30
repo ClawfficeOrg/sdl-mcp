@@ -8,6 +8,8 @@ import { z } from "zod";
 import { registerTools } from "../../dist/mcp/tools/index.js";
 import { MCPServer } from "../../dist/server.js";
 import { getVersion } from "../../dist/cli/commands/version.js";
+import { WorkflowRequestSchema } from "../../dist/code-mode/types.js";
+import { buildCompactJsonSchema } from "../../dist/gateway/compact-schema.js";
 
 interface RegisteredToolCall {
   name: string;
@@ -564,6 +566,47 @@ describe("MCP tool registration", () => {
     assert.ok(sliceBudget);
     assert.ok("maxEstimatedTokens" in sliceBudget);
     assert.ok(!("maxTokens" in sliceBudget));
+  });
+
+  it("publishes the complete workflow request schema", async () => {
+    const mcpServer = new MCPServer();
+    registerTools(mcpServer, {}, undefined, {
+      enabled: true,
+      exclusive: true,
+      maxWorkflowSteps: 20,
+      maxWorkflowTokens: 50000,
+      maxWorkflowDurationMs: 30000,
+      ladderValidation: "warn",
+      etagCaching: true,
+    });
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      mcpServer.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      const listed = await client.listTools();
+      const workflow = listed.tools.find((tool) => tool.name === "sdl.workflow");
+      assert.ok(workflow, "expected sdl.workflow to be registered");
+      assert.deepStrictEqual(
+        workflow.inputSchema,
+        buildCompactJsonSchema(WorkflowRequestSchema),
+      );
+      const stepProperties = (
+        workflow.inputSchema.properties?.steps as {
+          items?: { properties?: Record<string, unknown> };
+        }
+      ).items?.properties;
+      assert.ok(
+        stepProperties && "maxResponseTokens" in stepProperties,
+        "expected steps[].maxResponseTokens in the published schema",
+      );
+    } finally {
+      await client.close();
+    }
   });
 
   it("registers universal and code-mode tools when exclusive mode is enabled", async () => {

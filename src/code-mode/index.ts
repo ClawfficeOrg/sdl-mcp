@@ -534,30 +534,7 @@ export function registerCodeModeTools(
           projectWorkflowChildResultForModel(fn, result, rawObject, args),
       );
     },
-    {
-      type: "object",
-      properties: {
-        repoId: { type: "string", minLength: 1 },
-        steps: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              fn: { type: "string" },
-              args: { type: "object" },
-            },
-            required: ["fn"],
-          },
-          minItems: 1,
-        },
-        budget: { type: "object" },
-        onError: { type: "string", enum: ["continue", "continueAll", "stop"] },
-        trace: { type: "object" },
-        includeDiagnostics: { type: "boolean" },
-      },
-      required: ["repoId", "steps"],
-      additionalProperties: false,
-    },
+    buildCompactJsonSchema(WorkflowRequestSchema),
     undefined,
     WorkflowOutputSchema,
   );

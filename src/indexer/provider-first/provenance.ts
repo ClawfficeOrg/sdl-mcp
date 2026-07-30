@@ -5,6 +5,7 @@ import {
   mergeSemanticProviderRun,
   type SemanticProviderRunRecord,
 } from "../../db/ladybug-semantic.js";
+import { computeSemanticPrecisionScore } from "../../semantic/precision.js";
 import type { SemanticDiagnostic } from "../../semantic/types.js";
 import { hashValue } from "../../util/hashing.js";
 import { normalizePath } from "../../util/paths.js";
@@ -89,6 +90,7 @@ function providerRunFactToSemanticProviderRun(
     edgesReplaced: 0,
     edgesSkipped: 0,
     diagnosticsCount: diagnosticsByRun.get(run.runId) ?? run.diagnosticCount,
+    precisionScore: providerRunPrecisionScore(run, facts.coverage),
     cacheHit: false,
     canAffectPass2: run.status === "succeeded",
     selected: true,
@@ -104,6 +106,49 @@ function providerRunFactToSemanticProviderRun(
     }),
     error: run.errorMessage,
   };
+}
+
+function providerRunPrecisionScore(
+  run: ProviderRunFact,
+  coverageFacts: readonly CoverageFact[],
+): number | undefined {
+  if (run.status !== "succeeded") return undefined;
+  const coverage = coverageFacts.filter(
+    (fact) =>
+      fact.repoId === run.repoId &&
+      fact.generationId === run.generationId &&
+      fact.providerType === run.providerType &&
+      fact.providerId === run.providerId,
+  );
+  let symbolsMatched = 0;
+  let symbolsTotal = 0;
+  let resolvedEdges = 0;
+  let totalEdges = 0;
+  let pass2SkippedFiles = 0;
+  let diagnosticsAvailable = false;
+  for (const fact of coverage) {
+    symbolsMatched += fact.emittedSymbols;
+    symbolsTotal += fact.totalSymbols;
+    resolvedEdges += Math.max(
+      0,
+      fact.totalResolvedReferences - fact.callProofUnavailableReferences,
+    );
+    totalEdges += fact.totalResolvedReferences;
+    if (fact.legacyFallback === "skip") pass2SkippedFiles++;
+    if (fact.diagnosticCoverage !== "none") diagnosticsAvailable = true;
+  }
+  return computeSemanticPrecisionScore({
+    filesCovered: coverage.length,
+    filesEligible: run.fileCount,
+    symbolsMatched,
+    symbolsTotal,
+    resolvedEdges,
+    totalEdges,
+    diagnosticsAvailable,
+    providerType: run.providerType,
+    pass2SkippedFiles,
+    pass2EligibleFiles: run.fileCount,
+  });
 }
 
 function providerRunLanguages(

@@ -67,6 +67,7 @@ import {
   providerFactsToGraphRows,
 } from "../../dist/indexer/provider-first/materializer.js";
 import { providerFactsToSemanticProvenanceRecords } from "../../dist/indexer/provider-first/provenance.js";
+import { computeSemanticPrecisionScore } from "../../dist/semantic/precision.js";
 import { validateProviderFirstGraphRows } from "../../dist/indexer/provider-first/graph-validation.js";
 import { resolveProviderFirstPipeline } from "../../dist/indexer/provider-first/planner.js";
 import { normalizeScipProviderFacts } from "../../dist/indexer/provider-first/scip-normalizer.js";
@@ -128,7 +129,10 @@ import { ensureFtsIndexForNonEmptyTable } from "../../dist/retrieval/index-lifec
 import { normalizePath } from "../../dist/util/paths.js";
 import type { SymbolRow } from "../../dist/db/ladybug-queries.js";
 import type { ProviderFirstGraphRows } from "../../dist/indexer/provider-first/materializer.js";
-import type { ProviderFactSet } from "../../dist/indexer/provider-first/types.js";
+import type {
+  CoverageFact,
+  ProviderFactSet,
+} from "../../dist/indexer/provider-first/types.js";
 import { writeTestScipIndex } from "../fixtures/scip/builder.ts";
 
 const TEST_CASE_JSON =
@@ -7179,6 +7183,90 @@ describe("provider-first indexing foundation", () => {
   });
 
   it("maps provider runs, diagnostics, and coverage summaries to semantic provenance records", () => {
+    const emittedAt = "2026-05-25T12:00:00.000Z";
+    const matchingCoverage: CoverageFact[] = [
+      {
+        kind: "coverage",
+        repoId: "repo",
+        generationId: "gen-1",
+        providerType: "scip",
+        providerId: "scip",
+        emittedAt,
+        relPath: "src/index.ts",
+        symbolCoverage: "full",
+        referenceCoverage: "full",
+        callProofCoverage: "partial",
+        diagnosticCoverage: "full",
+        totalSymbols: 8,
+        emittedSymbols: 3,
+        totalOccurrences: 8,
+        unresolvedOccurrences: 0,
+        totalResolvedReferences: 6,
+        callProofUnavailableReferences: 4,
+        callProofUnavailableReasons: [
+          { code: "symbolTextMismatch", references: 4 },
+        ],
+        legacyFallback: "targeted",
+      },
+      {
+        kind: "coverage",
+        repoId: "repo",
+        generationId: "gen-1",
+        providerType: "scip",
+        providerId: "scip",
+        emittedAt,
+        relPath: "src/other.ts",
+        symbolCoverage: "full",
+        referenceCoverage: "full",
+        callProofCoverage: "full",
+        diagnosticCoverage: "full",
+        totalSymbols: 12,
+        emittedSymbols: 2,
+        totalOccurrences: 12,
+        unresolvedOccurrences: 0,
+        totalResolvedReferences: 4,
+        callProofUnavailableReferences: 0,
+        legacyFallback: "skip",
+      },
+    ];
+    const decoyBase: CoverageFact = {
+      kind: "coverage",
+      repoId: "repo",
+      generationId: "gen-1",
+      providerType: "scip",
+      providerId: "scip",
+      emittedAt,
+      relPath: "src/decoy.ts",
+      symbolCoverage: "full",
+      referenceCoverage: "full",
+      callProofCoverage: "full",
+      diagnosticCoverage: "full",
+      totalSymbols: 100,
+      emittedSymbols: 100,
+      totalOccurrences: 100,
+      unresolvedOccurrences: 0,
+      totalResolvedReferences: 100,
+      callProofUnavailableReferences: 0,
+      legacyFallback: "skip",
+    };
+    const offTupleCoverage: CoverageFact[] = [
+      { ...decoyBase, repoId: "other-repo", relPath: "src/decoy-repo.ts" },
+      {
+        ...decoyBase,
+        generationId: "gen-other",
+        relPath: "src/decoy-generation.ts",
+      },
+      {
+        ...decoyBase,
+        providerType: "lsp",
+        relPath: "src/decoy-provider-type.ts",
+      },
+      {
+        ...decoyBase,
+        providerId: "other-provider",
+        relPath: "src/decoy-provider-id.ts",
+      },
+    ];
     const facts = providerFactSet({
       providerRuns: [
         {
@@ -7193,8 +7281,40 @@ describe("provider-first indexing foundation", () => {
           startedAt: "2026-05-25T12:00:00.000Z",
           finishedAt: "2026-05-25T12:00:00.000Z",
           sourceIndexPath: "index.scip",
+          fileCount: 5,
+          symbolCount: 5,
+          edgeCount: 10,
+          diagnosticCount: 0,
+        },
+        {
+          kind: "providerRun",
+          repoId: "repo",
+          generationId: "gen-1",
+          providerType: "lsp",
+          providerId: "failed-lsp",
+          emittedAt: "2026-05-25T12:00:00.000Z",
+          runId: "gen-1:failed-lsp",
+          status: "failed",
+          startedAt: "2026-05-25T12:00:00.000Z",
+          finishedAt: "2026-05-25T12:00:00.000Z",
           fileCount: 1,
-          symbolCount: 1,
+          symbolCount: 0,
+          edgeCount: 0,
+          diagnosticCount: 0,
+        },
+        {
+          kind: "providerRun",
+          repoId: "repo",
+          generationId: "gen-1",
+          providerType: "lsp",
+          providerId: "skipped-lsp",
+          emittedAt: "2026-05-25T12:00:00.000Z",
+          runId: "gen-1:skipped-lsp",
+          status: "skipped",
+          startedAt: "2026-05-25T12:00:00.000Z",
+          finishedAt: "2026-05-25T12:00:00.000Z",
+          fileCount: 1,
+          symbolCount: 0,
           edgeCount: 0,
           diagnosticCount: 0,
         },
@@ -7213,38 +7333,32 @@ describe("provider-first indexing foundation", () => {
           message: "provider warning",
         },
       ],
-      coverage: [
-        {
-          kind: "coverage",
-          repoId: "repo",
-          generationId: "gen-1",
-          providerType: "scip",
-          providerId: "scip",
-          emittedAt: "2026-05-25T12:00:00.000Z",
-          relPath: "src/index.ts",
-          symbolCoverage: "full",
-          referenceCoverage: "full",
-          callProofCoverage: "partial",
-          diagnosticCoverage: "full",
-          totalSymbols: 1,
-          emittedSymbols: 1,
-          totalOccurrences: 3,
-          unresolvedOccurrences: 0,
-          totalResolvedReferences: 2,
-          callProofUnavailableReferences: 1,
-          callProofUnavailableReasons: [
-            { code: "symbolTextMismatch", references: 1 },
-          ],
-          legacyFallback: "skip",
-        },
-      ],
+      coverage: [...matchingCoverage, ...offTupleCoverage],
     });
 
     const records = providerFactsToSemanticProvenanceRecords(facts);
-    assert.equal(records.providerRuns.length, 1);
+    assert.equal(records.providerRuns.length, 3);
     assert.equal(records.providerRuns[0]?.status, "completed");
-    assert.equal(records.providerRuns[0]?.diagnosticsCount, 3);
-    assert.equal(records.providerRuns[0]?.precisionScore, undefined);
+    assert.equal(records.providerRuns[0]?.diagnosticsCount, 4);
+    const expectedPrecisionInputs = {
+      filesCovered: 2,
+      filesEligible: 5,
+      symbolsMatched: 5,
+      symbolsTotal: 20,
+      resolvedEdges: 6,
+      totalEdges: 10,
+      diagnosticsAvailable: true,
+      providerType: "scip" as const,
+      pass2SkippedFiles: 1,
+      pass2EligibleFiles: 5,
+    };
+    assert.equal(
+      records.providerRuns[0]?.precisionScore,
+      computeSemanticPrecisionScore(expectedPrecisionInputs),
+    );
+    assert.equal(records.providerRuns[0]?.precisionScore, 0.483);
+    assert.equal(records.providerRuns[1]?.precisionScore, undefined);
+    assert.equal(records.providerRuns[2]?.precisionScore, undefined);
     assert.match(
       records.providerRuns[0]?.metadataJson ?? "",
       /callProofUnavailableReferences/,
@@ -7257,12 +7371,13 @@ describe("provider-first indexing foundation", () => {
       ),
       records.diagnostics.length,
     );
-    assert.equal(records.diagnostics.length, 3);
+    assert.equal(records.diagnostics.length, 4);
     assert.deepEqual(
       records.diagnostics.map((diagnostic) => diagnostic.code).sort(),
       [
         "providerFirst.callProof.symbolTextMismatch",
         "providerFirst.coverage.callProof",
+        "providerFirst.coverage.legacyFallback",
         undefined,
       ].sort(),
     );
@@ -9710,7 +9825,7 @@ describe("provider-first indexing foundation", () => {
              run.edgesReplaced = 0,
              run.edgesSkipped = 1,
              run.diagnosticsCount = 1,
-             run.precisionScore = 0.95,
+             run.precisionScore = 0.875,
              run.cacheHit = false,
              run.canAffectPass2 = true,
              run.selected = true,
@@ -9739,6 +9854,49 @@ describe("provider-first indexing foundation", () => {
           now,
         },
       );
+      const shadowRun = {
+        repoId,
+        providerType: "scip" as const,
+        providerVersion: "fixture",
+        languages: ["typescript"],
+        sourceIndexPath: "fixture.scip",
+        sourceHash: "fixture-hash",
+        cacheKey: "fixture-cache",
+        configHash: "fixture-config",
+        ledgerVersion: versionId,
+        status: "completed" as const,
+        startedAt: now,
+        finishedAt: now,
+        documentsProcessed: 0,
+        symbolsMatched: 0,
+        edgesCreated: 0,
+        edgesUpgraded: 0,
+        edgesReplaced: 0,
+        edgesSkipped: 0,
+        diagnosticsCount: 0,
+        cacheHit: false,
+        canAffectPass2: true,
+        selected: true,
+        metadataJson: "{}",
+        error: "fixture",
+      };
+      await ladybugDb.mergeSemanticProviderRun(activeConn, {
+        ...shadowRun,
+        runId: "run-z-null-score",
+        providerId: "null-score",
+      });
+      await dbExec(
+        activeConn,
+        `MATCH (run:SemanticProviderRun {runId: 'run-z-null-score'})
+         SET run.precisionScore = null`,
+        {},
+      );
+      await ladybugDb.mergeSemanticProviderRun(activeConn, {
+        ...shadowRun,
+        runId: "run-z-zero-score",
+        providerId: "zero-score",
+        precisionScore: 0,
+      });
       await dbExec(
         shadowConn,
         `MATCH (r:Repo {repoId: $repoId})
@@ -9832,6 +9990,29 @@ describe("provider-first indexing foundation", () => {
         );
         assert.equal(runRows.length, 1);
         assert.equal(runRows[0]?.metadataJson, '{"coverage":{"files":1}}');
+
+        const precisionRows = await queryAll<{
+          runId: string;
+          precisionScore: unknown;
+        }>(
+          finalizedConn,
+          `MATCH (run:SemanticProviderRun {repoId: $repoId})
+           RETURN run.runId AS runId, run.precisionScore AS precisionScore
+           ORDER BY run.runId`,
+          { repoId },
+        );
+        assert.deepEqual(
+          precisionRows.map((row) => ({
+            runId: row.runId,
+            precisionScore:
+              row.precisionScore == null ? null : Number(row.precisionScore),
+          })),
+          [
+            { runId, precisionScore: 0.875 },
+            { runId: "run-z-null-score", precisionScore: null },
+            { runId: "run-z-zero-score", precisionScore: 0 },
+          ],
+        );
 
         const diagnosticRows = await queryAll<{ message: string | null }>(
           finalizedConn,
