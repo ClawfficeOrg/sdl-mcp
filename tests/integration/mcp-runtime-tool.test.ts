@@ -318,6 +318,9 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
     "persists nested native-command output from PowerShell",
     { skip: process.platform !== "win32" },
     async () => {
+      writeConfig({ maxDurationMs: 60_000 });
+      invalidateConfigCache();
+
       const { handleRuntimeExecute } =
         await import("../../dist/mcp/tools/runtime.js");
       const { handleRuntimeQueryOutput } =
@@ -329,6 +332,7 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
         code: '& cmd.exe /c echo SDL_NATIVE_OK; Write-Output "EXIT:$LASTEXITCODE"',
         persistOutput: true,
         outputMode: "minimal",
+        timeoutMs: 60_000,
       });
 
       assert.strictEqual(run.status, "success");
