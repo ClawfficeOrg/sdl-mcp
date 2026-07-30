@@ -326,7 +326,7 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
       const run = await handleRuntimeExecute({
         repoId,
         runtime: "powershell",
-        code: '& cmd.exe /d /c echo SDL_NATIVE_OK; Write-Output "EXIT:$LASTEXITCODE"',
+        code: '& cmd.exe /c echo SDL_NATIVE_OK; Write-Output "EXIT:$LASTEXITCODE"',
         persistOutput: true,
         outputMode: "minimal",
       });
