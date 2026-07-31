@@ -17,6 +17,18 @@
       }
     },
     {
+      "tool": "sdl.action.search",
+      "args": {
+        "query": "*",
+        "limit": 50,
+        "offset": 0,
+        "includeSchemas": true,
+        "includeExamples": true,
+        "detail": "full",
+        "maxTokens": 2000
+      }
+    },
+    {
       "tool": "sdl.info",
       "args": {
         "redactPaths": true

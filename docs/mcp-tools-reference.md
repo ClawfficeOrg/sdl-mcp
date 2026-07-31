@@ -71,17 +71,19 @@ See the [Code Mode deep dive](./feature-deep-dives/code-mode.md) for end-to-end 
 
 **Parameters:**
 
-| Parameter         | Type      | Required | Description                               |
-| ----------------- | --------- | -------- | ----------------------------------------- |
-| `query`           | `string`  | Yes      | Search query                              |
-| `limit`           | `integer` | No       | Max results to return (1-50, default: 10) |
-| `offset`          | `integer` | No       | Skip the first N ranked results (min: 0)  |
-| `includeSchemas`  | `boolean` | No       | Include compact schema summaries          |
-| `includeExamples` | `boolean` | No       | Include example calls                     |
+| Parameter         | Type                | Required | Description                                         |
+| ----------------- | ------------------- | -------- | --------------------------------------------------- |
+| `query`           | `string`            | Yes      | Search query                                        |
+| `limit`           | `integer`           | No       | Max results to return (1-50, default: 20)           |
+| `offset`          | `integer`           | No       | Skip the first N ranked results (min: 0)            |
+| `detail`          | `compact` \| `full` | No       | Schema detail level (default: `compact`)            |
+| `maxTokens`       | `integer`           | No       | Approximate action-list budget (500-32,000, default: 4,000) |
+| `includeSchemas`  | `boolean`           | No       | Include schema summaries                            |
+| `includeExamples` | `boolean`           | No       | Include example calls                               |
 
-**Response:** `{ actions, total, hasMore, offset, limit, tokenEstimate }`
+**Response:** `{ actions, total, hasMore, tokenEstimate, offset, limit, nextOffset? }`
 
-Use `offset` with `limit` to page through large result sets such as `query: "*"`.
+Use `offset` with `limit` to page through large result sets such as `query: "*"`. `maxTokens` is an approximate budget for the serialized `actions` list, not a hard ceiling for the whole response. The first matching action is always included, even if it exceeds the requested budget. Full-detail results may therefore contain fewer actions than `limit`; callers must reuse `nextOffset` until `hasMore` is `false`.
 
 ---
 

@@ -307,8 +307,49 @@ async function runLeg(repeats: number, options: { setup: boolean }): Promise<Leg
       const args = materializeArgs(call.args);
       const key = callKey(call.tool, args, ordinal);
       const runs: string[] = [];
+      const argsObject =
+        args !== null && typeof args === "object" && !Array.isArray(args)
+          ? args as Record<string, unknown>
+          : undefined;
       for (let i = 0; i < repeats; i++) {
-        runs.push(canonical(await callToolStrict(server.client, call.tool, args)));
+        const response = await callToolStrict(server.client, call.tool, args);
+        if (
+          call.tool === "sdl.action.search"
+          && argsObject?.query === "*"
+          && argsObject.detail === "full"
+          && argsObject.maxTokens === 2000
+          && argsObject.includeSchemas === true
+          && argsObject.includeExamples === true
+          && argsObject.limit === 50
+          && argsObject.offset === 0
+        ) {
+          assert.ok(
+            response !== null && typeof response === "object" && !Array.isArray(response),
+            "broad action search must return an object response",
+          );
+          const responseObject = response as Record<string, unknown>;
+          const structuredContent = responseObject.structuredContent;
+          assert.ok(
+            structuredContent !== null
+              && typeof structuredContent === "object"
+              && !Array.isArray(structuredContent),
+            "broad action search must return object structuredContent",
+          );
+          const payload = structuredContent as Record<string, unknown>;
+          const actions = payload.actions;
+          assert.ok(Array.isArray(actions), "broad action search must return an actions array");
+          const responseLimit = payload.limit;
+          assert.ok(typeof responseLimit === "number", "broad action search limit must be numeric");
+          assert.ok(
+            actions.length < responseLimit,
+            "broad action search must truncate actions below its response limit",
+          );
+          assert.equal(payload.hasMore, true, "broad action search must exercise paging");
+          const responseOffset = payload.offset;
+          assert.ok(typeof responseOffset === "number", "broad action search offset must be numeric");
+          assert.equal(payload.nextOffset, responseOffset + actions.length);
+        }
+        runs.push(canonical(response));
       }
       results.set(key, runs);
     }
