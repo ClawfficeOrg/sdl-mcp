@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 
 import { handleRetrieve } from "../../dist/code-mode/retrieve.js";
+import { buildSliceWithResult } from "../../dist/graph/slice.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import {
   closeLadybugDb,
@@ -230,6 +231,69 @@ describe("graph retrieval availability", { concurrency: 1 }, () => {
       );
       assert.match(JSON.stringify(retrieved), /alpha/);
     }
+  });
+
+  it("returns structured no_symbols errors for unresolved exact symbol IDs", async () => {
+    const unresolvedSymbolId = "f".repeat(64);
+    const request = {
+      repoId: "verified",
+      entrySymbols: [unresolvedSymbolId],
+      budget: { maxCards: 4, maxEstimatedTokens: 2_000 },
+    };
+
+    const result = await buildSliceWithResult(request);
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        type: "no_symbols",
+        repoId: "verified",
+        entrySymbols: [unresolvedSymbolId],
+      },
+    });
+
+    const response = await handleSliceBuild(request);
+    assert.ok("error" in response);
+    assert.equal(response.error.code, "NO_SYMBOLS");
+    assert.equal(response.error.type, "no_symbols");
+    assert.match(response.error.message, /No symbols found for entry symbols/);
+    assert.match(response.error.message, /sdl\.retrieve/);
+    assert.match(response.error.message, /op:"symbolSearch"/);
+    assert.match(response.error.message, /exact symbol IDs/);
+    assert.match(response.error.message, /file::name/);
+    assert.doesNotMatch(
+      JSON.stringify(response),
+      /INTERNAL_ERROR|No entry symbols resolved/i,
+    );
+  });
+
+  it("returns structured no_symbols errors for unresolved file::name shorthand", async () => {
+    const request = {
+      repoId: "verified",
+      entrySymbols: ["missing/file.ts::MissingSymbol"],
+      budget: { maxCards: 4, maxEstimatedTokens: 2_000 },
+    };
+
+    const response = await handleSliceBuild(request);
+    assert.ok("error" in response);
+    assert.equal(response.error.code, "NO_SYMBOLS");
+    assert.equal(response.error.type, "no_symbols");
+    assert.match(response.error.message, /No symbols found for entry symbols/);
+    assert.match(response.error.message, /sdl\.retrieve/);
+    assert.match(response.error.message, /op:"symbolSearch"/);
+    assert.match(response.error.message, /exact symbol IDs/);
+    assert.match(response.error.message, /file::name/);
+    assert.doesNotMatch(
+      JSON.stringify(response),
+      /INTERNAL_ERROR|internal|Repository not found/i,
+    );
+
+    const invalidRepoResponse = await handleSliceBuild({
+      ...request,
+      repoId: "missing-repo",
+    });
+    assert.ok("error" in invalidRepoResponse);
+    assert.equal(invalidRepoResponse.error.code, "INVALID_REPO");
+    assert.notEqual(invalidRepoResponse.error.code, "NO_SYMBOLS");
   });
 
   it("fails the shared availability assertion closed for unknown no-manifest state", async () => {

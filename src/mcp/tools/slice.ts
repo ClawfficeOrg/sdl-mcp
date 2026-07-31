@@ -26,6 +26,7 @@ import {
   entitySearch,
 } from "../../retrieval/index.js";
 import {
+  SliceBuildError,
   type SliceErrorResponse,
   sliceErrorToResponse,
 } from "../../graph/slice/result.js";
@@ -214,6 +215,10 @@ export async function handleSliceBuild(
   try {
     return await handleSliceBuildInternal(args, context);
   } catch (error) {
+    if (error instanceof SliceBuildError) {
+      return sliceErrorToResponse(error.sliceError);
+    }
+
     const parsed = args as SliceBuildRequest;
 
     if (error instanceof NotFoundError) {
@@ -292,8 +297,24 @@ async function handleSliceBuildInternal(
     const sliceConn = await getLadybugConn();
     const resolved: string[] = [];
     for (const id of entrySymbols) {
-      const { symbolId: r } = await resolveSymbolId(sliceConn, repoId, id);
-      resolved.push(r);
+      try {
+        const { symbolId: r } = await resolveSymbolId(sliceConn, repoId, id);
+        resolved.push(r);
+      } catch (error) {
+        // A missing shorthand is a symbol miss only when the repository exists.
+        if (
+          error instanceof NotFoundError &&
+          id.includes("::") &&
+          (await ladybugDb.getRepo(sliceConn, repoId))
+        ) {
+          throw new SliceBuildError({
+            type: "no_symbols",
+            repoId,
+            entrySymbols,
+          });
+        }
+        throw error;
+      }
     }
     resolvedEntrySymbols = resolved;
   }

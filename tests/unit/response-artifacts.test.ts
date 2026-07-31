@@ -29,6 +29,7 @@ import {
 } from "../../dist/mcp/tools.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import { NotFoundError, ValidationError } from "../../dist/domain/errors.js";
+import { estimateTokens } from "../../dist/util/tokenize.js";
 
 const originalSdlConfig = process.env.SDL_CONFIG;
 let tempDirs: string[] = [];
@@ -159,6 +160,7 @@ describe("response artifact storage", () => {
         { reference: "symbol:alpha", summary: "alpha" },
         { reference: "symbol:target", summary: "target" },
       ],
+      count: 42,
       padding: "x".repeat(5000),
     };
 
@@ -195,8 +197,68 @@ describe("response artifact storage", () => {
     });
     assert.equal(read.full, false);
     assert.equal(read.truncated, false);
+
+    const scalar = await readResponseArtifact({
+      repoId: "repo-a",
+      handle: stored.payload.handle,
+      artifactBaseDir: baseDir,
+      jsonPath: "count",
+      maxBytes: 1,
+      maxTokens: 1,
+    });
+    assert.equal(scalar.content, 42);
   });
 
+
+  it("bounds JSON-path strings by serialized bytes and estimated tokens", async () => {
+    const baseDir = makeTempDir();
+    const message = "é😀 bounded response ".repeat(8);
+    const serialized = JSON.stringify(message);
+    const exactBytes = Buffer.byteLength(serialized, "utf-8");
+    const exactTokens = estimateTokens(serialized);
+    const stored = await maybeStoreLargeResponse({
+      repoId: "repo-a",
+      toolName: "sdl.context",
+      payload: { message },
+      responseMode: "handle",
+      artifactBaseDir: baseDir,
+      entropy: () => "2323232323232323",
+    });
+    assert.strictEqual(stored.responseMode, "handle");
+
+    const exact = await readResponseArtifact({
+      repoId: "repo-a",
+      handle: stored.payload.handle,
+      artifactBaseDir: baseDir,
+      jsonPath: "message",
+      maxBytes: exactBytes,
+      maxTokens: exactTokens,
+    });
+    assert.equal(exact.content, message);
+
+    for (const bounds of [
+      { maxBytes: exactBytes - 1, maxTokens: exactTokens },
+      { maxBytes: exactBytes, maxTokens: exactTokens - 1 },
+    ]) {
+      await assert.rejects(
+        () =>
+          readResponseArtifact({
+            repoId: "repo-a",
+            handle: stored.payload.handle,
+            artifactBaseDir: baseDir,
+            jsonPath: "message",
+            ...bounds,
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof ValidationError);
+          assert.match(error.message, /increase maxBytes and\/or maxTokens/);
+          assert.match(error.message, /omit jsonPath and use raw:true/);
+          assert.match(error.message, /artifact byte excerpt/);
+          return true;
+        },
+      );
+    }
+  });
 
   it("supports bracket JSON path array indexes", async () => {
     const baseDir = makeTempDir();

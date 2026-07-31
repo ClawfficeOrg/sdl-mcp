@@ -96,7 +96,7 @@ describe("sliceErrorToMessage", () => {
     };
     assert.strictEqual(
       sliceErrorToMessage(error),
-      "No symbols found for entry symbols in repo test-repo",
+      "No symbols found for entry symbols in repo test-repo. Use sdl.retrieve with op:\"symbolSearch\" to obtain exact symbol IDs, or use file::name shorthand.",
     );
   });
 

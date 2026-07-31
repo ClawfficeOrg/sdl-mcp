@@ -19,6 +19,26 @@
     {
       "tool": "sdl.action.search",
       "args": {
+        "query": "response.get",
+        "limit": 1,
+        "detail": "full",
+        "includeSchemas": true,
+        "includeExamples": false
+      }
+    },
+    {
+      "tool": "sdl.action.search",
+      "args": {
+        "query": "slice.build",
+        "limit": 1,
+        "detail": "full",
+        "includeSchemas": true,
+        "includeExamples": false
+      }
+    },
+    {
+      "tool": "sdl.action.search",
+      "args": {
         "query": "*",
         "limit": 50,
         "offset": 0,

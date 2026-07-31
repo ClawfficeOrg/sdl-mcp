@@ -32,7 +32,13 @@ import { getGraphSnapshot } from "./graphSnapshotCache.js";
 
 import { buildPayloadCardsAndRefs, toSliceSymbolCard, filterDepsBySliceSymbolSet, encodeEdgesWithSymbolIndex, estimateTokens } from "./slice/slice-serializer.js";
 
-import { type SliceResult, type SliceError, sliceOk, sliceErr } from "./slice/result.js";
+import {
+  SliceBuildError,
+  type SliceResult,
+  type SliceError,
+  sliceOk,
+  sliceErr,
+} from "./slice/result.js";
 import { getOverlaySnapshot } from "../live-index/overlay-reader.js";
 import { logger } from "../util/logger.js";
 import { createRetrievalQueryContext } from "../retrieval/orchestrator.js";
@@ -152,16 +158,6 @@ export async function buildSlice(
     request.entrySymbols.length > 0 &&
     startSymbols.length === 0
   ) {
-    // Reuse existing conn (already resolved above)
-    // Try to find close matches for the failed entry symbols
-    const suggestions: string[] = [];
-    for (const entryId of request.entrySymbols.slice(0, 3)) {
-      const sym = await ladybugDb.getSymbol(conn, entryId);
-      if (!sym) {
-        suggestions.push(`"${entryId.slice(0, 16)}..." not found`);
-      }
-    }
-    const hint = suggestions.length > 0 ? ` (${suggestions.join(", ")})` : "";
     logger.warn(
       "slice.build: none of the provided entrySymbols resolved to valid symbols",
       {
@@ -169,10 +165,11 @@ export async function buildSlice(
         entrySymbols: request.entrySymbols,
       },
     );
-    // Throw an error instead of silently returning an empty slice
-    throw new Error(
-      `None of the provided entrySymbols were found in the index${hint}. Verify symbol IDs with sdl.symbol.search first.`,
-    );
+    throw new SliceBuildError({
+      type: "no_symbols",
+      repoId: request.repoId,
+      entrySymbols: request.entrySymbols,
+    });
   }
 
   let clusterContext:
@@ -462,6 +459,10 @@ export async function buildSliceWithResult(
 
     return sliceOk(slice);
   } catch (error) {
+    if (error instanceof SliceBuildError) {
+      return sliceErr(error.sliceError);
+    }
+
     if (error instanceof DatabaseError) {
       return sliceErr({
         type: "invalid_repo",

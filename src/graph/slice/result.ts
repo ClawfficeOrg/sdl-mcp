@@ -9,6 +9,12 @@ export type SliceError =
   | { type: "policy_denied"; reason: string }
   | { type: "internal"; message: string; cause?: string };
 
+export class SliceBuildError extends Error {
+  constructor(readonly sliceError: SliceError) {
+    super(sliceErrorToMessage(sliceError));
+  }
+}
+
 export type SliceResult =
   | { ok: true; slice: GraphSlice }
   | { ok: false; error: SliceError };
@@ -41,7 +47,7 @@ export function sliceErrorToMessage(error: SliceError): string {
       return `No version found for repo ${error.repoId}. Please run indexing first.`;
     case "no_symbols":
       return error.entrySymbols
-        ? `No symbols found for entry symbols in repo ${error.repoId}`
+        ? `No symbols found for entry symbols in repo ${error.repoId}. Use sdl.retrieve with op:"symbolSearch" to obtain exact symbol IDs, or use file::name shorthand.`
         : `No symbols indexed for repo ${error.repoId}`;
     case "missing_entry_hint":
       return `At least one entry symbol, taskText, stackTrace, failingTestPath, or editedFiles is required to seed a slice for repo ${error.repoId}`;

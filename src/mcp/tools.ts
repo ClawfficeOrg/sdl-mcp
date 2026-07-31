@@ -1654,7 +1654,14 @@ export const SliceBuildRequestSchema = z.object({
   stackTrace: z.string().max(10000).optional(),
   failingTestPath: z.string().max(500).optional(),
   editedFiles: z.array(z.string()).max(100).optional(),
-  entrySymbols: z.array(z.string()).max(100).optional(),
+  entrySymbols: z
+    .array(z.string())
+    .max(100)
+    .optional()
+    .describe(
+      "Exact symbol IDs or file::name shorthands. Bare names are not auto-resolved. " +
+        "Use sdl.retrieve with op:\"symbolSearch\" to obtain exact IDs.",
+    ),
   knownCardEtags: z
     .record(z.string(), z.string())
     .refine((obj) => Object.keys(obj).length <= 1000, {
@@ -3309,14 +3316,18 @@ export const ResponseGetRequestSchema = z.object({
     .min(1)
     .max(MAX_RESPONSE_EXCERPT_BYTES)
     .optional()
-    .describe("Maximum bytes to return when full=false"),
+    .describe(
+      "Serialized UTF-8 byte bound for JSON-path strings and arrays when full=false; atomic JSON objects and non-string scalars remain whole. full:true bypasses excerpt bounds.",
+    ),
   maxTokens: z
     .number()
     .int()
     .min(1)
     .max(250_000)
     .optional()
-    .describe("Token bound enforced on returned content when full=false (estimate-based); use maxBytes for an exact byte cap"),
+    .describe(
+      "For JSON-path strings, estimateTokens enforces maxTokens independently from maxBytes. Arrays retain the existing estimate-to-byte cap, with maxBytes taking precedence. Atomic JSON objects and non-string scalars remain whole; full:true bypasses excerpt bounds.",
+    ),
   offsetBytes: z
     .number()
     .int()
@@ -3328,7 +3339,9 @@ export const ResponseGetRequestSchema = z.object({
     .min(1)
     .max(200)
     .optional()
-    .describe("Dot or bracket path to extract from JSON artifacts before serialization or array paging"),
+    .describe(
+      "Dot or bracket path to extract from JSON artifacts. Strings honor serialized UTF-8 maxBytes and estimated maxTokens; arrays retain paging and bounds; objects and non-string scalars are atomic.",
+    ),
   raw: z
     .boolean()
     .optional()

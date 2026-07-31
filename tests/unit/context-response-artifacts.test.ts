@@ -228,5 +228,32 @@ describe("sdl.context response artifacts", () => {
     const retry = await executeWorkflow(retryRequest, actionMap, workflowConfig);
     assert.equal(retry.results[0].status, "ok");
     assert.equal((retry.results[0].result as Record<string, unknown>).handle, handle);
+
+    const boundedFailure = await executeWorkflow(
+      {
+        ...invalidRequest,
+        steps: [{
+          fn: "responseGet",
+          action: "response.get",
+          args: { handle, jsonPath: "taskType", maxBytes: 2 },
+        }],
+      },
+      actionMap,
+      workflowConfig,
+    );
+    const trace = boundedFailure.results[0].failureTrace;
+    assert.equal(boundedFailure.results[0].status, "error");
+    assert.equal(trace?.kind, "gateway");
+    assert.match(
+      trace?.message ?? "",
+      /JSON path string exceeds the requested bound/,
+    );
+    assert.match(
+      trace?.message ?? "",
+      /increase maxBytes and\/or maxTokens/,
+    );
+    assert.match(trace?.message ?? "", /omit jsonPath and use raw:true/);
+    assert.match(trace?.message ?? "", /artifact byte excerpt/);
+    assert.doesNotMatch(trace?.message ?? "", /internal error/i);
   });
 });

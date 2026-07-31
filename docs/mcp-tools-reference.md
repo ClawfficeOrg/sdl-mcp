@@ -591,7 +591,7 @@ When you use `symbolRefs`, the batch resolves each reference independently. Mixe
 
 ### `sdl.slice.build`
 
-Build a task-scoped graph slice. `taskText` alone triggers auto-discovery of relevant symbols. When supplied, `entrySymbols` are the authoritative start nodes: task text and other hints do not add roots, but graph traversal still expands connected relationships. `relationshipNote` appears only when at least one supplied explicit entry resolves as a selected start and the slice has no edges, frontier, or spillover. The note recommends a connected-entry retry.
+Build a task-scoped graph slice. `taskText` alone triggers auto-discovery of relevant symbols. When supplied, `entrySymbols` accept exact symbol IDs or the existing `file::name` shorthand and are the authoritative start nodes: bare names are not auto-resolved, task text and other hints do not add roots, but graph traversal still expands connected relationships. Use `sdl.retrieve` with `op:"symbolSearch"` to obtain exact symbol IDs. `relationshipNote` appears only when at least one supplied explicit entry resolves as a selected start and the slice has no edges, frontier, or spillover. The note recommends a connected-entry retry.
 
 **Parameters:**
 
@@ -599,7 +599,7 @@ Build a task-scoped graph slice. `taskText` alone triggers auto-discovery of rel
 | --------------------------- | ----------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
 | `repoId`                    | `string`                                                    | Yes      | Repository identifier                                                                                      |
 | `taskText`                  | `string`                                                    | No       | Natural language task description (auto-discovers symbols via hybrid retrieval or legacy full-text search) |
-| `entrySymbols`              | `string[]`                                                  | No       | Symbol IDs to start the slice from                                                                         |
+| `entrySymbols`              | `string[]`                                                  | No       | Exact symbol IDs or existing `file::name` shorthand; bare names are not auto-resolved                                                                         |
 | `editedFiles`               | `string[]`                                                  | No       | Files whose symbols (+ callers) are forced into the slice                                                  |
 | `stackTrace`                | `string`                                                    | No       | Stack trace to bias toward call-path symbols                                                               |
 | `failingTestPath`           | `string`                                                    | No       | Failing test file to bias toward code under test                                                           |
@@ -1406,6 +1406,8 @@ actions without creating a context continuation. `responseMode: "auto"` or
 artifact.
 
 For byte-stability checks, use `responseMode: "inline"` with `refsMode: "off"`. Response-artifact handles and session refs are intentionally session-scoped and may vary between calls. If `response.get` rejects a JSON path, its error lists the valid keys in sorted order and supplies a retry call that reuses the same handle.
+
+For `jsonPath` results, strings are returned whole only when their serialized JSON representation fits every supplied bound: `maxBytes` counts serialized UTF-8 bytes and `maxTokens` uses the serialized content's estimated token count. When both are supplied, either can reject; exact-bound values succeed. Increase the bound or bounds to return the selected JSON-path string whole, or omit `jsonPath` and use `raw: true` with `maxBytes` and/or `maxTokens` for a bounded artifact byte excerpt. Raw mode does not preserve JSON-path selection. Objects and non-string scalars remain atomic. Arrays retain their existing `offset`/`limit` paging and bound behavior. `full: true` bypasses excerpt bounds.
 
 ### `sdl.workflow`
 

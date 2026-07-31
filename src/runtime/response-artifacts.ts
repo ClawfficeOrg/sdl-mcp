@@ -894,8 +894,20 @@ export async function readResponseArtifact(
       };
     }
 
-    const returnedText = JSON.stringify(content);
-    const returnedBytes = Buffer.byteLength(returnedText, "utf-8");
+    const serializedContent = JSON.stringify(content);
+    const returnedBytes = Buffer.byteLength(serializedContent, "utf-8");
+    if (typeof extractedContent === "string") {
+      const exceedsMaxBytes =
+        opts.maxBytes !== undefined && returnedBytes > opts.maxBytes;
+      const exceedsMaxTokens =
+        opts.maxTokens !== undefined &&
+        estimateTokens(serializedContent) > opts.maxTokens;
+      if (exceedsMaxBytes || exceedsMaxTokens) {
+        throw new ValidationError(
+          "JSON path string exceeds the requested bound; increase maxBytes and/or maxTokens to return the selected JSON-path value whole, or omit jsonPath and use raw:true for a bounded artifact byte excerpt.",
+        );
+      }
+    }
     if (Array.isArray(extractedContent)) {
       const tokenBoundBytes =
         opts.maxTokens === undefined ? undefined : Math.max(1, opts.maxTokens * 4);
