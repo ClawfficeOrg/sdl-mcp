@@ -179,6 +179,7 @@
       "args": {
         "repoId": "{REPO_ID}",
         "filePath": "SDL.md",
+        "maxTokens": 500,
         "responseMode": "inline"
       }
     },

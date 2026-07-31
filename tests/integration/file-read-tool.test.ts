@@ -10,6 +10,7 @@ import {
   initLadybugDb,
 } from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
+import { handleFileGateway } from "../../dist/mcp/tools/file-gateway.js";
 import { handleFileRead } from "../../dist/mcp/tools/file-read.js";
 import { handleResponseGet } from "../../dist/mcp/tools/response.js";
 import { registerCodeModeTools } from "../../dist/code-mode/index.js";
@@ -229,6 +230,38 @@ describe("sdl.file.read token usage metadata", () => {
     assert.equal(response.content, "100: line 100");
     assert.equal(response.totalLines, 120);
     assert.equal(response.truncated, false);
+  });
+
+  it("honors maxTokens for gateway reads", async () => {
+    const longPath = join(docsDir, "token-limited.md");
+    const content = Array.from({ length: 400 }, () => "abcde").join("\n");
+    writeFileSync(longPath, content, "utf-8");
+
+    const response = await handleFileGateway({
+      op: "read",
+      repoId,
+      filePath: "docs/token-limited.md",
+      maxTokens: 500,
+    }) as Record<string, unknown>;
+
+    assert.ok(Buffer.byteLength(String(response.content), "utf-8") <= 2_000);
+    assert.equal(response.truncated, true);
+    assert.equal(response.truncatedAt, 2_000);
+    assert.equal(response.hint, undefined);
+  });
+
+  it("uses the tighter read bound when maxBytes and maxTokens are both set", async () => {
+    const response = await handleFileGateway({
+      op: "read",
+      repoId,
+      filePath: "docs/guide.md",
+      maxBytes: 20,
+      maxTokens: 100,
+    }) as Record<string, unknown>;
+
+    assert.ok(Buffer.byteLength(String(response.content), "utf-8") <= 20);
+    assert.equal(response.truncated, true);
+    assert.equal(response.truncatedAt, 20);
   });
 
   it("searches past maxBytes before applying response limits", async () => {

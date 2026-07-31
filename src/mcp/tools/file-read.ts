@@ -277,6 +277,7 @@ function hasFileReadTargeting(request: FileReadRequest): boolean {
     request.offset !== undefined ||
     request.limit !== undefined ||
     request.jsonPath !== undefined ||
+    request.maxTokens !== undefined ||
     request.maxBytes !== undefined
   );
 }
@@ -325,6 +326,7 @@ async function finalizeFileReadResponse(
           jsonPath: request.jsonPath,
           limit: request.limit,
           maxBytes: request.maxBytes,
+          maxTokens: request.maxTokens,
         },
       },
       content: response.content,
@@ -404,7 +406,13 @@ export async function handleFileRead(
     throw new NotFoundError(`File not found: ${filePath}`);
   }
 
-  const maxBytes = request.maxBytes ?? MAX_FILE_SIZE_BYTES;
+  // Keep token and byte budgets deterministic; the tighter limit wins.
+  const maxBytes = Math.min(
+    request.maxBytes ?? MAX_FILE_SIZE_BYTES,
+    request.maxTokens === undefined
+      ? MAX_FILE_SIZE_BYTES
+      : request.maxTokens * BYTES_PER_TOKEN,
+  );
   const fileStat = await stat(openPath);
 
   const needsFullFile = request.jsonPath !== undefined ||

@@ -3616,6 +3616,15 @@ export const FileReadRequestSchema = z.object({
     .max(512 * 1024)
     .optional()
     .describe("Max bytes to read. Default 512KB."),
+  maxTokens: z
+    .number()
+    .int()
+    .min(1)
+    .max(250_000)
+    .optional()
+    .describe(
+      "Max estimated tokens to return. When maxBytes is also set, the tighter bound applies.",
+    ),
   offset: z
     .number()
     .int()
