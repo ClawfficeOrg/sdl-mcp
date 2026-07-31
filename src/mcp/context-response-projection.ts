@@ -837,7 +837,9 @@ function projectActionSearchForModel(
   copyIfPresent(result, projected, "summary");
   copyIfPresent(result, projected, "total");
   copyIfPresent(result, projected, "hasMore");
-  copyIfPresent(result, projected, "nextCursor");
+  copyIfPresent(result, projected, "offset");
+  copyIfPresent(result, projected, "limit");
+  copyIfPresent(result, projected, "nextOffset");
   copyIfPresent(result, projected, "disabledHint");
   copyIfPresent(result, projected, "schemaHint");
   copyIfPresent(result, projected, "nextAction");

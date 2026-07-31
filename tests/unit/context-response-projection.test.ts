@@ -130,6 +130,28 @@ describe("context-response-projection", () => {
     assert.equal(detailed.durationMs, 5);
   });
 
+  it("preserves action-search paging metadata in stable key order", () => {
+    const projected = projectToolResultForModelContent("sdl.action.search", {
+      actions: [{ action: "repo.status" }],
+      total: 46,
+      hasMore: true,
+      tokenEstimate: 100,
+      offset: 0,
+      limit: 50,
+      nextOffset: 1,
+    }) as Record<string, unknown>;
+
+    assert.deepEqual(Object.keys(projected), [
+      "actions",
+      "total",
+      "hasMore",
+      "offset",
+      "limit",
+      "nextOffset",
+    ]);
+    assert.equal(projected.nextOffset, 1);
+  });
+
   it("keeps validation errors out of success-only projectors", () => {
     const error = {
       error: {

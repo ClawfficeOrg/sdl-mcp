@@ -211,6 +211,7 @@ export function handleActionSearch(
     }
     ranked.push(candidate);
   }
+  const hasMore = filteredRanked.length > offset + ranked.length;
 
   // Compute disabled action hints.
   const disabledActions = args.excludeDisabled ? disabledRanked : ranked.filter((a) => a.disabled);
@@ -240,8 +241,11 @@ export function handleActionSearch(
             "Tip: Add includeSchemas: true to see parameter types and enum values.",
         }
       : {}),
-    hasMore: filteredRanked.length > offset + ranked.length,
+    hasMore,
     tokenEstimate: estimateTokens(JSON.stringify(ranked)),
+    offset,
+    limit: args.limit,
+    ...(hasMore ? { nextOffset: offset + ranked.length } : {}),
     ...(autoEnabled ? { autoEnabled } : {}),
     ...(nextAction ? { nextAction } : {}),
   };
@@ -383,6 +387,9 @@ const ACTION_SEARCH_OUTPUT_SCHEMA = z.object({
   total: z.number().int().nonnegative().optional(),
   hasMore: z.boolean().optional(),
   tokenEstimate: z.number().int().nonnegative().optional(),
+  offset: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+  nextOffset: z.number().int().nonnegative().optional(),
   disabledHint: z.record(z.string(), z.unknown()).optional(),
   schemaHint: z.string().optional(),
   autoEnabled: z.record(z.string(), z.unknown()).optional(),

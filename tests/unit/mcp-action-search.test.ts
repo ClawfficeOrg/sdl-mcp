@@ -442,6 +442,9 @@ describe("bounded full action search", () => {
         total: number;
         hasMore: boolean;
         tokenEstimate: number;
+        offset: number;
+        limit: number;
+        nextOffset?: number;
       };
 
       assert.ok(page.actions.length >= 1, "each non-empty page returns one action");
@@ -458,10 +461,18 @@ describe("bounded full action search", () => {
         seen.add(action.action);
       }
 
-      offset += page.actions.length;
+      assert.strictEqual(page.offset, offset);
+      assert.strictEqual(page.limit, 50);
       pages++;
-      if (!page.hasMore) {
-        assert.strictEqual(offset, page.total);
+      if (page.hasMore) {
+        assert.ok(Object.hasOwn(page, "nextOffset"));
+        assert.ok(page.nextOffset !== undefined);
+        assert.strictEqual(page.nextOffset, offset + page.actions.length);
+        offset = page.nextOffset;
+      } else {
+        assert.strictEqual(Object.hasOwn(page, "nextOffset"), false);
+        assert.strictEqual(offset + page.actions.length, page.total);
+        assert.strictEqual(seen.size, page.total);
         break;
       }
     }
@@ -564,7 +575,7 @@ describe("bounded full action search", () => {
     });
     assert.deepStrictEqual(summarySmall, summaryLarge);
 
-    for (const key of ["nextOffset", "warnings", "handle"]) {
+    for (const key of ["warnings", "handle"]) {
       assert.ok(!(key in exactSmall), `unexpected ${key}`);
     }
   });

@@ -84,6 +84,9 @@ describe("code-mode regressions", () => {
   it("action.search supports offset-based pagination", async () => {
     let handler: ((args: unknown) => Promise<unknown>) | null = null;
     let inputSchema: Record<string, unknown> | null = null;
+    let outputSchema: {
+      parse(value: unknown): Record<string, unknown>;
+    } | null = null;
 
     const fakeServer = {
       registerTool(
@@ -92,10 +95,15 @@ describe("code-mode regressions", () => {
         _schema: unknown,
         toolHandler: (args: unknown) => Promise<unknown>,
         wireSchema: unknown,
+        _presentation: unknown,
+        toolOutputSchema: {
+          parse(value: unknown): Record<string, unknown>;
+        },
       ) {
         if (name === "sdl.action.search") {
           handler = toolHandler;
           inputSchema = wireSchema as Record<string, unknown>;
+          outputSchema = toolOutputSchema;
         }
       },
     };
@@ -108,6 +116,17 @@ describe("code-mode regressions", () => {
       limit: 2,
       offset: 0,
     }) as { actions: Array<{ action: string }>; total: number; hasMore: boolean };
+    assert.ok(outputSchema);
+    const parsedFirstPage = outputSchema.parse(firstPage);
+    assert.equal(parsedFirstPage.offset, 0);
+    assert.equal(parsedFirstPage.limit, 2);
+    assert.equal(parsedFirstPage.nextOffset, 2);
+    const parsedKeys = Object.keys(parsedFirstPage);
+    const tokenEstimateIndex = parsedKeys.indexOf("tokenEstimate");
+    assert.deepEqual(
+      parsedKeys.slice(tokenEstimateIndex, tokenEstimateIndex + 4),
+      ["tokenEstimate", "offset", "limit", "nextOffset"],
+    );
     const secondPage = await handler({
       query: "*",
       limit: 2,
