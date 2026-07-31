@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { OverlayStore } from "../../dist/live-index/overlay-store.js";
 import { CheckpointService } from "../../dist/live-index/checkpoint-service.js";
+import { InMemoryLiveIndexCoordinator } from "../../dist/live-index/coordinator.js";
 
 describe("CheckpointService", () => {
   it("evicts clean drafts after a successful checkpoint and records status", async () => {
@@ -177,4 +178,26 @@ describe("CheckpointService", () => {
     });
     assert.match(work.checkpointId ?? "", /-0$/);
   });
+
+  it("resolves an explicit no-work checkpoint without waiting for parse jobs", async () => {
+    const coordinator = new InMemoryLiveIndexCoordinator({
+      sweepIntervalMs: 0,
+    });
+    const internals = coordinator as unknown as {
+      parseScheduler: { waitForIdle: () => Promise<void> };
+    };
+    internals.parseScheduler.waitForIdle = () => new Promise<void>(() => {});
+
+    const result = await Promise.race([
+      coordinator.checkpointRepo({ repoId: "demo-repo", reason: "manual" }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("checkpoint waited for parse jobs")), 100),
+      ),
+    ]);
+
+    assert.strictEqual(result.pending, false);
+    assert.match(result.message ?? "", /no checkpoint-eligible buffers/i);
+    coordinator.reset();
+  });
+
 });

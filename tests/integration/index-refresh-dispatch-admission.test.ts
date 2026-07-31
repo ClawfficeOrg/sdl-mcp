@@ -431,6 +431,28 @@ describe("public index refresh dispatch admission", { concurrency: 1 }, () => {
     );
     await blocker.started;
     assertSucceeded(backgroundResponse as ToolEnvelope, "async refresh response");
+    const operationId = (
+      (backgroundResponse as ToolEnvelope).structuredContent as {
+        operationId?: string;
+      }
+    ).operationId;
+    assert.ok(operationId);
+    const activeStatus = await client.callTool({
+      name: "sdl.repo.status",
+      arguments: { repoId: REPO_A },
+    });
+    const activeOperations = (
+      (activeStatus as ToolEnvelope).structuredContent as {
+        indexOperations?: Array<{ operationId: string; status: string }>;
+      }
+    ).indexOperations ?? [];
+    assert.ok(
+      activeOperations.some(
+        (operation) =>
+          operation.operationId === operationId
+          && (operation.status === "queued" || operation.status === "running"),
+      ),
+    );
 
     const second = client.callTool({
       name: "sdl.index.refresh",
@@ -450,6 +472,23 @@ describe("public index refresh dispatch admission", { concurrency: 1 }, () => {
       "refresh queued behind async background indexing deadlocked",
     );
     assertSucceeded(response as ToolEnvelope, "post-async refresh");
+
+    const completedStatus = await client.callTool({
+      name: "sdl.repo.status",
+      arguments: { repoId: REPO_A },
+    });
+    const completedOperations = (
+      (completedStatus as ToolEnvelope).structuredContent as {
+        indexOperations?: Array<{ operationId: string; status: string }>;
+      }
+    ).indexOperations ?? [];
+    assert.ok(
+      completedOperations.some(
+        (operation) =>
+          operation.operationId === operationId
+          && operation.status === "completed",
+      ),
+    );
   });
 
   it("rejects async full refresh before acknowledging a background operation", async () => {

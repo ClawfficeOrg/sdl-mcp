@@ -1236,6 +1236,24 @@ describe("code-mode workflow executor", () => {
     assert.match(dryRun.validation[0].issues.join("\n"), /b|number|required/i);
     assert.match(dryRun.validation[0].fixHint, /sdl\.manual/);
     assert.strictEqual(dryRun.validation[1].pendingSchemaValidation, true);
+    assert.deepStrictEqual(result.results, [
+      {
+        stepIndex: 0,
+        fn: "testAdd",
+        result: null,
+        tokens: 0,
+        durationMs: 0,
+        status: "skipped",
+      },
+      {
+        stepIndex: 1,
+        fn: "testEcho",
+        result: null,
+        tokens: 0,
+        durationMs: 0,
+        status: "skipped",
+      },
+    ]);
   });
 
   it("workflowContinuationGet can page a structured path for later transforms", async () => {

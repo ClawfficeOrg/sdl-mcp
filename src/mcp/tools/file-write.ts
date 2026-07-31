@@ -1,5 +1,6 @@
 import { relative } from "path";
 import { realpathSync } from "fs";
+import { unlink } from "fs/promises";
 
 import { parseActionHandlerArgs } from "../../gateway/dispatch-spine.js";
 import {
@@ -9,7 +10,15 @@ import {
 } from "../tools.js";
 import { normalizePath, validatePathWithinRoot } from "../../util/paths.js";
 import { logger } from "../../util/logger.js";
-import { NotFoundError } from "../../domain/errors.js";
+import {
+  IndexError,
+  NotFoundError,
+  ValidationError,
+} from "../../domain/errors.js";
+import {
+  getStructuralLanguageForPath,
+  parseTreeForPath,
+} from "./search-edit/structural.js";
 import { attachRawContext } from "../token-usage.js";
 import {
   BYTES_PER_TOKEN,
@@ -138,6 +147,15 @@ export async function handleFileWrite(
   });
   const snippets = buildDiffPreview(existingContent, newContent);
 
+  // Indexed source must remain parseable before either disk or graph state changes.
+  const syntaxTree = parseTreeForPath(relPath, newContent);
+  if (
+    getStructuralLanguageForPath(relPath) !== null
+    && (!syntaxTree || syntaxTree.rootNode.hasError)
+  ) {
+    throw new ValidationError(`Parse validation failed for indexed source: ${relPath}`);
+  }
+
   // Re-verify path hasn't been swapped for a symlink since preparePath
   if (fileExists) {
     const resolved = realpathSync(absPath);
@@ -165,6 +183,16 @@ export async function handleFileWrite(
     relPath,
     newContent,
   );
+  if (indexUpdate?.applied === false) {
+    if (fileExists) {
+      await writeWithBackup(absPath, existingContent, false, true);
+    } else {
+      await unlink(absPath);
+    }
+    throw new IndexError(
+      `Indexed source reconciliation failed for ${relPath}: ${indexUpdate.error}`,
+    );
+  }
 
   const rawBytes =
     mode === "create" || mode === "overwrite"

@@ -765,7 +765,8 @@ async function _deleteFilesByIdsInner(
     { fileIds: uniqueFileIds },
   );
 
-  // Step 7b: Batch-delete FILE_IN_REPO rels and File nodes
+  // Step 7b: Delete known ownership edges, then detach any stale backward
+  // relationship-table entries before removing owned File nodes.
   await exec(
     conn,
     `MATCH (f:File)-[r:FILE_IN_REPO]->(:Repo)
@@ -777,7 +778,7 @@ async function _deleteFilesByIdsInner(
     conn,
     `MATCH (f:File)
      WHERE f.fileId IN $fileIds
-     DELETE f`,
+     DETACH DELETE f`,
     { fileIds: uniqueFileIds },
   );
 }

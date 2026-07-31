@@ -754,6 +754,7 @@ function projectRepoStatusForModel(
     "repoId",
     "rootAvailability",
     "latestVersionId",
+    "indexOperations",
     "filesIndexed",
     "symbolsIndexed",
   ]) {

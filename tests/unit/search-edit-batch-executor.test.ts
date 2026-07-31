@@ -9,10 +9,12 @@ import {
   applyBatch,
   preflightPreconditions,
 } from "../../dist/mcp/tools/search-edit/batch-executor.js";
-import type {
-  PlannedFileEdit,
-  PlanPrecondition,
-  StoredPlan,
+import { handleSearchEdit } from "../../dist/mcp/tools/search-edit/index.js";
+import {
+  getSearchEditPlanStore,
+  type PlannedFileEdit,
+  type PlanPrecondition,
+  type StoredPlan,
 } from "../../dist/mcp/tools/search-edit/plan-store.js";
 import { getLadybugConn, initLadybugDb, closeLadybugDb } from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
@@ -291,6 +293,23 @@ describe("search-edit batch-executor", () => {
     assert.equal(aRestored, "A1\n");
     const bRestored = await readFile(f2.abs, "utf-8");
     assert.equal(bRestored, "B1\n");
+
+    const stored = getSearchEditPlanStore().create(
+      plan.repoId,
+      plan.edits,
+      plan.preconditions,
+      plan.summary,
+      plan.defaultCreateBackup,
+    );
+    const response = (await handleSearchEdit({
+      mode: "apply",
+      repoId: plan.repoId,
+      planHandle: stored.planHandle,
+    })) as Record<string, unknown>;
+    assert.strictEqual(response.status, "failure");
+    assert.match(String(response.message), /rolled back/i);
+    assert.strictEqual(response.filesFailed, 1);
+    assert.deepStrictEqual(response.rollback, result.rollback);
   });
 
   it(

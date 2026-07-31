@@ -806,4 +806,21 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
     assert.strictEqual(projected[0]?.content, "qa-runtime-probe\r\n");
   });
 
+  it("does not warn for semicolons inside quoted Windows shell arguments", async () => {
+    const { handleRuntimeExecute } =
+      await import("../../dist/mcp/tools/runtime.js");
+
+    const result = await handleRuntimeExecute({
+      repoId,
+      runtime: "shell",
+      code: 'node -e "console.log(\'a;b\')"',
+      outputMode: "minimal",
+      persistOutput: false,
+      timeoutMs: 10_000,
+    });
+
+    assert.strictEqual(result.status, "success");
+    assert.strictEqual(result.quotingWarnings, undefined);
+  });
+
 });

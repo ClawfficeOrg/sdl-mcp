@@ -348,6 +348,95 @@ describe("sdl.file.write", () => {
       await waitForVerifiedRevision(repoId, 1);
     });
 
+    it("restores indexed source when graph reconciliation fails", async () => {
+      const relPath = "src/reconcile-failure.ts";
+      const filePath = join(testDir, relPath);
+      const original = "export const stable = 1;";
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, original, "utf-8");
+
+      await ladybugDb.upsertRepo(await getLadybugConn(), {
+        repoId,
+        rootPath: testDir,
+        configJson: "{",
+        createdAt: "2026-07-31T00:00:00.000Z",
+      });
+
+      await assert.rejects(
+        () =>
+          handleFileWrite({
+            repoId,
+            filePath: relPath,
+            content: "export const stable = 2;",
+            createBackup: false,
+          }),
+        (error: unknown) => (error as { code?: string }).code === "INDEX_ERROR",
+      );
+      assert.equal(readFileSync(filePath, "utf-8"), original);
+    });
+
+    it("rejects invalid indexed source before changing the file or graph", async () => {
+      const relPath = "src/stable.ts";
+      const filePath = join(testDir, relPath);
+      const fileId = generateFileId(repoId, relPath);
+      const content = "export const stable = 1;";
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, content, "utf-8");
+
+      const conn = await getLadybugConn();
+      await ladybugDb.upsertFile(conn, {
+        fileId,
+        repoId,
+        relPath,
+        contentHash: "stable-baseline",
+        language: "typescript",
+        byteSize: Buffer.byteLength(content),
+        lastIndexedAt: "2026-07-31T00:00:00.000Z",
+      });
+      await ladybugDb.upsertSymbol(conn, {
+        symbolId: "stable-symbol",
+        repoId,
+        fileId,
+        kind: "variable",
+        name: "stable",
+        exported: true,
+        visibility: "public",
+        language: "typescript",
+        rangeStartLine: 1,
+        rangeStartCol: 0,
+        rangeEndLine: 1,
+        rangeEndCol: content.length,
+        astFingerprint: "stable-fingerprint",
+        signatureJson: "{}",
+        summary: "Stable fixture",
+        invariantsJson: "[]",
+        sideEffectsJson: "[]",
+        roleTagsJson: "[]",
+        testCaseJson: null,
+        searchText: "stable",
+        summaryQuality: 1,
+        summarySource: "test",
+        updatedAt: "2026-07-31T00:00:00.000Z",
+      });
+
+      await assert.rejects(
+        () =>
+          handleFileWrite({
+            repoId,
+            filePath: relPath,
+            content: "export const stable = ;",
+            createBackup: false,
+          }),
+        (error: unknown) =>
+          (error as { code?: string }).code === "VALIDATION_ERROR",
+      );
+      assert.equal(readFileSync(filePath, "utf-8"), content);
+      assert.deepEqual(
+        (await ladybugDb.getSymbolsByFile(conn, fileId)).map((symbol) => symbol.name),
+        ["stable"],
+      );
+    });
+
     it("throws when file does not exist and createIfMissing is false", async () => {
       await assert.rejects(
         handleFileWrite({

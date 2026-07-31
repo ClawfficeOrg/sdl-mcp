@@ -209,6 +209,7 @@ interface ToolResponseContentBlock {
 interface ToolResponseEnvelope extends Record<string, unknown> {
   content: ToolResponseContentBlock[];
   structuredContent?: Record<string, unknown>;
+  isError?: true;
   _displayFooter?: string;
 }
 
@@ -467,9 +468,18 @@ export function buildToolResponseEnvelope(
       : { content };
   }
 
+  const isError =
+    isRecordValue(primaryPayload)
+    && (primaryPayload.status === "failure" || primaryPayload.status === "denied");
+
   return visibleFooterText
-    ? { content, structuredContent, _displayFooter: visibleFooterText }
-    : { content, structuredContent };
+    ? {
+        content,
+        structuredContent,
+        ...(isError ? { isError: true as const } : {}),
+        _displayFooter: visibleFooterText,
+      }
+    : { content, structuredContent, ...(isError ? { isError: true as const } : {}) };
 }
 
 export interface MCPServerOptions {

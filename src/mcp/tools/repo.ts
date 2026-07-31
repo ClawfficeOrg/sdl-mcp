@@ -115,6 +115,25 @@ const lastKnownHealth = new Map<
 const HEALTH_CACHE_TTL_MS = 30_000;
 let repoStatusHealthLoader = getRepoHealthSnapshot;
 
+type IndexOperation = {
+  operationId: string;
+  mode: "full" | "incremental";
+  status: "queued" | "running" | "completed" | "failed";
+  versionId?: string;
+  changedFiles?: number;
+  error?: string;
+};
+
+const indexOperationsByRepo = new Map<string, Map<string, IndexOperation>>();
+
+function setIndexOperation(repoId: string, operation: IndexOperation): void {
+  const operations = indexOperationsByRepo.get(repoId) ?? new Map();
+  operations.delete(operation.operationId);
+  operations.set(operation.operationId, operation);
+  while (operations.size > 5) operations.delete(operations.keys().next().value!);
+  indexOperationsByRepo.set(repoId, operations);
+}
+
 export function _setRepoStatusHealthLoaderForTesting(
   loader: typeof getRepoHealthSnapshot = getRepoHealthSnapshot,
 ): void {
@@ -450,8 +469,10 @@ export async function handleRepoRegister(
   if (existingRepo && configChanges.length > 0 && !updateExisting) {
     return {
       ok: false,
+      status: "failure",
       repoId,
-      changed: true,
+      changed: false,
+      wouldChange: true,
       requiresUpdateExisting: true,
       configChanges,
       currentConfig: currentConfig ? toConfigRecord(currentConfig) : undefined,
@@ -686,6 +707,7 @@ export async function handleRepoUnregister(
     });
   }
 
+  indexOperationsByRepo.delete(repoId);
   return { ok: true, repoId, removed: true };
 }
 
@@ -942,6 +964,9 @@ function compactPrefetchStatsForStatus(
       ...(includeTelemetry ? { rootPath: repo.rootPath } : {}),
       rootAvailability,
       latestVersionId: latestVersion?.versionId ?? null,
+      ...(indexOperationsByRepo.has(repoId)
+        ? { indexOperations: [...indexOperationsByRepo.get(repoId)!.values()] }
+        : {}),
       ...(includeStableHistory
         ? {
             recentVersions: recentVersions.map((version) => ({
@@ -1159,9 +1184,11 @@ export async function handleIndexRefresh(
       });
     }
     const operationId = `idx-${randomUUID().slice(0, 8)}`;
+    setIndexOperation(repoId, { operationId, mode, status: "queued" });
     logger.info("Async index refresh started", { repoId, mode, operationId });
     // Re-bind executeRefresh without request-scoped signal (it aborts when client disconnects)
     const bgRefresh = async () => withRepoMutation(repoId, async () => {
+      setIndexOperation(repoId, { operationId, mode, status: "running" });
       const conn = await getLadybugConn();
       const repo = await ladybugDb.getRepo(conn, repoId);
       if (!repo) throw new DatabaseError(`Repository ${repoId} not found`);
@@ -1177,19 +1204,30 @@ export async function handleIndexRefresh(
     // settles. Outside public dispatch (watcher/CLI), this is a safe no-op.
     retainIndexRefreshAdmissionUntil(backgroundRefresh);
     backgroundRefresh.then(
-      (result) =>
+      (result) => {
+        setIndexOperation(repoId, {
+          operationId,
+          mode,
+          status: "completed",
+          versionId: result.versionId,
+          changedFiles: result.changedFiles,
+        });
         logger.info("Async index refresh completed", {
           repoId,
           operationId,
           versionId: result.versionId,
           changedFiles: result.changedFiles,
-        }),
-      (err) =>
+        });
+      },
+      (err) => {
+        const error = err instanceof Error ? err.message : String(err);
+        setIndexOperation(repoId, { operationId, mode, status: "failed", error });
         logger.error("Async index refresh failed", {
           repoId,
           operationId,
-          error: err instanceof Error ? err.message : String(err),
-        }),
+          error,
+        });
+      },
     );
     return {
       ok: true,

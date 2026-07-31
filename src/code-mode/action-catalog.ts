@@ -967,11 +967,11 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   "code.getSkeleton": "Get skeleton IR (signatures + control flow)",
   "code.getHotPath": "Get hot-path excerpt for specific identifiers",
   "repo.register": "Register a repository",
-  "repo.status": "Get repository status",
+  "repo.status": "Get repository status, including active and recent async index operation states",
   "repo.unregister": "Permanently remove a runtime repository registration",
   "repo.overview": "Get codebase overview",
   "index.refresh":
-    "Refresh index. Use async:true from agent workflows unless the caller can tolerate a long foreground run; while async indexing is active, poll repo.status and wait for completion before dependent work.",
+    "Refresh index. Use async:true from agent workflows unless the caller can tolerate a long foreground run; while async indexing is active, poll repo.status until the matching indexOperations entry is completed or failed before dependent work.",
   "policy.get": "Get policy config",
   "policy.set":
     "Set policy config (policyPatch wrapper: maxWindowLines, maxWindowTokens, requireIdentifiers, allowBreakGlass, defaultMinCallConfidence, defaultDenyRaw, budgetCaps)",
@@ -992,7 +992,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   "usage.stats": "Get cumulative token savings statistics, including Signal density in compact output",
   "file.read": "Read non-indexed file content (templates, configs, docs); large untargeted reads include a targeted-mode hint",
   "file.write":
-    "Write to a single file (indexed or non-indexed) with targeted modes (line replace, pattern replace, JSON path, insert, append); use search.edit for cross-file batching",
+    "Write to a single file (indexed or non-indexed) with targeted modes (line replace, pattern replace, JSON path, insert, append); indexed source is syntax-validated before commit and synchronously reconciled; use search.edit for cross-file batching",
   "search.edit":
     'Cross-file search-and-edit in two phases (preview + apply) with server-side plan handles, sha256 preconditions, rollback, and ignored/dot-directory refusal; use targeting:"identifier" for exact AST identifier edits in supported structural languages, targeting:"structural" for tree-sitter capture edits, targeting:"rename" for graph-scoped symbol renames, targeting:"signature" for TS/JS signature changes with AST-based callsite propagation, operations[] for heterogeneous batches, and file.write for explicit single-file writes where allowed. Previews default to responseMode:"auto".',
   "semantic.enrichment.refresh":

@@ -195,6 +195,24 @@ function runtimeExecutableRecovery(
   return `Retry the same command with { runtime: "shell", code: ${JSON.stringify(command)} }.`;
 }
 
+function hasUnquotedSemicolon(value: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    // Both cmd caret escapes and backslashes in embedded scripts can protect quotes.
+    if ((char === "^" || char === "\\") && index + 1 < value.length) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = quote === char ? null : quote ?? char;
+    } else if (char === ";" && quote === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function detectQuotingWarnings(
   request: RuntimeExecuteRequest,
 ): string[] | undefined {
@@ -217,7 +235,7 @@ function detectQuotingWarnings(
   if (
     request.runtime === "shell" &&
     process.platform === "win32" &&
-    /;/.test(request.code ?? "")
+    hasUnquotedSemicolon(request.code ?? "")
   ) {
     warnings.add(
       "Windows cmd.exe does not treat semicolons as command separators. Use newlines or & between commands in shell runtime code.",

@@ -331,6 +331,12 @@ export class InMemoryLiveIndexCoordinator implements LiveIndexCoordinator {
       };
     }
 
+    // A save may already have checkpointed and removed the last draft. Only
+    // skip the idle waits when no pending draft can still become eligible.
+    if (this.overlayStore.listDrafts(input.repoId).length === 0) {
+      return this.checkpointService.checkpointRepo(input);
+    }
+
     await this.parseScheduler.waitForIdle();
     await this.reconcileWorker.waitForIdle();
     return this.checkpointService.checkpointRepo(input);

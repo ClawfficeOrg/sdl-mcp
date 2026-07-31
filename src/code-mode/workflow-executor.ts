@@ -421,7 +421,15 @@ export async function executeWorkflow(
     const allValid = validation.every((v) => v.valid);
     timer.record("workflow.dryRunValidate", dryRunStartedAt);
     const response = {
-      results: [],
+      // Dry runs keep the normal step envelope so callers can audit every skipped mutation.
+      results: validation.map((entry) => ({
+        stepIndex: entry.stepIndex,
+        fn: entry.fn,
+        result: null,
+        tokens: 0,
+        durationMs: 0,
+        status: "skipped" as const,
+      })),
       totalTokens: 0,
       durationMs: Date.now() - startTime,
       truncated: false,

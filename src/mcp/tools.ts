@@ -646,9 +646,11 @@ export const RepoRegisterRequestSchema = z.object({
 
 export const RepoRegisterResponseSchema = z.object({
   ok: z.boolean(),
+  status: z.literal("failure").optional(),
   repoId: z.string().min(1).optional(),
   dryRun: z.boolean().optional(),
   changed: z.boolean().optional(),
+  wouldChange: z.boolean().optional(),
   requiresUpdateExisting: z.boolean().optional(),
   message: z.string().optional(),
   configChanges: z
@@ -692,11 +694,21 @@ const RepoRootAvailabilitySchema = z.object({
   nextBestAction: z.string().optional(),
 });
 
+const IndexOperationSchema = z.object({
+  operationId: z.string(),
+  mode: z.enum(["full", "incremental"]),
+  status: z.enum(["queued", "running", "completed", "failed"]),
+  versionId: z.string().optional(),
+  changedFiles: z.number().int().nonnegative().optional(),
+  error: z.string().optional(),
+});
+
 const RepoStatusRawResponseSchema = z.object({
   repoId: z.string().min(1),
   rootPath: z.string().optional(),
   rootAvailability: RepoRootAvailabilitySchema,
   latestVersionId: z.string().nullable(),
+  indexOperations: z.array(IndexOperationSchema).optional(),
   filesIndexed: z.number().int(),
   symbolsIndexed: z.number().int(),
   countNotes: z
@@ -832,6 +844,7 @@ const RepoStatusCompactResponseSchema = z.object({
   repoId: z.string().min(1),
   rootAvailability: RepoRootAvailabilitySchema,
   latestVersionId: z.string().nullable(),
+  indexOperations: z.array(IndexOperationSchema).optional(),
   filesIndexed: z.number().int(),
   symbolsIndexed: z.number().int(),
   healthScore: z.number().int().min(0).max(100).nullable().optional(),
@@ -4431,6 +4444,8 @@ const SearchEditPreviewResponseSchema = z.object({
 
 const SearchEditApplyResponseSchema = z.object({
   mode: z.literal("apply"),
+  status: z.literal("failure").optional(),
+  message: z.string().optional(),
   planHandle: z.string(),
   filesAttempted: z.number().int().nonnegative(),
   filesWritten: z.number().int().nonnegative(),

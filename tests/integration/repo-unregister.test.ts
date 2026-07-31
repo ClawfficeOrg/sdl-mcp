@@ -613,6 +613,31 @@ describe("repo.unregister integration", () => {
         byteSize: 1,
         lastIndexedAt: "2026-07-17T00:00:00.000Z",
       });
+      await ladybugDb.upsertSymbol(conn, {
+        symbolId: "runtime-remove-symbol",
+        repoId,
+        fileId: "runtime-remove-file",
+        kind: "variable",
+        name: "removeMe",
+        exported: true,
+        visibility: "public",
+        language: "typescript",
+        rangeStartLine: 1,
+        rangeStartCol: 0,
+        rangeEndLine: 1,
+        rangeEndCol: 24,
+        astFingerprint: "runtime-remove-fingerprint",
+        signatureJson: "{}",
+        summary: "Disposable unregister fixture",
+        invariantsJson: "[]",
+        sideEffectsJson: "[]",
+        roleTagsJson: "[]",
+        testCaseJson: null,
+        searchText: "removeMe",
+        summaryQuality: 1,
+        summarySource: "test",
+        updatedAt: "2026-07-17T00:00:00.000Z",
+      });
     });
     _setRepoStatusHealthLoaderForTesting(async (statusRepoId) => ({
       repoId: statusRepoId,
@@ -736,6 +761,10 @@ describe("repo.unregister integration", () => {
     assert.deepStrictEqual(response, { ok: true, repoId, removed: true });
     assert.deepStrictEqual(Object.keys(response), ["ok", "repoId", "removed"]);
     assert.strictEqual(await ladybugDb.getRepo(await getLadybugConn(), repoId), null);
+    await assert.rejects(
+      () => handleRepoStatus({ repoId }),
+      (error: unknown) => (error as { code?: string }).code === "DATABASE_ERROR",
+    );
     assert.strictEqual((await coordinator.getLiveStatus(repoId)).pendingBuffers, 0);
     assert.strictEqual(_hasRepoStatusHealthCacheForTesting(repoId), false);
     assert.strictEqual(getGraphSnapshot(repoId), null);
@@ -779,4 +808,30 @@ describe("repo.unregister integration", () => {
     _setRepoStatusHealthLoaderForTesting();
     coordinator.reset();
   });
+
+  it("reports guarded registration changes as unapplied workflow failures", async () => {
+    writeConfig();
+    const repoId = "guarded-register";
+    await handleRepoRegister({
+      repoId,
+      rootPath: tempRoot,
+      languages: ["ts"],
+    });
+
+    const response = (await handleRepoRegister({
+      repoId,
+      rootPath: tempRoot,
+      languages: ["py"],
+    })) as Record<string, unknown>;
+
+    assert.strictEqual(response.ok, false);
+    assert.strictEqual(response.status, "failure");
+    assert.strictEqual(response.changed, false);
+    assert.strictEqual(response.wouldChange, true);
+    assert.strictEqual(response.requiresUpdateExisting, true);
+    const stored = await ladybugDb.getRepo(await getLadybugConn(), repoId);
+    assert.match(stored?.configJson ?? "", /"ts"/);
+    assert.doesNotMatch(stored?.configJson ?? "", /"py"/);
+  });
+
 });

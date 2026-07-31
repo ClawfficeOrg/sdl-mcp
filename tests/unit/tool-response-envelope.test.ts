@@ -300,4 +300,25 @@ describe("tool response envelope model projection", () => {
     assert.match(text, /responseHandle: response-1/);
     assert.doesNotMatch(text, /etag/);
   });
+
+  it("marks structured failure results as MCP errors without dropping evidence", () => {
+    const payload = {
+      status: "failure",
+      message: "search.edit failed and rolled back",
+      filesFailed: 1,
+      rollback: { triggered: true, restoredFiles: ["a.ts"] },
+      results: [{ file: "b.ts", status: "failed", reason: "read-only" }],
+    };
+    const envelope = buildToolResponseEnvelope(
+      payload,
+      null,
+      "",
+      "sdl.search.edit",
+      {},
+    ) as Record<string, unknown>;
+
+    assert.strictEqual(envelope.isError, true);
+    assert.deepStrictEqual(envelope.structuredContent, payload);
+  });
+
 });

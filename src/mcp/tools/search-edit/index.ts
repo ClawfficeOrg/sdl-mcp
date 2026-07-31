@@ -280,6 +280,14 @@ async function handleApply(
   const fileEntries = getApplyFileEntries(plan);
   const response: SearchEditApplyResponse = {
     mode: "apply",
+    ...(batch.filesFailed > 0
+      ? {
+          status: "failure",
+          message: batch.rollback.triggered
+            ? "search.edit apply failed and rolled back all completed writes."
+            : "search.edit apply failed.",
+        }
+      : {}),
     planHandle: request.planHandle,
     filesAttempted: batch.filesAttempted,
     filesWritten: batch.filesWritten,
