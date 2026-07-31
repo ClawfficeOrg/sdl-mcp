@@ -212,7 +212,7 @@ Use SDL file and edit tools instead of native read/write paths.
 - Prefer `targeting: "identifier"` for exact AST identifier replacements in supported structural languages that must avoid comments and strings, `targeting: "structural"` for tree-sitter capture edits such as calls, imports, properties, or plugin-defined grammar captures, and `operations[]` for heterogeneous batches.
 - Apply a returned plan handle only after reviewing snippets, file counts, and operation summaries.
 - If preview snippets are insufficient, use plan-bound `previewWindow` or `sourceWindow` with the `planHandle`, `symbolId`, `reason`, `expectedLines`, and `identifiersToFind`; do not fall back to `file.read`.
-- `file.write` can make a targeted single-file write, including indexed files, but treat it as fallback for indexed source when `symbol.edit` cannot anchor the change and `search.edit` would be broader than necessary. Indexed source is syntax-validated before the file or graph changes; successful writes synchronously reconcile the graph and report `indexUpdate`.
+- `file.write` can make a targeted single-file write, including indexed files, but treat it as fallback for indexed source when `symbol.edit` cannot anchor the change and `search.edit` would be broader than necessary.
 - Use `sdl.workflow` plus `runtimeExecute` for a targeted script only when SDL edit tools cannot express the edit; pass multiline payloads through `stdin`.
 - `file.write` retains a sibling `.bak` by default and returns `backupPath` when it creates that backup; remove the backup after verification if it is no longer needed. With `createBackup: false`, no backup is created and `backupPath` is absent. `symbol.edit` and `search.edit` use temporary rollback copies only and remove them after a successful apply, so they do not return a retained backup path. Do not run broad native cleanup commands.
 
@@ -436,7 +436,7 @@ For indexing:
 - A `failed` state can remain graph-readable when a current manifest exists, but it does not prove the latest revision. Do not retry refresh automatically. Follow `nextBestAction` for stopped `index --force --safe-rebuild` recovery.
 - An `unknown` state, null current revision, or missing-manifest guidance blocks graph retrieval. Run one incremental refresh only for a new unindexed repository; a populated graph requires a stopped safe rebuild.
 - Successful saved indexed edits commit graph and manifest changes together, advance the current revision, and return before background verification completes.
-- If refresh runs asynchronously, poll `repo.status` until the matching `indexOperations` entry is `completed` or `failed` before relying on its resulting graph state.
+- If refresh runs asynchronously, poll `repo.status` and wait for completion before relying on its resulting graph state.
 - Do not request a full refresh for a populated active graph. SDL-MCP rejects it before provider work or graph writes.
 
 ---

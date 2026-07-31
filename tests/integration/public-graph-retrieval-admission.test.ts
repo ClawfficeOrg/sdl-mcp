@@ -745,7 +745,11 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
         },
       })) as { isError?: boolean; structuredContent?: { results?: unknown[] } };
       assert.notEqual(validResponse.isError, true, repoId);
-      assert.deepEqual(validResponse.structuredContent?.results, [], repoId);
+      assert.deepEqual(
+        validResponse.structuredContent?.results,
+        [{ fn: "symbolSearch", status: "skipped" }],
+        repoId,
+      );
       const validDryRun = observedDryRuns.at(-1)?.dryRun;
       assert.equal(validDryRun?.valid, true, repoId);
 
@@ -766,7 +770,15 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
         },
       })) as { isError?: boolean; structuredContent?: { results?: unknown[] } };
       assert.notEqual(invalidResponse.isError, true, repoId);
-      assert.deepEqual(invalidResponse.structuredContent?.results, [], repoId);
+      assert.deepEqual(
+        invalidResponse.structuredContent?.results,
+        [
+          { fn: "symbolSearch", status: "skipped" },
+          { fn: "symbolGetCard", status: "skipped" },
+          { fn: "indexRefresh", status: "skipped" },
+        ],
+        repoId,
+      );
       const invalidDryRun = observedDryRuns.at(-1)?.dryRun;
       assert.equal(invalidDryRun?.valid, false, repoId);
       const validation = invalidDryRun?.validation;

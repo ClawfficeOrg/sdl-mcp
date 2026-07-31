@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.1] - Unreleased
+
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.13.0] - 2026-07-31
 
 ### Added
 
@@ -26,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Cross-platform performance gate**: A deterministic 1,500-file, 30,000-symbol benchmark runs the same candidate and synchronous-control edits on byte-identical database clones. Ubuntu and Windows CI enforce foreground p50 below 500 ms, foreground p95 and concurrent edits below one second, candidate p50 at most 20 percent of control p50, background verification p95 at most four seconds, zero timeouts, and zero foreground full-graph captures.
   - **Bounded public refresh admission**: Public refresh envelopes share one process-wide FIFO writer gate. One refresh runs while at most eight requests wait; overload and queue timeout responses are retryable `RUNTIME_ERROR` results, aborted waiters are removed cleanly, and asynchronous refreshes retain admission until their detached work settles.
 
+- **Temporary Windows OpenSSL runtime for LadybugDB FTS**: Windows x64 installs now include the SDL-owned `@sdl-mcp/ladybug-openssl-win32-x64@3.5.7-sdl.2` optional package with corrected signer provenance, SBOM, license, and hash-pinned `libcrypto-3-x64.dll` / `libssl-3-x64.dll` runtime files for LadybugDB 0.18.1 FTS. The incorrect `.1` provenance boundary is retired and rejected.
+- **Ladybug storage migration gate**: added a checksum-pinned v40 fixture that verifies LadybugDB 0.18.1 can migrate/checkpoint existing non-derived memory, feedback, usage, and audit rows.
 
 ### Changed
 
@@ -37,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Runtime output contracts**: Runtime failure digests deduplicate repeated failure text. Persisted artifacts remain byte-faithful after configured redaction. Default model excerpts remove only leading command-prompt echoes and recognized Node test-duration suffixes; `view: "raw"` exposes the unprojected, already-redacted excerpt.
 - **Catalog and schema discovery**: `sdl.action.search` documents `maxTokens` as a bounded catalog-page control and uses `offset` for subsequent pages. Manual schemas preserve useful union alternatives instead of collapsing them into opaque object placeholders.
 - **Edit and semantic contracts**: `file.write` retains its default `.bak` sibling and returns `backupPath` only when it creates a backup, while `symbol.edit` and `search.edit` remove temporary rollback copies after success. Semantic enrichment omits score and basis when unavailable; measured scores use `precisionBasis: "operational-composite"` and combine six operational inputs, so the value is not labeled precision, recall, or general quality.
+- **LadybugDB core upgrade**: the `kuzu` alias now resolves to the official `@ladybugdb/core@0.18.1` package. SDL still does not rebuild or republish LadybugDB itself.
+- **Native package release**: `sdl-mcp-native` and its platform packages are released as `0.13.0` so registry installs expose the Windows `preloadWindowsLibrary` / `releaseWindowsLibrary` shim required by the runtime gate.
 
 ### Fixed
 
@@ -56,22 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Repository root availability reporting**: `repo.status` now reports `available`, `missing`, or `unreadable` roots at every detail level with bounded open/close probing, configuration-aware recovery guidance, and fail-closed health behavior without invoking repository scans for minimal status.
 - **Provider-first shadow FTS handoff**: Finalized shadow activation now rebuilds and verifies the configured critical Symbol FTS index after reopening the swapped database. Missing or unavailable required FTS state fails the handoff and restores the previous active database instead of reporting a degraded shadow as activated.
 - **Windows FTS database reopen regression**: Clean Windows child processes now create a populated FTS database and reopen it twice through the production database path without ambient OpenSSL DLL directories. The verified runtime preload covers both explicit `LOAD EXTENSION fts` and lazy `Database.init()` WAL replay; dynamic package import and `Database` construction remain outside that optional capability boundary.
-
-## [0.12.4] - 2026-07-14
-
-### Added
-
-- **Temporary Windows OpenSSL runtime for LadybugDB FTS**: Windows x64 installs now include the SDL-owned `@sdl-mcp/ladybug-openssl-win32-x64@3.5.7-sdl.2` optional package with corrected signer provenance, SBOM, license, and hash-pinned `libcrypto-3-x64.dll` / `libssl-3-x64.dll` runtime files for LadybugDB 0.18.1 FTS. The incorrect `.1` provenance boundary is retired and rejected.
-- **Ladybug storage migration gate**: added a checksum-pinned v40 fixture that verifies LadybugDB 0.18.1 can migrate/checkpoint existing non-derived memory, feedback, usage, and audit rows.
-
-### Changed
-
-- **LadybugDB core upgrade**: the `kuzu` alias now resolves to the official `@ladybugdb/core@0.18.1` package. SDL still does not rebuild or republish LadybugDB itself.
-- **Native package patch release**: `sdl-mcp-native` and its platform packages are released as `0.12.4` so registry installs expose the Windows `preloadWindowsLibrary` / `releaseWindowsLibrary` shim required by the runtime gate.
-
-### Fixed
-
 - **file.write/search.edit live-index crash**: Windows Symbol FTS provisioning now preloads the verified OpenSSL runtime by absolute package path before `LOAD EXTENSION fts`, allowing `patchSavedFile()` to mutate active Symbol FTS rows directly without the 0.16.1 drop/rebuild workaround.
+
+_381 non-merge commits from 2 contributors since v0.12.3._
 
 ## [0.12.3] - 2026-07-11
 
