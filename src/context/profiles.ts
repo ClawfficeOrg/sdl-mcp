@@ -33,7 +33,7 @@ export const TASK_PROFILES: Readonly<
   }),
   explain: Object.freeze({
     taskType: "explain",
-    rungPreference: ["card", "skeleton"] as const,
+    rungPreference: ["card", "hotPath"] as const,
     ...SHARED_BEAM_BEHAVIOR,
     includeTests: false,
     auxiliaryLanes: ["fileSummary"] as const,

@@ -38,7 +38,6 @@ import {
 } from "../../dist/domain/errors.js";
 import type {
   ContextCandidate,
-  ContextEvidence,
   ContextPayload,
   ContextRung,
   ContextV2Request,
@@ -333,12 +332,133 @@ describe("ContextEngineV2 pure contracts", () => {
     ]);
     assert.deepEqual(getTaskProfile("explain").rungPreference, [
       "card",
-      "skeleton",
+      "hotPath",
     ]);
     assert.equal(getTaskProfile("debug").includeTests, true);
     assert.equal(getTaskProfile("review").includeTests, true);
     assert.equal(getTaskProfile("implement").includeTests, false);
     assert.equal(getTaskProfile("explain").includeTests, false);
+  });
+
+  it("hydrates concrete hot paths for explain requests", async () => {
+    const focus = candidate("MCPServer", 1, 0, {
+      card: 10,
+      hotPath: 20,
+    });
+    focus.path = "src/server.ts";
+    const capturedContent = [
+      "export class MCPServer {",
+      "  setupHandlers() {",
+      "    return SDL_MCP_SERVER_INSTRUCTIONS;",
+      "  }",
+      "}",
+    ].join("\n");
+    const overlaySnapshot = {
+      repoId: "repo",
+      touchedFileIds: new Set(),
+      symbolsById: new Map(),
+      filesById: new Map(),
+      outgoingEdgesBySymbolId: new Map(),
+    };
+    const preparedHotPath = {
+      symbol: {
+        symbolId: focus.symbolId,
+        kind: "class",
+        rangeStartLine: 1,
+        rangeEndLine: 5,
+      },
+      filePath: focus.path,
+      relativePath: focus.path,
+      extension: "ts",
+      sourceKind: "overlay",
+      capturedContentHash: "captured",
+      capturedContent,
+    } as never;
+    let retrievalRuntime: unknown;
+    let selectedRungs: ContextRung[] = [];
+    const engine = testContextEngine({
+      runReadSnapshot: async (_repoId, fn) =>
+        fn({
+          conn: {} as never,
+          versionId: "v1",
+          overlaySnapshot,
+        }),
+      retrieve: async (_request, _profile, runtime) => {
+        retrievalRuntime = runtime;
+        return {
+          level: "hybrid",
+          lanes: [{ id: "exactIdentifier", available: true }],
+          candidates: [focus],
+          runtime,
+        };
+      },
+      expand: async ({ candidates, runtime }) => {
+        assert.equal(runtime, retrievalRuntime);
+        return candidates;
+      },
+      prepareHydration: async ({ selected, runtime }) => {
+        assert.equal(runtime, retrievalRuntime);
+        selectedRungs = selected.flatMap(({ rungs }) => rungs);
+        return {
+          selected: Object.freeze([...selected]),
+          cards: Object.freeze([
+            {
+              symbolId: focus.symbolId,
+              kind: "class",
+              name: "MCPServer",
+            } as never,
+          ]),
+          durableEdges: new Map(),
+          skeletons: new Map(),
+          hotPaths: new Map([[focus.symbolId, preparedHotPath]]),
+          overlaySnapshot,
+        };
+      },
+      hydrate: async ({ request, selected, runtime, prepared }) => {
+        assert.equal(runtime, retrievalRuntime);
+        assert.ok(runtime.conn);
+        assert.ok(runtime.versionId);
+        assert.ok(runtime.overlaySnapshot);
+        return hydrateContextBundles({
+          conn: runtime.conn,
+          repoId: request.repoId,
+          versionId: runtime.versionId,
+          selected,
+          identifiers: identifiersForContextRequest(request),
+          overlaySnapshot: runtime.overlaySnapshot,
+          prepared,
+        });
+      },
+    });
+
+    const result = await engine.buildContext({
+      repoId: "repo",
+      taskType: "explain",
+      taskText:
+        "Explain how MCPServer consumes SDL_MCP_SERVER_INSTRUCTIONS",
+      chatMentions: ["MCPServer", "SDL_MCP_SERVER_INSTRUCTIONS"],
+      budget: { maxTokens: 2_400 },
+    });
+
+    assert.deepEqual(selectedRungs, ["card", "hotPath"]);
+    assert.ok("evidence" in result);
+    assert.deepEqual(
+      result.evidence.find((item) => item.rung === "card")?.content,
+      { kind: "class", name: "MCPServer" },
+    );
+    assert.ok(
+      result.evidence.some(
+        (item) =>
+          item.rung === "hotPath" &&
+          JSON.stringify(item.content).includes(
+            "SDL_MCP_SERVER_INSTRUCTIONS",
+          ),
+      ),
+    );
+    assert.equal(
+      result.evidence.some((item) => item.rung === "skeleton"),
+      false,
+    );
   });
 
   it("honors profile-owned auxiliary lanes in retrieval state", () => {
@@ -390,7 +510,7 @@ describe("ContextEngineV2 pure contracts", () => {
     );
     const result = selectContextBundles({
       candidates,
-      profile: getTaskProfile("explain"),
+      profile: getTaskProfile("implement"),
       availableTokens,
     });
 
@@ -469,7 +589,7 @@ describe("ContextEngineV2 pure contracts", () => {
 
     const result = selectContextBundles({
       candidates: [explicit, focused, exactTierOne],
-      profile: getTaskProfile("explain"),
+      profile: getTaskProfile("implement"),
       availableTokens:
         1_800 - estimateContextSelectionEnvelopeTokens(empty),
     });
@@ -528,6 +648,30 @@ describe("ContextEngineV2 pure contracts", () => {
     );
   });
 
+  it("admits competing exact base cards in candidate-rank order", () => {
+    const rankOne = candidate("rank-one", 1, 1, {
+      card: 100,
+      skeleton: 2_000,
+    });
+    const rankTwo = candidate("rank-two", 2, 1, {
+      card: 10,
+      skeleton: 20,
+    });
+    rankOne.lanes = ["exactIdentifier"];
+    rankTwo.lanes = ["exactIdentifier"];
+
+    const result = selectContextBundles({
+      candidates: [rankOne, rankTwo],
+      profile: getTaskProfile("explain"),
+      availableTokens: expectedRungTokens(rankOne, "card"),
+    });
+
+    assert.deepEqual(
+      result.selected.map(({ candidate: item, rungs }) => [item.symbolId, rungs]),
+      [["rank-one", ["card"]]],
+    );
+  });
+
   it("admits exact identifiers by base-card cost and skips non-fitting complete ladders", () => {
     const expensive = candidate("expensive", 1, 1, {
       card: 40,
@@ -555,7 +699,7 @@ describe("ContextEngineV2 pure contracts", () => {
 
     const result = selectContextBundles({
       candidates: [expensive, affordable, exact],
-      profile: getTaskProfile("explain"),
+      profile: getTaskProfile("implement"),
       availableTokens: affordableCost + exactCardCost,
     });
 
@@ -593,7 +737,7 @@ describe("ContextEngineV2 pure contracts", () => {
 
     const result = selectContextBundles({
       candidates: [unrelated, exact],
-      profile: getTaskProfile("explain"),
+      profile: getTaskProfile("implement"),
       availableTokens,
     });
 
@@ -773,6 +917,68 @@ describe("ContextEngineV2 pure contracts", () => {
     assert.deepEqual(selectedSymbolIds, ["explicit-a", "explicit-b"]);
   });
 
+  it("keeps the highest-ranked Tier 0 card through the response budget", async () => {
+    const rankOne = candidate("SDL_MCP_SERVER_INSTRUCTIONS", 1, 0, {
+      card: 100,
+      hotPath: 2_000,
+    });
+    const rankTwo = candidate("MCPServer", 2, 0, {
+      card: 10,
+      hotPath: 20,
+    });
+    const emptyPayload = payload();
+    emptyPayload.status = "empty";
+    emptyPayload.taskType = "explain";
+    emptyPayload.retrieval = {
+      level: "lexical",
+      lanes: [{ id: "exactIdentifier", available: true }],
+    };
+    emptyPayload.evidence = [];
+    emptyPayload.edges = [];
+    const engine = testContextEngine({
+      retrieve: async () => ({
+        level: "lexical",
+        lanes: [{ id: "exactIdentifier", available: true }],
+        candidates: [rankOne, rankTwo],
+        runtime: {},
+      }),
+      expand: async ({ candidates }) => candidates,
+      hydrate: async ({ selected }) => ({
+        evidence: selected.map(({ candidate: item }) => ({
+          rung: "card" as const,
+          symbolId: item.symbolId,
+          path: item.path,
+          rank: item.rank,
+          tier: item.tier,
+          lanes: item.lanes,
+          content: { kind: "class", name: item.symbolId },
+        })),
+        edges: [],
+        unavailable: [],
+      }),
+    });
+
+    const result = await engine.buildContext({
+      repoId: "repo",
+      taskType: "explain",
+      taskText:
+        "Explain how MCPServer consumes SDL_MCP_SERVER_INSTRUCTIONS",
+      chatMentions: ["SDL_MCP_SERVER_INSTRUCTIONS", "MCPServer"],
+      budget: {
+        maxTokens:
+          estimateContextSelectionEnvelopeTokens(emptyPayload) +
+          expectedRungTokens(rankOne, "card"),
+      },
+    });
+
+    assert.ok("evidence" in result);
+    assert.deepEqual(
+      result.evidence.map(({ symbolId, rung }) => [symbolId, rung]),
+      [[rankOne.symbolId, "card"]],
+    );
+    assert.equal(result.omitted.byReason.budget, 3);
+  });
+
   it("canonicalizes evidence, edges, lanes, and recovery actions", () => {
     const first = payload();
     const second = payload();
@@ -872,7 +1078,7 @@ describe("ContextEngineV2 pure contracts", () => {
     );
     const result = selectContextBundles({
       candidates: [long, short],
-      profile: getTaskProfile("explain"),
+      profile: getTaskProfile("implement"),
       availableTokens:
         expectedRungTokens(short, "card") +
         expectedRungTokens(short, "skeleton"),

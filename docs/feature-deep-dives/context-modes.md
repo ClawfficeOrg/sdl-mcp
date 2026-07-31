@@ -19,7 +19,7 @@ The engine chooses available retrieval lanes, expands the graph, and selects evi
 | `debug` | Trace a failure and its nearby implementation | card, hot path, skeleton | included |
 | `review` | Inspect behavior, dependencies, and risk | card, skeleton, hot path | included |
 | `implement` | Find edit targets and supporting structure | card, skeleton | included |
-| `explain` | Describe an API or behavior from source evidence | card, skeleton | excluded |
+| `explain` | Describe an API or behavior from source evidence | card, hot path | excluded |
 
 The profile also selects expansion direction and depth. Explicit `includeTests` overrides the profile default.
 

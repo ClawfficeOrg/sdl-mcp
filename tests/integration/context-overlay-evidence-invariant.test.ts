@@ -244,7 +244,7 @@ describe("context overlay evidence invariant", () => {
     const context = await handleAgentContext(
       {
         repoId: REPO_ID,
-        taskType: "explain",
+        taskType: "implement",
         taskText: "Explain the modified and added functions",
         budget: { maxTokens: 10_000 },
         focusSymbols: [

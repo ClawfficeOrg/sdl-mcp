@@ -236,7 +236,14 @@ function selectProgressiveTier(
         const rung = profile.rungPreference[rungIndex];
         return rung ? [{ candidate, rung, rungIndex }] : [];
       })
-      .sort(compareValuePerToken);
+      // Cover Tier 0 candidates in retrieval-rank order before using value
+      // density to decide which admitted bundle is most valuable to upgrade.
+      .sort((left, right) =>
+        left.rungIndex === 0 || right.rungIndex === 0
+          ? left.rungIndex - right.rungIndex ||
+            compareCandidate(left.candidate, right.candidate)
+          : compareValuePerToken(left, right),
+      );
     const marginal = queue[0];
     if (!marginal) break;
 
@@ -320,7 +327,7 @@ function selectTierOne(
         rungIndex: 0,
       }),
     )
-    .sort(compareValuePerToken);
+    .sort((left, right) => compareCandidate(left.candidate, right.candidate));
   const admittedExact: ContextCandidate[] = [];
   let usedTokens = 0;
 
