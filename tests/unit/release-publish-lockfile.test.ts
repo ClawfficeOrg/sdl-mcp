@@ -148,6 +148,11 @@ describe("release publish lockfile guards", () => {
     );
     assert.match(
       verifyJob,
+      /if \[\[ "\$\{\{ matrix\.os \}\}" == "windows-latest" \]\]; then[\s\S]*printf[^\n]*sdlmcp\.config\.json[\s\S]*fi[\s\S]*if \[\[ "\$\{\{ matrix\.os \}\}" == "windows-latest" && "\$\{\{ matrix\.accelerators \}\}" == "disabled" \]\]; then/s,
+      "every Windows packed-install harness should create a cwd config before accelerator-specific checks",
+    );
+    assert.match(
+      verifyJob,
       /SDL_MCP_DISABLE_NATIVE_ADDON=1[\s\S]*--test-name-pattern="probes upstream"[\s\S]*live-index-symbol-fts-crash\.test\.ts/s,
       "disabled Windows accelerators should prove graceful FTS unavailability",
     );

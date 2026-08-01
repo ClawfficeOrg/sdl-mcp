@@ -278,8 +278,12 @@ jobs:
             node -e "const fs=require('fs');if(fs.existsSync('$openssl_package'))throw new Error('Windows OpenSSL package was not filtered')"
           fi
 
-          if [[ "${{ matrix.os }}" == "windows-latest" && "${{ matrix.accelerators }}" == "disabled" ]]; then
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            # The copied FTS harness resolves config from its temporary cwd.
             printf '%s\n' '{"repos":[],"policy":{}}' > sdlmcp.config.json
+          fi
+
+          if [[ "${{ matrix.os }}" == "windows-latest" && "${{ matrix.accelerators }}" == "disabled" ]]; then
             node --input-type=module <<'NODE'
           import assert from "node:assert/strict";
           import path from "node:path";
