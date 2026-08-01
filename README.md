@@ -12,7 +12,8 @@
 ![npm version](https://img.shields.io/npm/v/sdl-mcp.svg?style=for-the-badge)
 ![npm downloads](https://img.shields.io/npm/dm/sdl-mcp.svg?style=for-the-badge)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/w/GlitterKill/sdl-mcp?style=for-the-badge)<br/>
-[![RoastMyCode: A](https://roastmycode.ai/badge/GlitterKill/sdl-mcp)](https://roastmycode.ai/roast/latest/GlitterKill/sdl-mcp)
+[![RoastMyCode: A](https://roastmycode.ai/badge/GlitterKill/sdl-mcp)](https://roastmycode.ai/roast/latest/GlitterKill/sdl-mcp) [![CI](https://github.com/GlitterKill/sdl-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/GlitterKill/sdl-mcp/actions/workflows/ci.yml) ![Supported Node.js](https://img.shields.io/badge/node.js-%3E%3D24-green?link=https%3A%2F%2Fnodejs.org%2Fen)
+
 </div>
 
 ## Work from the symbols that matter
