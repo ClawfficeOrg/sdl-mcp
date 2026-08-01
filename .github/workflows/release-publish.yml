@@ -279,8 +279,11 @@ jobs:
           fi
 
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            # The copied FTS harness resolves config from its temporary cwd.
+            # The disabled MCP probe reads the root config explicitly; the clean-env FTS
+            # child uses the repository fallback under config/.
             printf '%s\n' '{"repos":[],"policy":{}}' > sdlmcp.config.json
+            mkdir -p config
+            cp sdlmcp.config.json config/sdlmcp.config.json
           fi
 
           if [[ "${{ matrix.os }}" == "windows-latest" && "${{ matrix.accelerators }}" == "disabled" ]]; then
