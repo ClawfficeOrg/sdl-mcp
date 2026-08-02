@@ -190,6 +190,8 @@ sdl-mcp serve --http --port 3000
 
 The HTTP server exposes `/mcp`, `/health`, `/ui/viewer`, `/ui/observability`, and `/api/*`. On startup, it prints a bearer token for authenticated requests unless auth is disabled in config. See [Config Examples](./config-examples.md#http-transport-configs) for client snippets and [Observability Dashboard](./feature-deep-dives/observability-dashboard.md) for dashboard details and [Graph Viewer](./feature-deep-dives/graph-viewer.md) for SDL Galaxy.
 
+An HTTP listening socket proves only that the process is live. The `/health` endpoint returns `200` only after the global storage preflight passes and every configured watcher starts. If either gate fails, SDL-MCP stays available for read-only diagnostics, returns `503` from `/health`, rejects mutations with `STORAGE_NOT_WRITE_READY`, and prints `DEGRADED — watchers not ready` with the failure reason.
+
 ## Next Steps
 
 - Copy-paste configs: [Config Examples](./config-examples.md)

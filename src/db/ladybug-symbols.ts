@@ -132,6 +132,33 @@ export async function readPhysicalSymbolUniqueness(
   };
 }
 
+const PHYSICAL_SYMBOL_STABILITY_SAMPLE_LIMIT = 16;
+
+export interface PhysicalSymbolIdProjection {
+  sampleRows: Array<{ symbolId: unknown }>;
+  lastRows: Array<{ symbolId: unknown }>;
+}
+
+export async function readPhysicalSymbolIdProjection(
+  conn: Connection,
+): Promise<PhysicalSymbolIdProjection> {
+  const sampleRows = await queryAll<{ symbolId: unknown }>(
+    conn,
+    `MATCH (s:Symbol)
+     RETURN s.symbolId AS symbolId
+     ORDER BY s.symbolId
+     LIMIT ${PHYSICAL_SYMBOL_STABILITY_SAMPLE_LIMIT}`,
+  );
+  const lastRows = await queryAll<{ symbolId: unknown }>(
+    conn,
+    `MATCH (s:Symbol)
+     RETURN s.symbolId AS symbolId
+     ORDER BY s.symbolId DESC
+     LIMIT 1`,
+  );
+  return { sampleRows, lastRows };
+}
+
 export async function assertPhysicalSymbolUniqueness(
   conn: Connection,
   duplicateSampleLimit = DEFAULT_PHYSICAL_SYMBOL_DUPLICATE_SAMPLE_LIMIT,

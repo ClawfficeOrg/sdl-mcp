@@ -433,19 +433,24 @@ async function recordAuditEvent(event: {
   }
 }
 
-export function logToolCall(event: ToolCallEvent): void {
+export function logToolCall(
+  event: ToolCallEvent,
+  options: { persistAudit?: boolean } = {},
+): void {
   const decision = event.response.error ? "error" : "success";
 
-  // Fire-and-forget async logging
-  void recordAuditEvent({
-    tool: event.tool,
-    decision,
-    repoId: event.repoId,
-    symbolId: event.symbolId,
-    detailsJson: buildToolCallAuditDetailsJson(event),
-  }).catch((err) =>
-    logger.warn(`Audit write failed for ${event.tool}: ${String(err)}`),
-  );
+  if (options.persistAudit !== false) {
+    // Fire-and-forget async logging
+    void recordAuditEvent({
+      tool: event.tool,
+      decision,
+      repoId: event.repoId,
+      symbolId: event.symbolId,
+      detailsJson: buildToolCallAuditDetailsJson(event),
+    }).catch((err) =>
+      logger.warn(`Audit write failed for ${event.tool}: ${String(err)}`),
+    );
+  }
 
   logger.info(`Tool call logged: ${event.tool}`, {
     decision,

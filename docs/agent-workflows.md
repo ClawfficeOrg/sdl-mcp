@@ -162,6 +162,16 @@ Use this order unless task constraints force escalation:
 - **Symbol-scoped edits** _(Code Mode)_: `sdl.file` with `op: "symbolEditPreview"` -> review `planHandle` -> `op: "symbolEditApply"`. Use `symbolEditApplyNow` only when you already hold the current `astFingerprint` and range from a fresh card.
 - **Search edits** _(Code Mode)_: `sdl.file` with `op: "searchEditPreview"` -> review `planHandle`, snippets, and `defaultCreateBackup` -> `op: "searchEditApply"` with the same backup value. On the flat `sdl.search.edit` surface, copy preview `applyArgs` directly. If a plan handle is missing or expired, rerun the original preview arguments and apply the new handle. `file.write` retains its default sibling `.bak`; `symbol.edit` and `search.edit` remove temporary rollback copies after a successful apply.
 
+#### Mutating tool QA
+
+Never run mutating QA against the production HTTP server or any active/quarantined LadybugDB family. Use the runner-owned stdio process with a disposable repository root and QA config:
+
+```powershell
+npm run qa:isolated -- --active-db <active.lbug> --fixture-root <disposable-root> --config <qa-config.json> --scenario <calls.json>
+```
+
+The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }` calls. The runner creates an initially absent `qa.lbug`, strips alternate database-path environment variables, verifies `ladybug.activePath` through `sdl.info` before scenario calls, and cleans up only after the owned client/server closes without WAL sidecars. Failed runs retain and print the QA fixture path for diagnosis. If this runner is unavailable, use read-only calls and edit previews only.
+
 ### 3) Token controls by tool
 
 - `sdl.repo.overview`:

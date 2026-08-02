@@ -8,6 +8,7 @@ import {
   isMetadataOnlyTool,
   MCPServer,
   shouldBypassToolDispatch,
+  isReadOnlyWhenDegraded,
 } from "../../dist/server.js";
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "../../dist/mcp/server-instructions.js";
 import { getPackageVersion } from "../../dist/util/package-info.js";
@@ -383,5 +384,115 @@ describe("MCPServer", () => {
       // in context-response-projection.test.ts
       assert.ok(server);
     });
+  });
+});
+
+describe("readiness admission classification", () => {
+  it("allows only the audited read-only flat and metadata tools", () => {
+    const allowed = [
+      "sdl.action.search",
+      "sdl.manual",
+      "sdl.info",
+      "sdl.context",
+      "sdl.symbol.search",
+      "sdl.symbol.getCard",
+      "sdl.slice.spillover.get",
+      "sdl.pr.risk.analyze",
+      "sdl.code.getSkeleton",
+      "sdl.code.getHotPath",
+      "sdl.repo.status",
+      "sdl.repo.overview",
+      "sdl.policy.get",
+      "sdl.agent.feedback.query",
+      "sdl.buffer.status",
+      "sdl.runtime.queryOutput",
+      "sdl.response.get",
+      "sdl.memory.query",
+      "sdl.memory.surface",
+      "sdl.usage.stats",
+      "sdl.file.read",
+      "sdl.semantic.enrichment.status",
+    ];
+
+    for (const tool of allowed) {
+      assert.equal(isReadOnlyWhenDegraded(tool, {}), true, tool);
+    }
+  });
+
+  it("classifies gateway, retrieve, file, and workflow calls by action", () => {
+    assert.equal(
+      isReadOnlyWhenDegraded("sdl.query", { action: "symbol.search" }),
+      true,
+    );
+    assert.equal(
+      isReadOnlyWhenDegraded("sdl.code", { action: "code.getSkeleton" }),
+      true,
+    );
+    assert.equal(
+      isReadOnlyWhenDegraded("sdl.repo", { action: "repo.status" }),
+      true,
+    );
+    assert.equal(
+      isReadOnlyWhenDegraded("sdl.retrieve", { op: "symbolSearch" }),
+      true,
+    );
+    assert.equal(
+      isReadOnlyWhenDegraded("sdl.retrieve", { op: "codeHotPath" }),
+      true,
+    );
+    assert.equal(isReadOnlyWhenDegraded("sdl.file", { op: "read" }), true);
+    assert.equal(
+      isReadOnlyWhenDegraded("sdl.workflow", {
+        steps: [
+          { fn: "symbolSearch", args: {} },
+          { fn: "dataPick", args: {} },
+          { fn: "responseGet", args: {} },
+        ],
+      }),
+      true,
+    );
+  });
+
+  it("fails closed for mutation, runtime, audit, malformed, and mixed calls", () => {
+    const rejected: Array<[string, unknown]> = [
+      ["sdl.unknown", { action: "symbol.search" }],
+      ["sdl.slice.build", {}],
+      ["sdl.slice.refresh", {}],
+      ["sdl.delta.get", {}],
+      ["sdl.query", { action: "slice.build" }],
+      ["sdl.retrieve", { op: "sliceBuild" }],
+      ["sdl.workflow", { steps: [{ fn: "sliceBuild", args: {} }] }],
+      ["sdl.workflow", { steps: [{ fn: "deltaGet", args: {} }] }],
+      ["sdl.query", {}],
+      ["sdl.query", { action: "unknown.action" }],
+      ["sdl.repo.register", {}],
+      ["sdl.index.refresh", {}],
+      ["sdl.policy.set", {}],
+      ["sdl.agent.feedback", {}],
+      ["sdl.buffer.push", {}],
+      ["sdl.runtime.execute", {}],
+      ["sdl.memory.store", {}],
+      ["sdl.file.write", {}],
+      ["sdl.code.needWindow", {}],
+      ["sdl.retrieve", { op: "codeNeedWindow" }],
+      ["sdl.file", { op: "previewWindow" }],
+      ["sdl.file", { op: "searchEditPreview" }],
+      ["sdl.workflow", { steps: [] }],
+      ["sdl.workflow", { steps: [{ fn: "runtimeExecute", args: {} }] }],
+      [
+        "sdl.workflow",
+        {
+          steps: [
+            { fn: "repoStatus", args: {} },
+            { fn: "indexRefresh", args: {} },
+          ],
+        },
+      ],
+      ["sdl.workflow", { steps: [null] }],
+    ];
+
+    for (const [tool, args] of rejected) {
+      assert.equal(isReadOnlyWhenDegraded(tool, args), false, tool);
+    }
   });
 });

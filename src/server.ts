@@ -60,6 +60,12 @@ import { SDL_MCP_SERVER_INSTRUCTIONS } from "./mcp/server-instructions.js";
 import { markActionArgsParsed } from "./gateway/dispatch-spine.js";
 import { classifyPublicGraphRetrieval } from "./mcp/public-graph-retrieval-admission.js";
 import { assertGraphRetrievalAvailable } from "./services/graph-retrieval-availability.js";
+import { GATEWAY_ACTION_DEFINITIONS } from "./code-mode/action-catalog.js";
+import {
+  readyStartupReadinessSnapshot,
+  StorageNotWriteReadyError,
+  type StartupReadinessSnapshot,
+} from "./startup/readiness.js";
 
 export interface ToolContext {
   progressToken?: string | number;
@@ -485,6 +491,7 @@ export function buildToolResponseEnvelope(
 export interface MCPServerOptions {
   /** OpenAI-compatible clients reject dots in tool names; keep canonical by default. */
   toolNameFormat?: ToolNameFormat;
+  getStartupReadiness?: () => StartupReadinessSnapshot;
 }
 
 export class MCPServer {
@@ -492,11 +499,14 @@ export class MCPServer {
   private tools: Map<string, ToolDefinition> = new Map();
   private clientToolNameToCanonical: Map<string, string> = new Map();
   private readonly toolNameFormat: ToolNameFormat;
+  private readonly getStartupReadiness: () => StartupReadinessSnapshot;
   private _gatewayMode = false;
   private postDispatchHooks: PostDispatchHook[] = [];
 
   constructor(options: MCPServerOptions = {}) {
     this.toolNameFormat = options.toolNameFormat ?? "canonical";
+    this.getStartupReadiness =
+      options.getStartupReadiness ?? readyStartupReadinessSnapshot;
     this.server = new Server(
       {
         name: "sdl-mcp",
@@ -625,6 +635,8 @@ export class MCPServer {
             toolContext.sessionId,
           );
           timer.record("server.normalize", normalizeStartedAt);
+          const startupReadiness = this.getStartupReadiness();
+          const writeReady = startupReadiness.state === "ready";
           const includeDiagnostics = wantsTimingDiagnostics(normalizedArgs);
           const repoId = extractStringField(normalizedArgs, "repoId");
           const symbolId = extractStringField(normalizedArgs, "symbolId");
@@ -671,6 +683,8 @@ export class MCPServer {
               clientKey: toolContext.clientKey,
               taskType: toolContext.taskType,
               diagnostics: extractTimingDiagnostics(responseForLog),
+            }, {
+              persistAudit: writeReady,
             });
             return {
               ...buildToolResponseEnvelope(
@@ -690,6 +704,13 @@ export class MCPServer {
             parseResult.data,
           );
           try {
+            if (
+              !writeReady &&
+              !isReadOnlyWhenDegraded(toolName, parsedArgs)
+            ) {
+              throw new StorageNotWriteReadyError(startupReadiness);
+            }
+
             const dispatchTool = async (): Promise<unknown> => {
               const graphAdmission = classifyPublicGraphRetrieval(
                 toolName,
@@ -885,8 +906,9 @@ export class MCPServer {
               }
             }
 
-            // Run post-dispatch hooks (non-critical)
-            for (const hook of this.postDispatchHooks) {
+            // Post-dispatch hooks may persist learned state, so skip them while degraded.
+            if (writeReady) {
+              for (const hook of this.postDispatchHooks) {
               const hookAbortController = new AbortController();
               const abortHook = (): void => {
                 hookAbortController.abort();
@@ -926,6 +948,7 @@ export class MCPServer {
                 }
                 toolContext.signal.removeEventListener("abort", abortHook);
               }
+              }
             }
             timer.record(
               "server.responseProcessing",
@@ -955,6 +978,8 @@ export class MCPServer {
               tokensUsed: tokensUsedForObs,
               tokensSaved: tokensSavedForObs,
               diagnostics: extractTimingDiagnostics(finalResult),
+            }, {
+              persistAudit: writeReady,
             });
             const footerLines: string[] = [];
             if (capturedSummary) {
@@ -989,6 +1014,8 @@ export class MCPServer {
               clientKey: toolContext.clientKey,
               taskType: toolContext.taskType,
               diagnostics: extractTimingDiagnostics(responseForLog),
+            }, {
+              persistAudit: writeReady,
             });
             // Return projected error content instead of throwing so clients get
             // the same human-first envelope shape as successful tool calls.
@@ -1153,6 +1180,105 @@ const STATUS_WORKFLOW_FNS = new Set([
   "workflowContinuationGet",
 ]);
 
+const READ_ONLY_ACTIONS = new Set([
+  "symbol.search",
+  "symbol.getCard",
+  "slice.spillover.get",
+  "pr.risk.analyze",
+  "code.getSkeleton",
+  "code.getHotPath",
+  "repo.status",
+  "repo.overview",
+  "policy.get",
+  "agent.feedback.query",
+  "buffer.status",
+  "runtime.queryOutput",
+  "response.get",
+  "memory.query",
+  "memory.surface",
+  "usage.stats",
+  "file.read",
+  "semantic.enrichment.status",
+]);
+
+const READ_ONLY_METADATA_TOOLS = new Set([
+  "sdl.action.search",
+  "action.search",
+  "sdl.manual",
+  "manual",
+  "sdl.info",
+  "info",
+  "sdl.context",
+  "context",
+]);
+
+const READ_ONLY_GATEWAY_TOOLS = new Set([
+  "sdl.query",
+  "sdl.code",
+  "sdl.repo",
+  "sdl.agent",
+]);
+
+const READ_ONLY_RETRIEVE_OPS = new Set([
+  "symbolSearch",
+  "symbolGetCard",
+  "codeSkeleton",
+  "codeHotPath",
+]);
+
+const READ_ONLY_WORKFLOW_FNS = new Set([
+  ...READ_ONLY_ACTIONS,
+  ...GATEWAY_ACTION_DEFINITIONS.filter((definition) =>
+    READ_ONLY_ACTIONS.has(definition.action),
+  ).map((definition) => definition.fn),
+  "dataPick",
+  "dataMap",
+  "dataFilter",
+  "dataSort",
+  "dataTemplate",
+  "workflowContinuationGet",
+]);
+
+/**
+ * Fail-closed admission used only while startup readiness is not ready.
+ * Tool discovery stays static; calls must match this audited read-only surface.
+ */
+export function isReadOnlyWhenDegraded(name: string, args: unknown): boolean {
+  if (READ_ONLY_METADATA_TOOLS.has(name)) return true;
+
+  const flatAction = name.startsWith("sdl.") ? name.slice(4) : name;
+  if (READ_ONLY_ACTIONS.has(flatAction)) return true;
+
+  if (READ_ONLY_GATEWAY_TOOLS.has(name)) {
+    const action = extractStringField(args, "action");
+    return action !== undefined && READ_ONLY_ACTIONS.has(action);
+  }
+
+  if (name === "sdl.retrieve") {
+    const op = extractStringField(args, "op");
+    return op !== undefined && READ_ONLY_RETRIEVE_OPS.has(op);
+  }
+
+  if (name === "sdl.file") {
+    return extractStringField(args, "op") === "read";
+  }
+
+  if (name !== "sdl.workflow" || !args || typeof args !== "object") {
+    return false;
+  }
+
+  const steps = (args as { steps?: unknown }).steps;
+  return (
+    Array.isArray(steps) &&
+    steps.length > 0 &&
+    steps.every((step) => {
+      if (!step || typeof step !== "object") return false;
+      const fn = (step as { fn?: unknown }).fn;
+      return typeof fn === "string" && READ_ONLY_WORKFLOW_FNS.has(fn);
+    })
+  );
+}
+
 export function shouldBypassToolDispatch(name: string, args: unknown): boolean {
   if (isMetadataOnlyTool(name) || DIRECT_STATUS_TOOL_NAMES.has(name)) {
     return true;
@@ -1314,6 +1440,7 @@ export interface MCPServerServices {
   liveIndex?: LiveIndexCoordinator;
   gatewayConfig?: GatewayConfig;
   codeModeConfig?: CodeModeConfig;
+  getStartupReadiness?: () => StartupReadinessSnapshot;
 }
 
 /**
@@ -1327,6 +1454,7 @@ export async function createMCPServer(
   const { registerTools } = await import("./mcp/tools/index.js");
   const server = new MCPServer({
     toolNameFormat: services.gatewayConfig?.toolNameFormat,
+    getStartupReadiness: services.getStartupReadiness,
   });
   registerTools(
     server,

@@ -167,6 +167,19 @@ describe("LadybugDB Symbol Queries", () => {
         distinctTotal: 1,
         duplicateSamples: [],
       });
+
+      const { assertStableIndexStoragePreflight } =
+        await import("../../dist/indexer/index-storage-preflight.js");
+      const stable = await assertStableIndexStoragePreflight(
+        conn as unknown as import("kuzu").Connection,
+      );
+      assert.deepStrictEqual(stable, {
+        physicalTotal: 1,
+        distinctTotal: 1,
+        firstSymbolId: "physical-identity-symbol",
+        lastSymbolId: "physical-identity-symbol",
+        sampleSymbolIds: ["physical-identity-symbol"],
+      });
     },
   );
 

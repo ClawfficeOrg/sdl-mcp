@@ -338,13 +338,13 @@ export function isWatcherStale(
 export async function watchRepositoryWithIndexer(
   repoId: string,
   indexRepo: IndexRepoFn,
+  isWriteReady: () => boolean = () => true,
 ): Promise<IndexWatchHandle> {
   const conn = await getLadybugConn();
   const repoRow = await ladybugDb.getRepo(conn, repoId);
   if (!repoRow) {
     throw new Error(`Repository ${repoId} not found`);
   }
-  await ladybugDb.assertPhysicalSymbolUniqueness(conn);
   await waitForGraphIntegrityVerifier(repoId);
   await verifyNoOpIncrementalGraphIntegrity(repoId);
 
@@ -466,9 +466,8 @@ export async function watchRepositoryWithIndexer(
     let scheduledRetry = false;
     let attemptTimedOut = false;
     try {
-      if (attempt === 0 && !ownsReindex) {
-        return;
-      }
+      if (!isWriteReady() || (attempt === 0 && !ownsReindex)) return;
+
       // Health gate: bail before touching the DB if the read pool is
       // already wedged. Avoids piling on more 60s reindex timeouts when
       // a native call is hung. The catch block below schedules a
@@ -512,6 +511,7 @@ export async function watchRepositoryWithIndexer(
               repoRoot: repoRow.rootPath,
               filePath,
               indexRepo,
+              isWriteReady,
               patchSavedFileFn: ({
                 repoId: changedRepoId,
                 filePath: changedFilePath,

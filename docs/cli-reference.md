@@ -173,6 +173,8 @@ Key options:
 - `--dashboard-port <NUMBER>` (stdio-only loopback observability dashboard)
 - `--no-watch` (disable file watchers even when enabled in config)
 
+HTTP binding reports process liveness, not watcher readiness. The server runs one storage preflight before any configured watcher, then marks itself ready only when every expected watcher starts. Until then, or after a startup failure, `/health` returns `503`, read-only/status requests remain available, and MCP or REST mutations fail with `STORAGE_NOT_WRITE_READY`.
+
 When running with `--http`, additional surfaces are available:
 
 - Graph UI: `http://<host>:<port>/ui/viewer` (`/ui/graph` redirects)
@@ -290,6 +292,22 @@ Key options:
 - `--repo-id <ID>`
 - `--json`
 - `--badge`
+
+The CLI `health` command reports repository health. It is separate from the HTTP `/health` readiness endpoint.
+
+### Operator safety gates
+
+Use the isolated QA runner for mutating tool tests. The runner owns a fresh stdio server and database, verifies the active path in-band, and never sends mutations to an already-running HTTP server.
+
+```powershell
+npm run qa:isolated -- --active-db <active.lbug> --fixture-root <disposable-root> --config <qa-config.json> --scenario <calls.json>
+```
+
+Use the Ladybug qualification gate before adopting a new installed `kuzu` alias. Stop the source database owner first and pass a pre-staged offline snapshot or quarantined family. The script reads the source only as bytes, tests a verified clone for two checkpoint/reopen cycles, removes successful clones, and retains failed clones.
+
+```powershell
+npm run qualify:ladybug -- --source <closed-db.lbug> --config <config.json> --expect-version <version>
+```
 
 ### `sdl-mcp tool <action> [args]`
 

@@ -66,6 +66,68 @@ async function exec(conn: Connection, sql: string): Promise<void> {
   result.close();
 }
 
+async function assertFixtureRows(
+  conn: Connection,
+  manifest: FixtureManifest,
+): Promise<void> {
+  const [memory] = await queryAll<{ content: string; deleted: boolean }>(
+    conn,
+    `MATCH (m:Memory {memoryId: '${manifest.nonDerivedRows.Memory}'})
+     RETURN m.content AS content, m.deleted AS deleted`,
+  );
+  assert.deepEqual(memory, {
+    content: "storage migration preserves memory",
+    deleted: false,
+  });
+
+  const [feedback] = await queryAll<{
+    taskType: string;
+    usefulSymbolsJson: string;
+  }>(
+    conn,
+    `MATCH (f:AgentFeedback {feedbackId: '${manifest.nonDerivedRows.AgentFeedback}'})
+     RETURN f.taskType AS taskType, f.usefulSymbolsJson AS usefulSymbolsJson`,
+  );
+  assert.deepEqual(feedback, {
+    taskType: "migration-test",
+    usefulSymbolsJson: '["sym-fixture"]',
+  });
+
+  const [usage] = await queryAll<{
+    totalSdlTokens: number | bigint;
+    packedBytesSaved: number | bigint;
+  }>(
+    conn,
+    `MATCH (u:UsageSnapshot {snapshotId: '${manifest.nonDerivedRows.UsageSnapshot}'})
+     RETURN u.totalSdlTokens AS totalSdlTokens, u.packedBytesSaved AS packedBytesSaved`,
+  );
+  assert.equal(Number(usage?.totalSdlTokens), 11);
+  assert.equal(Number(usage?.packedBytesSaved), 7);
+
+  const [audit] = await queryAll<{ tool: string; detailsJson: string }>(
+    conn,
+    `MATCH (a:Audit {eventId: '${manifest.nonDerivedRows.Audit}'})
+     RETURN a.tool AS tool, a.detailsJson AS detailsJson`,
+  );
+  assert.deepEqual(audit, {
+    tool: "storage.fixture",
+    detailsJson: '{"kind":"storage-upgrade"}',
+  });
+
+  const [derived] = await queryAll<{
+    clustersDirty: boolean;
+    targetVersionId: string;
+  }>(
+    conn,
+    `MATCH (d:DerivedState {repoId: '${manifest.derivedRows.DerivedState}'})
+     RETURN d.clustersDirty AS clustersDirty, d.targetVersionId AS targetVersionId`,
+  );
+  assert.deepEqual(derived, {
+    clustersDirty: true,
+    targetVersionId: "v40-fixture-version",
+  });
+}
+
 describe("Ladybug storage upgrade", () => {
   it("opens a checksum-pinned v40 fixture with 0.18.1 storage v42 and preserves non-derived rows", async () => {
     const kuzu = await import("kuzu");
@@ -96,77 +158,41 @@ describe("Ladybug storage upgrade", () => {
       db = new kuzu.Database(dbPath);
       conn = new kuzu.Connection(db);
 
-      const [memory] = await queryAll<{ content: string; deleted: boolean }>(
-        conn,
-        `MATCH (m:Memory {memoryId: '${manifest.nonDerivedRows.Memory}'})
-         RETURN m.content AS content, m.deleted AS deleted`,
-      );
-      assert.deepEqual(memory, {
-        content: "storage migration preserves memory",
-        deleted: false,
-      });
 
-      const [feedback] = await queryAll<{
-        taskType: string;
-        usefulSymbolsJson: string;
-      }>(
-        conn,
-        `MATCH (f:AgentFeedback {feedbackId: '${manifest.nonDerivedRows.AgentFeedback}'})
-         RETURN f.taskType AS taskType, f.usefulSymbolsJson AS usefulSymbolsJson`,
-      );
-      assert.deepEqual(feedback, {
-        taskType: "migration-test",
-        usefulSymbolsJson: '["sym-fixture"]',
-      });
 
-      const [usage] = await queryAll<{
-        totalSdlTokens: number | bigint;
-        packedBytesSaved: number | bigint;
-      }>(
+      await assertFixtureRows(conn, manifest);
+      await exec(
         conn,
-        `MATCH (u:UsageSnapshot {snapshotId: '${manifest.nonDerivedRows.UsageSnapshot}'})
-         RETURN u.totalSdlTokens AS totalSdlTokens, u.packedBytesSaved AS packedBytesSaved`,
+        "CREATE NODE TABLE IF NOT EXISTS DriverQualificationProbe (" +
+          "id STRING, cycle INT64, PRIMARY KEY(id))",
       );
-      assert.equal(Number(usage?.totalSdlTokens), 11);
-      assert.equal(Number(usage?.packedBytesSaved), 7);
 
-      const [audit] = await queryAll<{ tool: string; detailsJson: string }>(
-        conn,
-        `MATCH (a:Audit {eventId: '${manifest.nonDerivedRows.Audit}'})
-         RETURN a.tool AS tool, a.detailsJson AS detailsJson`,
-      );
-      assert.deepEqual(audit, {
-        tool: "storage.fixture",
-        detailsJson: '{"kind":"storage-upgrade"}',
-      });
+      for (let cycle = 1; cycle <= 2; cycle += 1) {
+        await exec(
+          conn,
+          `MERGE (p:DriverQualificationProbe {id: 'storage-upgrade'})
+           SET p.cycle = ${cycle}`,
+        );
+        await exec(conn, "CHECKPOINT");
+        await conn.close();
+        conn = undefined;
+        await db.close();
+        db = undefined;
 
-      const [derived] = await queryAll<{
-        clustersDirty: boolean;
-        targetVersionId: string;
-      }>(
-        conn,
-        `MATCH (d:DerivedState {repoId: '${manifest.derivedRows.DerivedState}'})
-         RETURN d.clustersDirty AS clustersDirty, d.targetVersionId AS targetVersionId`,
-      );
-      assert.deepEqual(derived, {
-        clustersDirty: true,
-        targetVersionId: "v40-fixture-version",
-      });
-
-      await exec(conn, "CHECKPOINT");
-      await conn.close();
-      conn = undefined;
-      await db.close();
-      db = undefined;
-
-      db = new kuzu.Database(dbPath);
-      conn = new kuzu.Connection(db);
-      const [reopened] = await queryAll<{ memoryCount: number | bigint }>(
-        conn,
-        `MATCH (m:Memory {memoryId: '${manifest.nonDerivedRows.Memory}'})
-         RETURN count(m) AS memoryCount`,
-      );
-      assert.equal(Number(reopened?.memoryCount), 1);
+        db = new kuzu.Database(dbPath);
+        conn = new kuzu.Connection(db);
+        const [probe] = await queryAll<{
+          id: string;
+          cycle: number | bigint;
+        }>(
+          conn,
+          `MATCH (p:DriverQualificationProbe {id: 'storage-upgrade'})
+           RETURN p.id AS id, p.cycle AS cycle`,
+        );
+        assert.equal(probe?.id, "storage-upgrade");
+        assert.equal(Number(probe?.cycle), cycle);
+        await assertFixtureRows(conn, manifest);
+      }
     } finally {
       if (conn) await conn.close().catch(() => {});
       if (db) await db.close().catch(() => {});

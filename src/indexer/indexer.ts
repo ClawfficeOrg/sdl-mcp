@@ -34,6 +34,7 @@ import {
 import { finalizeDerivedState } from "./finalize-derived-state.js";
 import type { AlgorithmRefreshDiagnostics } from "./cluster-orchestrator.js";
 import { watchRepositoryWithIndexer } from "./watcher.js";
+import { assertStableIndexStoragePreflight } from "./index-storage-preflight.js";
 import {
   IndexingConfigSchema,
   type AppConfig,
@@ -4587,5 +4588,14 @@ export {
 export async function watchRepository(
   repoId: string,
 ): Promise<IndexWatchHandle> {
+  const conn = await getLadybugConn();
+  await assertStableIndexStoragePreflight(conn);
   return watchRepositoryWithIndexer(repoId, indexRepo);
+}
+
+export async function watchRepositoryAfterStoragePreflight(
+  repoId: string,
+  isWriteReady: () => boolean,
+): Promise<IndexWatchHandle> {
+  return watchRepositoryWithIndexer(repoId, indexRepo, isWriteReady);
 }

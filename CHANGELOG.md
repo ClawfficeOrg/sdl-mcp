@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Ladybug safety gates**: Added `qa:isolated` for runner-owned mutating QA on a fresh stdio server/database and `qualify:ladybug` for version-pinned, bytes-only source cloning with two fresh-process write/checkpoint/reopen validation cycles. Both gates preserve active and quarantined database families, remove successful disposable storage, and retain failed fixtures for diagnosis.
+
 ### Changed
 
+- **Truthful HTTP readiness**: HTTP binding now reports liveness only. `/health` returns `200` after one stable global storage preflight and all configured watchers are ready; degraded servers remain available for read-only/status diagnostics, return `503`, print `DEGRADED — watchers not ready`, and reject mutations with `STORAGE_NOT_WRITE_READY`.
+
 ### Fixed
+
+- **Startup and watcher write admission**: A failed storage preflight or partial watcher startup now latches a terminal degraded state, closes started watchers, suppresses database-backed audit hooks, and blocks MCP, REST, live-index, prefetch, checkpoint, WAL, and watcher writes while preserving the existing physical-Symbol and graph-integrity fail-closed guards.
 
 ## [0.13.0] - 2026-07-31
 

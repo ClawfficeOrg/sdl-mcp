@@ -27,6 +27,11 @@ import {
   type PrefetchTelemetryEvent,
   type RuntimeExecutionEvent,
 } from "../../dist/mcp/telemetry.js";
+import {
+  drainAuditBuffer,
+  getBufferedAuditCount,
+  withExplicitAuditBufferingScope,
+} from "../../dist/mcp/audit-buffer.js";
 
 /**
  * Tests for src/mcp/telemetry.ts.
@@ -70,6 +75,30 @@ describe("MCP telemetry", () => {
       };
 
       assert.doesNotThrow(() => logToolCall(event));
+    });
+
+
+    it("can retain logs without queuing an audit row", async () => {
+      const event: ToolCallEvent = {
+        tool: "sdl.repo.status",
+        request: { repoId: "test" },
+        response: { status: "ok" },
+        durationMs: 1,
+        repoId: "test",
+      };
+
+      await withExplicitAuditBufferingScope(
+        async () => {
+          const before = getBufferedAuditCount();
+          logToolCall(event, { persistAudit: false });
+          assert.equal(getBufferedAuditCount(), before);
+        },
+        async () => {
+          await drainAuditBuffer({} as never, {
+            insertAuditEvent: async () => {},
+          });
+        },
+      );
     });
 
     it("compacts large request and response payloads before writing audit details", () => {

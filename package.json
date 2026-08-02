@@ -107,7 +107,9 @@
     "test:layout-parity": "node tests/native/layout-parity-test.ts",
     "ladybug:openssl:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-ladybug-openssl-runtime.ps1",
     "ladybug:openssl:verify": "node scripts/verify-ladybug-openssl-runtime.mjs",
-    "ladybug:openssl:pack": "npm pack ./ladybug-openssl/npm/win32-x64 --json"
+    "ladybug:openssl:pack": "npm pack ./ladybug-openssl/npm/win32-x64 --json",
+    "qa:isolated": "npm run build && node scripts/run-isolated-mutating-qa.mjs",
+    "qualify:ladybug": "npm run build && node scripts/qualify-ladybug-driver.mjs"
   },
   "keywords": [
     "mcp",

@@ -19,6 +19,12 @@ import {
   type MCPServerServices,
 } from "../../server.js";
 import { logger } from "../../util/logger.js";
+import { errorToMcpResponse } from "../../mcp/errors.js";
+import {
+  readyStartupReadinessSnapshot,
+  StorageNotWriteReadyError,
+  type StartupReadinessSnapshot,
+} from "../../startup/readiness.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import { getLadybugConn } from "../../db/ladybug.js";
 import { indexRepo, type IndexProgress } from "../../indexer/indexer.js";
@@ -123,6 +129,8 @@ export type HttpTransportServices = {
   beamExplainStore?: BeamExplainStore | null;
   observabilitySseHeartbeatMs?: number;
   observabilitySseMaxStreamMs?: number;
+  checkDatabaseHealth?: () => Promise<boolean>;
+  getStartupReadiness?: () => StartupReadinessSnapshot;
 };
 
 type HttpAuthConfig = {
@@ -714,14 +722,18 @@ function serveObservabilityUiAsset(
 async function handleHealthRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  checkHealth: () => Promise<boolean>,
+  checkDatabaseHealth: () => Promise<boolean>,
+  getStartupReadiness: () => StartupReadinessSnapshot,
 ): Promise<boolean> {
   if (req.method !== "GET") return false;
 
-  const isHealthy = await checkHealth();
+  const readiness = getStartupReadiness();
+  const isHealthy =
+    (await checkDatabaseHealth()) && readiness.state === "ready";
   json(res, isHealthy ? 200 : 503, {
     status: isHealthy ? "ok" : "unhealthy",
     timestamp: Date.now(),
+    readiness,
   });
   return true;
 }
@@ -1037,7 +1049,12 @@ export async function handleObservabilityDashboardRequest(
   }
 
   if (pathname === "/health") {
-    return handleHealthRequest(req, res, checkHealth);
+    return handleHealthRequest(
+      req,
+      res,
+      checkHealth,
+      services.getStartupReadiness ?? readyStartupReadinessSnapshot,
+    );
   }
 
   if (req.method === "GET" && serveObservabilityUiAsset(pathname, res)) {
@@ -1092,12 +1109,27 @@ async function handleRestRequest(
     }
   }
 
-  if (req.method === "GET" && pathname === "/health") {
-    const isHealthy = await checkHealth();
-    json(res, isHealthy ? 200 : 503, {
-      status: isHealthy ? "ok" : "unhealthy",
-      timestamp: Date.now(),
-    });
+  if (pathname === "/health") {
+    return handleHealthRequest(
+      req,
+      res,
+      checkHealth,
+      services.getStartupReadiness ?? readyStartupReadinessSnapshot,
+    );
+  }
+
+  const startupReadiness =
+    services.getStartupReadiness?.() ?? readyStartupReadinessSnapshot();
+  if (
+    pathname.startsWith("/api/") &&
+    !["GET", "HEAD", "OPTIONS"].includes(req.method ?? "") &&
+    startupReadiness.state !== "ready"
+  ) {
+    json(
+      res,
+      503,
+      errorToMcpResponse(new StorageNotWriteReadyError(startupReadiness)),
+    );
     return true;
   }
 
@@ -1530,6 +1562,7 @@ async function handleMcpStreamableRequest(
           liveIndex: ctx.effectiveServices.liveIndex,
           gatewayConfig: ctx.effectiveServices.gatewayConfig,
           codeModeConfig: ctx.effectiveServices.codeModeConfig,
+          getStartupReadiness: ctx.effectiveServices.getStartupReadiness,
         });
         // Capture the session ID set by onsessioninitialized
         // so onclose can use a stable reference.
@@ -1683,6 +1716,7 @@ async function handleSseConnection(
       liveIndex: ctx.effectiveServices.liveIndex,
       gatewayConfig: ctx.effectiveServices.gatewayConfig,
       codeModeConfig: ctx.effectiveServices.codeModeConfig,
+      getStartupReadiness: ctx.effectiveServices.getStartupReadiness,
     });
 
     const sseTransport = new SSEServerTransport("/message", res);
@@ -1816,6 +1850,7 @@ export async function setupObservabilityDashboardSidecar(
 
   const checkHealth =
     checkHealthOverride ??
+    services.checkDatabaseHealth ??
     (async (): Promise<boolean> => {
       try {
         const conn = await getLadybugConn();
@@ -2044,17 +2079,19 @@ export async function setupHttpTransport(
   // path (the DB directory now exists, flipping the hint from "file" to
   // "directory"). Removed to prevent dirty-WAL crashes on re-init.
 
-  const checkHealth = async (): Promise<boolean> => {
-    try {
-      const conn = await getLadybugConn();
-      // Go through queryAll so the per-connection mutex serializes this probe
-      // against concurrent tool handlers sharing the same round-robin conn.
-      await ladybugDb.queryAll(conn, "RETURN 1 AS ok");
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const checkHealth =
+    services.checkDatabaseHealth ??
+    (async (): Promise<boolean> => {
+      try {
+        const conn = await getLadybugConn();
+        // Go through queryAll so the per-connection mutex serializes this probe
+        // against concurrent tool handlers sharing the same round-robin conn.
+        await ladybugDb.queryAll(conn, "RETURN 1 AS ok");
+        return true;
+      } catch {
+        return false;
+      }
+    });
 
   const httpServer = createServer(
     (req: IncomingMessage, res: ServerResponse) => {

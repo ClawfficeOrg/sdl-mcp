@@ -191,6 +191,12 @@ Recovery:
 - Or call `sdl.index.refresh` with `incremental`
 - Enable watcher mode if desired (`index --watch`)
 
+### HTTP Listens but `/health` Returns `503`
+
+A listening HTTP port proves process liveness only. SDL-MCP reports ready after one global storage preflight passes and every configured watcher starts. A failed preflight or watcher prints `DEGRADED — watchers not ready`, keeps read-only and status diagnostics available, returns `503` from `/health`, and rejects mutations with `STORAGE_NOT_WRITE_READY`.
+
+Do not route writes to a degraded server. Inspect the reason in the startup log, preserve any suspect database family, and follow the storage recovery steps below when the preflight fails. Fix the watcher provider or start with `--no-watch` when the storage check passes but watcher startup fails.
+
 ### Graph Integrity or Physical Symbol Failure
 
 Treat physical Symbol identity failures and current-revision graph-integrity
@@ -257,12 +263,9 @@ COPY-built baseline needs the clean safe rebuild above.
 Relationship `COPY` did not reproduce this node-column failure and remains
 enabled for ownership and known-endpoint dependency relationships.
 
-Saved-file reconciliation does not require routine full refreshes. The patch
-transaction writes graph rows, canonical dependency placeholders, manifest
-changes, and the new integrity revision together. The background verifier
-coalesces rapid revisions, recovers a lost wakeup, and keeps graph reads
-available while the current revision is `verifying`. Permanent storage or
-baseline failures mark the watcher stale without starting a refresh retry loop.
+Saved-file reconciliation does not require routine full refreshes. The patch transaction writes graph rows, canonical dependency placeholders, manifest changes, and the new integrity revision together. The background verifier coalesces rapid revisions and recovers a lost wakeup.
+
+While the current revision is `verifying`, graph reads remain available and later saved-file commits can advance the revision without waiting for a full-graph scan. If verification reaches `failed`, SDL-MCP no longer has a trustworthy write baseline: reads remain available from the manifest-backed graph, but new writes fail closed and the watcher becomes stale instead of amplifying damage with refresh retries.
 
 ### After Upgrading SDL-MCP
 
@@ -270,6 +273,14 @@ If you see errors that say a database is "not compatible with the current graph
 engine," stop SDL-MCP and use the safe-rebuild sequence above. Do not delete the
 existing database until the replacement has passed post-reopen and live
 validation.
+
+Before changing the installed `kuzu` alias, qualify the candidate driver against a pre-staged offline snapshot or quarantined family:
+
+```powershell
+npm run qualify:ladybug -- --source <closed-db.lbug> --config <config.json> --expect-version <version>
+```
+
+Stop every source owner before running the command. The gate fingerprints and copies the source as bytes, rejects canonical or hardlink aliases to active families, and opens only the disposable clone. It runs two fresh-process write, checkpoint, close, reopen, verify, and remove cycles. Successful clones are removed; failed clones are retained and reported. The source, including a quarantined original, remains untouched.
 
 ### Watcher Failure Modes
 

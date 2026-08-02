@@ -144,12 +144,22 @@ export async function processWatchedFileChange(params: {
   repoRoot?: string;
   filePath: string;
   indexRepo: IndexRepoFn;
+  isWriteReady?: () => boolean;
   patchSavedFileFn?: (input: {
     repoId: string;
     filePath: string;
   }) => Promise<unknown>;
 }): Promise<void> {
-  const { repoId, repoRoot, filePath, indexRepo, patchSavedFileFn } = params;
+  const {
+    repoId,
+    repoRoot,
+    filePath,
+    indexRepo,
+    isWriteReady,
+    patchSavedFileFn,
+  } = params;
+  if (isWriteReady?.() === false) return;
+
   if (patchSavedFileFn) {
     try {
       await withIndexingGate(() => patchSavedFileFn({ repoId, filePath }));

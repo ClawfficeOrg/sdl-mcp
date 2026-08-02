@@ -4,7 +4,10 @@ import { isNativeAddonGloballyEnabled } from "../../native/addon-loader.js";
 import { setViewerRuntimeConfig } from "../../viewer/viewer-config.js";
 import { resolveSemanticEmbeddingModelPlan } from "../../config/semantic-embedding-model-plan.js";
 import { MCPServer, createMCPServer } from "../../server.js";
-import { watchRepository, IndexWatchHandle } from "../../indexer/indexer.js";
+import {
+  watchRepositoryAfterStoragePreflight,
+  type IndexWatchHandle,
+} from "../../indexer/indexer.js";
 import { setupStdioTransport } from "../transport/stdio.js";
 import {
   setupHttpTransport,
@@ -13,7 +16,7 @@ import {
 import { configureLogger } from "../logging.js";
 import { activateCliConfigPath } from "../../config/configPath.js";
 import { initGraphDb, resolveGraphDbPath } from "../../db/initGraphDb.js";
-import { configurePool } from "../../db/ladybug.js";
+import { configurePool, getLadybugConn } from "../../db/ladybug.js";
 import { closeLadybugDbAfterDrainingWork } from "../../startup/graceful-database-shutdown.js";
 import { persistUsageSnapshot } from "../../db/ladybug-usage.js";
 import { createWalCheckpointMaintenance } from "../../db/wal-maintenance.js";
@@ -52,6 +55,12 @@ import { ensureConfiguredReposRegistered } from "../../startup/bootstrap.js";
 import { recoverStaleDerivedStateOnStartup } from "../../startup/derived-state-recovery.js";
 import { loadConfiguredAdapterPlugins } from "../../startup/plugins.js";
 import { detectCpuProfile } from "../../util/cpu-detect.js";
+import {
+  createStartupReadiness,
+  type StartupReadiness,
+  type StartupReadinessReason,
+} from "../../startup/readiness.js";
+import { assertStableIndexStoragePreflight } from "../../indexer/index-storage-preflight.js";
 import {
   BeamExplainStore,
   createObservabilityService,
@@ -94,6 +103,88 @@ async function closeDbAfterStartupFailure(): Promise<void> {
   }
 }
 
+export async function runStoragePreflightForReadiness(
+  readiness: StartupReadiness,
+  expectedWatchers: number,
+  preflight: () => Promise<void>,
+  onDegraded: (
+    reason: StartupReadinessReason,
+    error: unknown,
+  ) => void,
+): Promise<boolean> {
+  try {
+    await preflight();
+    return true;
+  } catch (error) {
+    readiness.markDegraded("storage_preflight_failed", expectedWatchers, 0);
+    onDegraded("storage_preflight_failed", error);
+    return false;
+  }
+}
+
+export async function startConfiguredWatchers(params: {
+  repoIds: string[];
+  readiness: StartupReadiness;
+  startWatcher: (
+    repoId: string,
+    isWriteReady: () => boolean,
+  ) => Promise<IndexWatchHandle>;
+  stopVerifier: () => Promise<void>;
+  onError?: (message: string) => void;
+}): Promise<IndexWatchHandle[]> {
+  const results = await Promise.allSettled(
+    params.repoIds.map((repoId) =>
+      params.startWatcher(repoId, params.readiness.isWriteReady),
+    ),
+  );
+  const handles: IndexWatchHandle[] = [];
+  for (const [index, result] of results.entries()) {
+    if (result.status === "fulfilled") {
+      handles.push(result.value);
+    } else {
+      params.onError?.(
+        `[${params.repoIds[index]}] ${
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason)
+        }`,
+      );
+    }
+  }
+
+  if (handles.length === params.repoIds.length) {
+    params.readiness.markReady(params.repoIds.length, handles.length);
+    return handles;
+  }
+
+  for (const handle of handles) {
+    try {
+      await handle.close();
+    } catch (error) {
+      params.onError?.(
+        `Watcher cleanup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  try {
+    await params.stopVerifier();
+  } catch (error) {
+    params.onError?.(
+      `Graph integrity verifier cleanup failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  params.readiness.markDegraded(
+    "watcher_start_failed",
+    params.repoIds.length,
+    handles.length,
+  );
+  return [];
+}
+
 export async function serveCommand(options: ServeOptions): Promise<void> {
   if (options.transport === "http" && options.dashboardPort !== undefined) {
     throw new Error("--dashboard-port can only be used with --stdio");
@@ -127,6 +218,8 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     | Awaited<ReturnType<typeof setupObservabilityDashboardSidecar>>
     | undefined;
   let graphDbAvailable = false;
+  let storagePreflightPassed = false;
+  const startupReadiness = createStartupReadiness();
 
   const shutdownMgr = new ShutdownManager({
     log: (msg) => safeWriteStderr(`[sdl-mcp] ${msg}\n`),
@@ -135,6 +228,14 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     if (!writeStderrLine(message)) {
       void shutdownMgr.shutdown("stdio pipe error", 1);
     }
+  };
+  let degradedLogged = false;
+  const reportDegraded = (reason: StartupReadinessReason): void => {
+    if (degradedLogged) return;
+    degradedLogged = true;
+    writeServeStderrLine(
+      `[sdl-mcp] DEGRADED — watchers not ready: ${reason}`,
+    );
   };
   const uninstallProcessHandlers = installProcessHandlers(shutdownMgr);
   shutdownMgr.addCleanup("processHandlers", uninstallProcessHandlers);
@@ -155,7 +256,11 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
   shutdownMgr.addCleanup("httpServer", () => httpHandle?.close());
   shutdownMgr.addCleanup("persistUsage", async () => {
     try {
-      if (graphDbAvailable && tokenAccumulator.hasUsage) {
+      if (
+        graphDbAvailable &&
+        startupReadiness.isWriteReady() &&
+        tokenAccumulator.hasUsage
+      ) {
         await persistUsageSnapshot(tokenAccumulator.getSnapshot());
       }
     } catch (err) {
@@ -297,8 +402,28 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
   try {
     await initGraphDb(config, configPath);
     graphDbAvailable = true;
+    storagePreflightPassed = await runStoragePreflightForReadiness(
+      startupReadiness,
+      config.indexing?.enableFileWatching && !options.noWatch
+        ? config.repos.length
+        : 0,
+      async () => {
+        const conn = await getLadybugConn();
+        await assertStableIndexStoragePreflight(conn);
+      },
+      (reason, error) => {
+        writeServeStderrLine(
+          `[sdl-mcp] Storage preflight failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        reportDegraded(reason);
+      },
+    );
   } catch (error) {
     graphDbAvailable = false;
+    startupReadiness.markDegraded("database_unavailable", 0, 0);
+    reportDegraded("database_unavailable");
     writeServeStderrLine(
       "[sdl-mcp] Graph database unavailable; DB-backed tools and indexing are disabled for this process: " +
         (error instanceof Error ? error.message : String(error)),
@@ -309,7 +434,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     writeServeStderrLine(message);
   });
 
-  if (graphDbAvailable) {
+  if (graphDbAvailable && storagePreflightPassed) {
     await ensureConfiguredReposRegistered(config, (message) => {
       writeServeStderrLine(message);
     });
@@ -317,11 +442,9 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     await recoverStaleDerivedStateOnStartup(config, (message) => {
       writeServeStderrLine(message);
     });
-
-    await startPrefetchPolicy(config);
   } else {
     writeServeStderrLine(
-      "[sdl-mcp] Skipping repository bootstrap, derived-state recovery, and prefetch startup because the graph database is unavailable.",
+      "[sdl-mcp] Skipping repository bootstrap and derived-state recovery because storage is not ready.",
     );
   }
 
@@ -360,40 +483,52 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
     });
   }
 
-  if (graphDbAvailable && config.indexing?.enableFileWatching && !options.noWatch) {
+  if (
+    graphDbAvailable &&
+    storagePreflightPassed &&
+    config.indexing?.enableFileWatching &&
+    !options.noWatch
+  ) {
     writeServeStderrLine(
       `Starting file watchers for ${config.repos.length} repo(s)...`,
     );
-    const results = await Promise.allSettled(
-      config.repos.map(async (repo) => {
-        try {
-          return {
-            repoId: repo.repoId,
-            handle: await watchRepository(repo.repoId),
-          };
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          throw new Error(`[${repo.repoId}] ${msg}`);
-        }
-      }),
-    );
-
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        watchers.push(result.value.handle);
-      } else {
-        writeServeStderrLine(`Failed to start watcher: ${String(result.reason)}`);
-      }
+    const startedWatchers = await startConfiguredWatchers({
+      repoIds: config.repos.map((repo) => repo.repoId),
+      readiness: startupReadiness,
+      startWatcher: watchRepositoryAfterStoragePreflight,
+      stopVerifier: stopGraphIntegrityVerifier,
+      onError: (message) => {
+        writeServeStderrLine(`Failed to start watcher: ${message}`);
+      },
+    });
+    watchers.push(...startedWatchers);
+    if (!startupReadiness.isWriteReady()) {
+      reportDegraded("watcher_start_failed");
     }
     writeServeStderrLine(`Watching ${watchers.length} repo(s)`);
   } else if (config.indexing?.enableFileWatching && options.noWatch) {
     writeServeStderrLine("File watching disabled by --no-watch");
-  } else if (!graphDbAvailable && config.indexing?.enableFileWatching) {
-    writeServeStderrLine("File watching disabled because the graph database is unavailable");
+  } else if (
+    (!graphDbAvailable || !storagePreflightPassed) &&
+    config.indexing?.enableFileWatching
+  ) {
+    writeServeStderrLine("File watching disabled because storage is not ready");
+  }
+
+  if (
+    storagePreflightPassed &&
+    startupReadiness.getSnapshot().state === "initializing"
+  ) {
+    startupReadiness.markReady(0, 0);
+  }
+  if (startupReadiness.isWriteReady()) {
+    await startPrefetchPolicy(config);
   }
 
   await configureDefaultLiveIndexCoordinator({
-    enabled: graphDbAvailable && (config.liveIndex?.enabled ?? true),
+    enabled:
+      startupReadiness.isWriteReady() &&
+      (config.liveIndex?.enabled ?? true),
     debounceMs: config.liveIndex?.debounceMs,
     maxDraftFiles: config.liveIndex?.maxDraftFiles,
   });
@@ -406,10 +541,13 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
       config.liveIndex?.idleCheckpointMs ??
       DEFAULT_IDLE_CHECKPOINT_QUIET_PERIOD_MS,
   });
-  if (graphDbAvailable && (config.liveIndex?.enabled ?? true)) {
+  if (
+    startupReadiness.isWriteReady() &&
+    (config.liveIndex?.enabled ?? true)
+  ) {
     idleMonitor.start();
   }
-  if (graphDbAvailable) {
+  if (startupReadiness.isWriteReady()) {
     walMaintenance = createWalCheckpointMaintenance({
       graphDbPath,
       isIndexingActive,
@@ -424,6 +562,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
       liveIndex,
       gatewayConfig: config.gateway,
       codeModeConfig: config.codeMode,
+      getStartupReadiness: startupReadiness.getSnapshot,
     });
   }
 
@@ -484,6 +623,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
             beamExplainStore,
             observabilitySseHeartbeatMs: observabilityConfig.sseHeartbeatMs,
             observabilitySseMaxStreamMs: observabilityConfig.sseMaxStreamMs,
+            getStartupReadiness: startupReadiness.getSnapshot,
           },
           config.httpAuth,
         );
@@ -521,6 +661,7 @@ export async function serveCommand(options: ServeOptions): Promise<void> {
           beamExplainStore,
           observabilitySseHeartbeatMs: observabilityConfig.sseHeartbeatMs,
           observabilitySseMaxStreamMs: observabilityConfig.sseMaxStreamMs,
+          getStartupReadiness: startupReadiness.getSnapshot,
         },
         config.httpAuth,
         config.http,
