@@ -19,9 +19,13 @@ import { normalizeGraphDbPath } from "./graph-db-path.js";
 import {
   createOpaqueLadybugAuthorityIssuer,
   type OpaqueLadybugAuthority,
-} from "./ladybug-authority.js";
+} from "./ladybug-opaque-authority.js";
 
 export const MAX_LADYBUG_CONTROL_BYTES = 16 * 1024;
+/**
+ * Qualification config contract: JSON input is capped at the same 10 MiB
+ * boundary as SDL's HTTP JSON transport (src/cli/transport/http.ts).
+ */
 export const MAX_LADYBUG_QUALIFICATION_CONFIG_BYTES = 10 * 1024 * 1024;
 const MAX_FAMILY_MEMBERS = 32;
 const HASH_BUFFER_BYTES = 64 * 1024;
@@ -104,20 +108,22 @@ export function withStableLadybugRegularFile<T>(
   try {
     descriptor = openSync(
       path,
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
     );
   } catch (error) {
+    let pathAfterFailure: ReturnType<typeof lstatSync>;
     try {
-      if (lstatSync(path).isSymbolicLink()) {
-        throw new Error(label + " must be a regular non-symlink file");
-      }
-    } catch (classificationError) {
-      if (
-        classificationError instanceof Error &&
-        /regular non-symlink file/u.test(classificationError.message)
-      ) {
-        throw classificationError;
-      }
+      pathAfterFailure = lstatSync(path);
+    } catch {
+      throw error;
+    }
+    if (
+      pathAfterFailure.isSymbolicLink() ||
+      !pathAfterFailure.isFile()
+    ) {
+      throw new Error(label + " must be a regular non-symlink file");
     }
     throw error;
   }
@@ -164,7 +170,7 @@ export function readBoundedLadybugControlFile(
     if (stat.size > BigInt(maxBytes)) {
       throw new Error(label + " exceeds " + maxBytes + " bytes");
     }
-    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const buffer = Buffer.allocUnsafe(Number(stat.size));
     let total = 0;
     while (total < buffer.length) {
       const count = readSync(descriptor, buffer, total, buffer.length - total, null);

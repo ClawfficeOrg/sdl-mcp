@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   closeSync,
@@ -23,11 +23,16 @@ import {
   collectLadybugFamilyFiles,
   copyLadybugFamilyVerified,
   fingerprintLadybugFamily,
-  inventoryLadybugFamilyIdentities,
   readBoundedLadybugConfigFile,
-  readBoundedLadybugControlFile,
 } from "../dist/db/ladybug-family-files.js";
-import { issueNonceConsumedQualificationLadybugCloneAuthority } from "../dist/db/ladybug-authority.js";
+import {
+  buildQualificationFamilyAuthority,
+  consumeQualificationChildAuthority as consumeValidatedQualificationChildAuthority,
+  QUALIFICATION_AUTHORITY_FILENAME,
+  QUALIFICATION_AUTHORITY_NONCE_ENV,
+  QUALIFICATION_AUTHORITY_PATH_ENV,
+  QUALIFICATION_AUTHORITY_VERSION,
+} from "../dist/db/ladybug-authority.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { resolveGraphDbPath } from "../dist/db/graph-db-path.js";
 import {
@@ -122,14 +127,6 @@ const QUALIFICATION_PHASES = [
   },
 ];
 const CHILD_RESULT_PREFIX = "LADYBUG_QUALIFICATION_RESULT ";
-const QUALIFICATION_AUTHORITY_FILENAME = ".qualification-authority.json";
-const QUALIFICATION_AUTHORITY_NONCE_ENV =
-  "SDL_LADYBUG_QUALIFICATION_AUTHORITY_NONCE";
-const QUALIFICATION_AUTHORITY_PATH_ENV =
-  "SDL_LADYBUG_QUALIFICATION_AUTHORITY_PATH";
-const QUALIFICATION_AUTHORITY_VERSION = 1;
-const MAX_QUALIFICATION_AUTHORITY_BYTES = 16 * 1024;
-const QUALIFICATION_ROOT_PREFIX = "sdl-ladybug-qualification-";
 const NO_QUALIFICATION_PHASE_FAILURE = Symbol("no phase failure");
 const require = createRequire(import.meta.url);
 const scriptPath = fileURLToPath(import.meta.url);
@@ -177,16 +174,6 @@ function fileSha256(path) {
     .digest("hex");
 }
 
-function readBoundedQualificationAuthority(path) {
-  try {
-    return readBoundedLadybugControlFile(path, "qualification authority");
-  } catch (error) {
-    invalidQualificationAuthority(
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
 function writeVerifiedQualificationConfigCopy(configPath, bytes) {
   const copyPath = join(
     dirname(resolve(configPath)),
@@ -204,36 +191,6 @@ function writeVerifiedQualificationConfigCopy(configPath, bytes) {
     closeSync(descriptor);
   }
   return copyPath;
-}
-
-function databaseFamilyAuthority(role, primaryPath) {
-  const primary = canonicalizePath(primaryPath);
-  const identities = inventoryLadybugFamilyIdentities(primaryPath);
-  if (role === "active") {
-    const primaryIdentity = identities.find((member) => member.path === primary);
-    if (!primaryIdentity) {
-      throw new Error("Active database family primary file is missing: " + primaryPath);
-    }
-    return {
-      role,
-      primaryPath: primary,
-      members: [{
-        path: primaryIdentity.path,
-        device: primaryIdentity.dev,
-        inode: primaryIdentity.ino,
-      }],
-    };
-  }
-  return {
-    role,
-    primaryPath: primary,
-    members: identities.map(({ path, dev, ino }) => ({
-      path,
-      device: dev,
-      inode: ino,
-    })),
-    fingerprint: fingerprintLadybugFamily(primaryPath),
-  };
 }
 
 export function createQualificationChildAuthority({
@@ -258,11 +215,11 @@ export function createQualificationChildAuthority({
       clonePath: canonicalizePath(clonePath),
       configPath: canonicalizePath(configPath),
       configSha256: fileSha256(configPath),
-      cloneFamily: databaseFamilyAuthority("clone", clonePath),
+      cloneFamily: buildQualificationFamilyAuthority("clone", clonePath),
       forbiddenFamilies: [
-        databaseFamilyAuthority("source", sourcePath),
+        buildQualificationFamilyAuthority("source", sourcePath),
         ...activePaths.map((path) =>
-          databaseFamilyAuthority("active", path),
+          buildQualificationFamilyAuthority("active", path),
         ),
       ],
     }),
@@ -271,151 +228,11 @@ export function createQualificationChildAuthority({
   return { authorityPath, nonce };
 }
 
-function invalidQualificationAuthority(message) {
-  throw new Error(`Invalid qualification authority: ${message}`);
-}
-
 export function consumeQualificationChildAuthority(
   options,
   env = process.env,
 ) {
-  const authorityPath = env[QUALIFICATION_AUTHORITY_PATH_ENV];
-  const nonce = env[QUALIFICATION_AUTHORITY_NONCE_ENV];
-  if (!authorityPath || !nonce || !existsSync(authorityPath)) {
-    throw new Error("Qualification authority is required for child mode");
-  }
-
-  const cloneRootPath = canonicalizePath(dirname(resolve(options.clonePath)));
-  const clonePath = canonicalizePath(options.clonePath);
-  if (
-    canonicalizePath(dirname(cloneRootPath)) !== canonicalizePath(tmpdir()) ||
-    !basename(cloneRootPath).startsWith(QUALIFICATION_ROOT_PREFIX) ||
-    dirname(clonePath) !== cloneRootPath ||
-    basename(resolve(options.clonePath)) !== "candidate.lbug" ||
-    canonicalizePath(dirname(resolve(authorityPath))) !== cloneRootPath ||
-    basename(resolve(authorityPath)) !== QUALIFICATION_AUTHORITY_FILENAME
-  ) {
-    invalidQualificationAuthority(
-      "clone and marker must be contained in the parent qualification root",
-    );
-  }
-  let authority;
-  try {
-    authority = JSON.parse(
-      readBoundedQualificationAuthority(authorityPath).toString("utf8"),
-    );
-  } catch (cause) {
-    invalidQualificationAuthority(
-      `marker is not valid JSON: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
-    );
-  }
-  if (
-    !authority ||
-    typeof authority !== "object" ||
-    !/^[0-9a-f]{64}$/.test(nonce) ||
-    !/^[0-9a-f]{64}$/.test(authority.nonce) ||
-    !timingSafeEqual(
-      Buffer.from(nonce, "hex"),
-      Buffer.from(authority.nonce, "hex"),
-    )
-  ) {
-    invalidQualificationAuthority("authority nonce does not match");
-  }
-  if (
-    authority.version !== QUALIFICATION_AUTHORITY_VERSION ||
-    authority.phase !== options.mode ||
-    !QUALIFICATION_PHASES.some(({ phase }) => phase === authority.phase) ||
-    authority.cloneRootPath !== cloneRootPath ||
-    authority.clonePath !== clonePath ||
-    authority.configPath !== canonicalizePath(options.configPath)
-  ) {
-    invalidQualificationAuthority("phase or canonical paths do not match");
-  }
-  const verifiedConfigBytes = readBoundedLadybugConfigFile(
-    options.configPath,
-    "qualification config",
-  );
-  if (
-    authority.configSha256 !==
-    createHash("sha256").update(verifiedConfigBytes).digest("hex")
-  ) {
-    invalidQualificationAuthority("config digest does not match");
-  }
-  if (
-    env.SDL_CONFIG !== resolve(options.configPath) ||
-    env.SDL_GRAPH_DB_PATH !== resolve(options.clonePath) ||
-    env.SDL_CONFIG_PATH !== undefined ||
-    env.SDL_GRAPH_DB_DIR !== undefined ||
-    env.SDL_DB_PATH !== undefined
-  ) {
-    invalidQualificationAuthority("pinned SDL environment does not match");
-  }
-
-  if (
-    !Array.isArray(authority.forbiddenFamilies) ||
-    authority.forbiddenFamilies.length < 1 ||
-    authority.forbiddenFamilies[0]?.role !== "source" ||
-    authority.forbiddenFamilies
-      .slice(1)
-      .some((family) => family?.role !== "active")
-  ) {
-    invalidQualificationAuthority("forbidden database families are invalid");
-  }
-  const forbiddenPaths = new Set();
-  const forbiddenIdentities = new Set();
-  for (const family of authority.forbiddenFamilies) {
-    if (
-      typeof family.primaryPath !== "string" ||
-      !Array.isArray(family.members)
-    ) {
-      invalidQualificationAuthority("forbidden database family is malformed");
-    }
-    const current =
-      family.role === "active"
-        ? databaseFamilyAuthority("active", family.primaryPath)
-        : databaseFamilyAuthority("source", family.primaryPath);
-    if (JSON.stringify(current) !== JSON.stringify(family)) {
-      invalidQualificationAuthority(
-        "forbidden database family path or identity changed",
-      );
-    }
-    forbiddenPaths.add(current.primaryPath);
-    const currentMembers = inventoryLadybugFamilyIdentities(family.primaryPath);
-    for (const member of currentMembers) {
-      forbiddenPaths.add(member.path);
-      forbiddenIdentities.add(member.dev + ":" + member.ino);
-    }
-  }
-  const cloneFamily = databaseFamilyAuthority("clone", options.clonePath);
-  if (
-    JSON.stringify(cloneFamily) !== JSON.stringify(authority.cloneFamily) ||
-    cloneFamily.members.length < 1 ||
-    forbiddenPaths.has(cloneFamily.primaryPath) ||
-    cloneFamily.members.some(
-      (member) =>
-        forbiddenPaths.has(member.path) ||
-        forbiddenIdentities.has(`${member.device}:${member.inode}`),
-    )
-  ) {
-    invalidQualificationAuthority(
-      "clone aliases a forbidden database family",
-    );
-  }
-
-  // Consume the capability before any LadybugDB module is imported or opened.
-  rmSync(authorityPath);
-  return {
-    dbCapability: issueNonceConsumedQualificationLadybugCloneAuthority({
-      version: QUALIFICATION_AUTHORITY_VERSION,
-      phase: authority.phase,
-      clonePath,
-      cloneFamily,
-      forbiddenFamilies: authority.forbiddenFamilies,
-    }),
-    verifiedConfigBytes,
-  };
+  return consumeValidatedQualificationChildAuthority(options, env);
 }
 
 export function assertOfflineSourceDistinct(sourcePath, activePaths) {

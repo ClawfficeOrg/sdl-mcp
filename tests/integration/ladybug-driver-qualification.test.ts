@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -629,6 +630,18 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     }
   });
 
+  it("does not expose an unchecked qualification capability mint", async () => {
+    const authorityModule = await import(
+      "../../dist/db/ladybug-authority.js"
+    );
+
+    assert.equal(
+      "issueNonceConsumedQualificationLadybugCloneAuthority" in
+        authorityModule,
+      false,
+    );
+  });
+
   it("accepts large valid configs but gives the DB only an opaque one-use child capability", async () => {
     const {
       buildQualificationChildEnv,
@@ -680,6 +693,22 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
       /invalid or already consumed/iu,
     );
 
+    const { createOpaqueLadybugAuthorityIssuer } = await import(
+      "../../dist/db/ladybug-opaque-authority.js"
+    );
+    const forgedCapability = createOpaqueLadybugAuthorityIssuer(
+      "forged capability rejected",
+    ).issue({});
+    assert.throws(
+      () =>
+        acquireQualificationLadybugCloneFamily(
+          clonePath,
+          forgedCapability as unknown as typeof authorization.dbCapability,
+          { version: "test", storageVersion: "1" },
+        ),
+      /invalid or already consumed/iu,
+    );
+
     const lease = acquireQualificationLadybugCloneFamily(
       clonePath,
       authorization.dbCapability,
@@ -694,6 +723,76 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
           { version: "test", storageVersion: "1" },
         ),
       /invalid or already consumed/iu,
+    );
+  });
+
+  it("rejects qualification clone byte and identity changes after minting", async () => {
+    const {
+      buildQualificationChildEnv,
+      consumeQualificationChildAuthority,
+      createQualificationChildAuthority,
+    } = await import("../../scripts/qualify-ladybug-driver.mjs");
+    const { acquireQualificationLadybugCloneFamily } = await import(
+      "../../dist/db/ladybug-lineage.js"
+    );
+    const sourceRoot = mkdtempSync(
+      join(tmpdir(), "sdl-ladybug-authority-mutation-source-"),
+    );
+    const cloneRoot = mkdtempSync(
+      join(tmpdir(), "sdl-ladybug-qualification-"),
+    );
+    cleanupRoots.push(sourceRoot, cloneRoot);
+    const sourcePath = join(sourceRoot, "source.lbug");
+    const clonePath = join(cloneRoot, "candidate.lbug");
+    const configPath = join(cloneRoot, "config.json");
+    const cloneBytes = "clone-bytes";
+    writeFileSync(sourcePath, "source-bytes");
+    writeFileSync(clonePath, cloneBytes);
+    writeFileSync(configPath, JSON.stringify({ repos: [], policy: {} }));
+
+    const consume = () => {
+      const marker = createQualificationChildAuthority({
+        mode: "seed-first-batch",
+        clonePath,
+        configPath,
+        sourcePath,
+      });
+      return consumeQualificationChildAuthority(
+        { mode: "seed-first-batch", clonePath, configPath },
+        buildQualificationChildEnv(
+          process.env,
+          clonePath,
+          configPath,
+          marker,
+        ),
+      ).dbCapability;
+    };
+    const driver = { version: "test", storageVersion: "1" };
+
+    const byteCapability = consume();
+    writeFileSync(clonePath, "mutated-clone-bytes");
+    assert.throws(
+      () =>
+        acquireQualificationLadybugCloneFamily(
+          clonePath,
+          byteCapability,
+          driver,
+        ),
+      /identity or digest changed/iu,
+    );
+
+    writeFileSync(clonePath, cloneBytes);
+    const identityCapability = consume();
+    renameSync(clonePath, clonePath + ".replaced");
+    writeFileSync(clonePath, cloneBytes);
+    assert.throws(
+      () =>
+        acquireQualificationLadybugCloneFamily(
+          clonePath,
+          identityCapability,
+          driver,
+        ),
+      /identity or digest changed/iu,
     );
   });
 
