@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   isConnectionPoisoned,
   queryAll,
 } from "../../dist/db/ladybug-core.js";
+import { withLadybugInitialization } from "../../dist/db/ladybug-operation-gate.js";
 import {
   closeLadybugDb,
   getLadybugConn,
@@ -191,6 +192,10 @@ async function seedLatestResidual(
   );
   await seedLegacyEmbedding(conn, legacyRow(symbolId));
 }
+
+beforeEach(async () => {
+  await withLadybugInitialization(async () => {});
+});
 
 afterEach(async () => {
   await closeLadybugDb();

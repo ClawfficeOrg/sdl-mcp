@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
+import { withLadybugInitialization } from "../../dist/db/ladybug-operation-gate.js";
 import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clone.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -76,6 +77,7 @@ describe("LadybugDB Version & Snapshot Queries", () => {
   const fileId = "ver-file";
 
   beforeEach(async () => {
+    await withLadybugInitialization(async () => {});
     try {
       ({ db, conn } = await createTestDb());
       await setupSchema(conn);

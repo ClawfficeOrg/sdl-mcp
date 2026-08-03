@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -112,7 +112,10 @@ import {
   queryAll,
   toNumber,
 } from "../../dist/db/ladybug-core.js";
-import { withExclusiveLadybugOperation } from "../../dist/db/ladybug-operation-gate.js";
+import {
+  withExclusiveLadybugOperation,
+  withLadybugInitialization,
+} from "../../dist/db/ladybug-operation-gate.js";
 import {
   closeLadybugDb,
   getLadybugConn,
@@ -136,6 +139,10 @@ import type {
   ProviderFactSet,
 } from "../../dist/indexer/provider-first/types.js";
 import { writeTestScipIndex } from "../fixtures/scip/builder.ts";
+
+beforeEach(async () => {
+  await withLadybugInitialization(async () => {});
+});
 
 const TEST_CASE_JSON =
   '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';

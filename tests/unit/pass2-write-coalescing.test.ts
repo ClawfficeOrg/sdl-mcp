@@ -1,9 +1,10 @@
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { withLadybugInitialization } from "../../dist/db/ladybug-operation-gate.js";
 import type { EdgeRow } from "../../dist/db/ladybug-queries.js";
 import type { RepoConfig } from "../../dist/config/types.js";
 import type { SymbolIndex } from "../../dist/indexer/edge-builder.js";
@@ -12,6 +13,10 @@ import type {
   Pass2ResolverContext,
   Pass2Target,
 } from "../../dist/indexer/pass2/types.js";
+
+beforeEach(async () => {
+  await withLadybugInitialization(async () => {});
+});
 
 /**
  * Tests for the pass-2 dispatcher write helpers in
