@@ -110,6 +110,7 @@ function getTestDbPath(name: string): string {
 
 function cleanupTestDb(name: string): void {
   const dbPath = getTestDbPath(name);
+  rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
   if (existsSync(dbPath)) {
     rmSync(dbPath, { recursive: true, force: true });
   }

@@ -61,6 +61,7 @@ describe("Kotlin via Rust → TS per-file fallback", { skip: shouldSkip }, () =>
   let repoDir: string | null = null;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -140,6 +141,7 @@ describe("Kotlin via Rust → TS per-file fallback", { skip: shouldSkip }, () =>
     }
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {}
     try {
       rmSync(configPath, { recursive: true, force: true });

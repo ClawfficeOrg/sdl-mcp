@@ -87,6 +87,7 @@ describe("provider-first incremental replacement safety — integration", () => 
   let fakeGeneratorBinary = "";
 
   before(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (existsSync(`${dbPath}.wal`)) {
       rmSync(`${dbPath}.wal`, { recursive: true, force: true });
@@ -172,6 +173,7 @@ describe("provider-first incremental replacement safety — integration", () => 
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (existsSync(`${dbPath}.wal`)) {
       rmSync(`${dbPath}.wal`, { recursive: true, force: true });

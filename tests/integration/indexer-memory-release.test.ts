@@ -39,6 +39,7 @@ describe("indexer memory release", () => {
   let repoDir: string | null = null;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -120,6 +121,7 @@ describe("indexer memory release", () => {
     }
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {}
     try {
       rmSync(configPath, { force: true });

@@ -49,6 +49,7 @@ describe("draft live reads", () => {
   const previousSDL_CONFIG_PATH = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -123,6 +124,7 @@ describe("draft live reads", () => {
   after(async () => {
     resetDefaultLiveIndexCoordinator();
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

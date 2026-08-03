@@ -27,6 +27,7 @@ describe("repo overview cluster/process stats", () => {
   const symbolB = `${REPO_ID}-b`;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -98,6 +99,7 @@ describe("repo overview cluster/process stats", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

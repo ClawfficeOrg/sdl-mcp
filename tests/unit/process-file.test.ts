@@ -148,6 +148,7 @@ describe("process-file — binary skip cleanup", () => {
   after(async () => {
     await closeLadybugDb();
     rmSync(graphDbPath, { recursive: true, force: true });
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
   });
 

@@ -18,6 +18,12 @@ import {
 } from "./extension-caps.js";
 import { normalizeGraphDbPath } from "./graph-db-path.js";
 import {
+  reserveFreshLadybugPrimary,
+  verifyLadybugLineageBeforeOpen,
+  writeLadybugLineageMarker,
+  type LadybugLineageDriver,
+} from "./ladybug-lineage.js";
+import {
   isWindowsFtsRuntimeUnavailable,
   withWindowsFtsRuntime,
 } from "./ladybug-windows-fts-runtime.js";
@@ -91,7 +97,10 @@ interface LadybugConnectionWithThreads {
   setMaxNumThreadForExec(n: number): Promise<void>;
 }
 
-type LadybugModule = typeof import("kuzu");
+type LadybugModule = typeof import("kuzu") & {
+  VERSION: string;
+  STORAGE_VERSION: bigint;
+};
 type LadybugDatabase = import("kuzu").Database;
 type LadybugConnection = import("kuzu").Connection;
 type ManagedExtension = (typeof MANAGED_EXTENSIONS)[number];
@@ -166,9 +175,17 @@ const MIN_CHECKPOINT_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const MAX_CHECKPOINT_THRESHOLD_BYTES = 8 * ONE_GB;
 const CHECKPOINT_THRESHOLD_ENV = "SDL_MCP_LADYBUG_CHECKPOINT_THRESHOLD_BYTES";
 
+export type LadybugLineagePurpose =
+  | "normal"
+  | "safeRebuildCandidate"
+  | "qualificationClone"
+  | "validatedClone";
+
 export interface LadybugDbInitOptions {
   bufferPoolBytes?: number | null;
   checkpointThresholdBytes?: number | null;
+  /** @internal Explicit non-production opens that must never issue a ready marker. */
+  lineagePurpose?: LadybugLineagePurpose;
 }
 
 /** @internal exported for focused config/env tests. */
@@ -325,6 +342,13 @@ export function configurePool(opts: {
   }
 }
 
+function lineageDriver(modules: LadybugModule): LadybugLineageDriver {
+  return {
+    version: modules.VERSION,
+    storageVersion: modules.STORAGE_VERSION.toString(10),
+  };
+}
+
 async function loadLadybug(): Promise<LadybugModule> {
   if (ladybugModule) {
     return ladybugModule;
@@ -340,6 +364,12 @@ async function loadLadybug(): Promise<LadybugModule> {
       `Graph database driver not available: ${msg}. The 'kuzu' package should be installed automatically as a dependency of sdl-mcp (backed by @ladybugdb/core). Try: npm install`,
     );
   }
+}
+
+export async function writeLadybugReadyLineageMarker(
+  dbPath: string,
+): Promise<void> {
+  writeLadybugLineageMarker(dbPath, lineageDriver(await loadLadybug()));
 }
 
 export function resolveLadybugBufferManagerSizeBytes(
@@ -452,13 +482,36 @@ export async function getLadybugDb(
 
   const initFn = async (): Promise<LadybugDatabase> => {
     const modules = await loadLadybug();
+    const normalizedPath = normalizePath(resolvedPath);
+    const lineageState =
+      (options?.lineagePurpose ?? "normal") === "normal"
+        ? verifyLadybugLineageBeforeOpen(
+            normalizedPath,
+            lineageDriver(modules),
+          )
+        : null;
 
     if (dbInstance) {
       logger.warn("LadybugDB path changed, closing existing connection");
       await closeLadybugDb();
     }
 
-    const normalizedPath = normalizePath(resolvedPath);
+    const parentDir = dirname(normalizedPath);
+    if (parentDir && parentDir !== "." && !existsSync(parentDir)) {
+      try {
+        mkdirSync(parentDir, { recursive: true });
+        logger.debug("Created LadybugDB parent directory", { path: parentDir });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new DatabaseError(
+          `Failed to create LadybugDB parent directory at ${parentDir}: ${msg}`,
+        );
+      }
+    }
+    if (lineageState === "fresh") {
+      reserveFreshLadybugPrimary(normalizedPath);
+    }
+
     const walCheckpointSidecar =
       quarantineDanglingWalCheckpointSidecar(normalizedPath);
     if (walCheckpointSidecar.status === "quarantined") {
@@ -473,19 +526,6 @@ export async function getLadybugDb(
       throw new DatabaseError(
         `Failed to quarantine dangling LadybugDB WAL checkpoint sidecar at ${walCheckpointSidecar.sidecarPath}: ${walCheckpointSidecar.error}`,
       );
-    }
-
-    const parentDir = dirname(normalizedPath);
-    if (parentDir && parentDir !== "." && !existsSync(parentDir)) {
-      try {
-        mkdirSync(parentDir, { recursive: true });
-        logger.debug("Created LadybugDB parent directory", { path: parentDir });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new DatabaseError(
-          `Failed to create LadybugDB parent directory at ${parentDir}: ${msg}`,
-        );
-      }
     }
 
     let openingDb: LadybugDatabase | null = null;
@@ -1266,6 +1306,9 @@ export async function initLadybugDb(
   options?: LadybugDbInitOptions,
 ): Promise<void> {
   const normalizedPath = normalizePath(normalizeGraphDbPath(dbPath));
+  const shouldWriteLineageMarker =
+    (options?.lineagePurpose ?? "normal") === "normal" &&
+    !existsSync(normalizedPath);
 
   logger.info("Initializing LadybugDB", { path: normalizedPath });
 
@@ -1395,6 +1438,12 @@ export async function initLadybugDb(
       path: normalizedPath,
       schemaVersion: finalVersion,
     });
+    if (shouldWriteLineageMarker) {
+      writeLadybugLineageMarker(
+        normalizedPath,
+        lineageDriver(await loadLadybug()),
+      );
+    }
   } catch (err) {
     if (err instanceof DatabaseError) {
       throw err;

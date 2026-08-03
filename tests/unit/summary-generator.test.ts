@@ -308,6 +308,7 @@ describe("OpenAICompatibleSummaryProvider construction", () => {
 describe("generateSummariesForRepo", () => {
   after(async () => {
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }

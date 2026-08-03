@@ -30,6 +30,7 @@ describe("MCP slice spillover signatures", () => {
   const spilloverHandle = "spillover-handle-1";
 
   before(async () => {
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }
@@ -112,6 +113,7 @@ describe("MCP slice spillover signatures", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }

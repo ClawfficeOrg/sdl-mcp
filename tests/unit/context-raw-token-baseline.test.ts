@@ -154,6 +154,7 @@ describe("sdl.context v2 raw token baseline", () => {
     } finally {
       await closeLadybugDb();
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     }
   });
 });

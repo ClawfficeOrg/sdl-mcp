@@ -35,11 +35,11 @@ describe("Ladybug reindex guidance", { skip: !ladybugAvailable }, () => {
     }
   });
 
-  it("preserves incompatible graph data and recommends a safe rebuild", async () => {
+  it("rejects unmarked incompatible graph data and recommends a safe rebuild", async () => {
     mkdirSync(testRoot, { recursive: true });
     const fakeDbPath = join(testRoot, "fake-old-db.lbug");
 
-    // Force open/init failure by placing a non-database file at the DB path.
+    // An existing file without an exact-build receipt must fail before native open.
     writeFileSync(fakeDbPath, "not-a-valid-ladybug-database", "utf8");
 
     await assert.rejects(
@@ -53,8 +53,8 @@ describe("Ladybug reindex guidance", { skip: !ladybugAvailable }, () => {
             : String(error).toLowerCase();
 
         assert.ok(
-          message.includes("initialization failed") || message.includes("database could not be opened"),
-          "error should include initialization failure description",
+          message.includes("lineage marker is missing"),
+          "error should identify the missing exact-build lineage marker",
         );
         assert.ok(
           message.includes("preserve"),

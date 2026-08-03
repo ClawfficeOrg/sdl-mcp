@@ -13,6 +13,7 @@ describe("buildDependencyFrontier", () => {
   const repoId = "dependency-frontier-repo";
 
   before(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) {
       rmSync(dbPath, { recursive: true, force: true });
     }
@@ -100,6 +101,7 @@ describe("buildDependencyFrontier", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) {
       rmSync(dbPath, { recursive: true, force: true });
     }

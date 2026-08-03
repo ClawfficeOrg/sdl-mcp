@@ -33,6 +33,7 @@ describe("background reconcile worker", () => {
 
   before(async () => {
     // Clean up both database and WAL file from previous runs
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { force: true });
     if (existsSync(dbPath + ".wal")) rmSync(dbPath + ".wal", { force: true });
     repoDir = mkdtempSync(join(tmpdir(), "sdl-background-reconcile-repo-"));
@@ -89,6 +90,7 @@ describe("background reconcile worker", () => {
   after(async () => {
     try {
       await closeLadybugDb();
+      rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
       if (existsSync(dbPath)) rmSync(dbPath, { force: true });
       if (existsSync(dbPath + ".wal")) rmSync(dbPath + ".wal", { force: true });
       if (existsSync(configPath)) rmSync(configPath, { force: true });

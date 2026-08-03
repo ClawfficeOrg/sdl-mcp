@@ -36,6 +36,7 @@ describe("MCP Tool Language Regressions", () => {
 
   before(async () => {
     // Clean up any leftover DB
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
 
     // Create temp repo with multi-language source files
@@ -119,6 +120,7 @@ describe("MCP Tool Language Regressions", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (existsSync(configPath)) rmSync(configPath, { force: true });
     if (repoDir && existsSync(repoDir))

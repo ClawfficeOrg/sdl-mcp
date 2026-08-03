@@ -66,6 +66,7 @@ describe("upsertAgentFeedback stores searchText", () => {
   before(async () => {
     const { closeLadybugDb, initLadybugDb } = await import("../../dist/db/ladybug.js");
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }
@@ -73,6 +74,7 @@ describe("upsertAgentFeedback stores searchText", () => {
     await initLadybugDb(TEST_DB_PATH);
     cleanup = async () => {
       await closeLadybugDb();
+      rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
       if (existsSync(TEST_DB_PATH)) {
         rmSync(TEST_DB_PATH, { recursive: true, force: true });
       }

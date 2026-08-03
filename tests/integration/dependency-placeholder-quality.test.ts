@@ -145,6 +145,7 @@ describe("dependency placeholder quality integration", () => {
     }
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {}
     if (repoDir) {
       try {

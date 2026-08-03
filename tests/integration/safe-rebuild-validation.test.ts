@@ -20,9 +20,11 @@ import {
   getLadybugConn,
   closeLadybugDb,
   initLadybugDb,
+  registerDbCloseHook,
   withWriteConn,
 } from "../../dist/db/ladybug.js";
 import { exec, querySingle } from "../../dist/db/ladybug-core.js";
+import { getLadybugLineageMarkerPath } from "../../dist/db/ladybug-lineage.js";
 import { initGraphDb } from "../../dist/db/initGraphDb.js";
 import {
   runSafeRebuild,
@@ -121,6 +123,7 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
   it("builds every configured repo and validates only after close/reopen", async () => {
     const fixture = createFixture();
     const events: string[] = [];
+    const markerStates: boolean[] = [];
     const repoValidationOrder: string[] = [];
     const config = loadConfig(fixture.configPath);
     const result = await runSafeRebuild({
@@ -132,7 +135,12 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       config,
       configPath: fixture.configPath,
       activeGraphDbPath: fixture.activePath,
-      onLifecycleEvent: (event) => events.push(event),
+      onLifecycleEvent: (event) => {
+        events.push(event);
+        markerStates.push(
+          existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+        );
+      },
       _afterRepoStorageValidationForTesting: (repoId) => {
         repoValidationOrder.push(`validated:${repoId}`);
       },
@@ -159,6 +167,15 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         events.indexOf("candidate:validated"),
     );
     assert.equal(events.at(-1), "candidate:closed-after-validation");
+    assert.equal(
+      markerStates.every((markerPresent) => !markerPresent),
+      true,
+      "the candidate must remain unmarked through validation and strict close",
+    );
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      true,
+    );
     assert.deepEqual(repoValidationOrder, [
       "validated:safe-rebuild-source",
       "complete:safe-rebuild-source",
@@ -351,6 +368,10 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
     assert.equal(existsSync(fixture.candidatePath), true);
     assert.equal(getLadybugDbPath(), null);
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
   });
 
   it("closes and retains a failed candidate without touching the active sentinel", async () => {
@@ -377,6 +398,10 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(existsSync(fixture.candidatePath), true);
     assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
     assert.equal(process.env.SDL_GRAPH_DB_PATH, fixture.activePath);
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
   });
 
   it("closes a candidate whose initial database initialization opens then fails", async () => {
@@ -394,8 +419,8 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         configPath: fixture.configPath,
         activeGraphDbPath: fixture.activePath,
         onLifecycleEvent: (event) => events.push(event),
-        _initGraphDbForTesting: async (config, configPath) => {
-          await initGraphDb(config, configPath);
+        _initGraphDbForTesting: async (config, configPath, options) => {
+          await initGraphDb(config, configPath, options);
           throw new Error("injected initial candidate initialization failure");
         },
       }),
@@ -407,6 +432,10 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
     assert.equal(process.env.SDL_GRAPH_DB_PATH, fixture.activePath);
     assert.equal(events.at(-1), "candidate:closed-after-failure");
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
   });
 
   it("closes a candidate whose reopen initialization opens then fails", async () => {
@@ -425,9 +454,9 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         configPath: fixture.configPath,
         activeGraphDbPath: fixture.activePath,
         onLifecycleEvent: (event) => events.push(event),
-        _initGraphDbForTesting: async (config, configPath) => {
+        _initGraphDbForTesting: async (config, configPath, options) => {
           initCalls += 1;
-          await initGraphDb(config, configPath);
+          await initGraphDb(config, configPath, options);
           if (initCalls === 2) {
             throw new Error("injected candidate reopen initialization failure");
           }
@@ -443,6 +472,10 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
     assert.equal(process.env.SDL_GRAPH_DB_PATH, fixture.activePath);
     assert.equal(events.at(-1), "candidate:closed-after-failure");
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
   });
 
   it("closes and retains a candidate that fails post-reopen validation", async () => {
@@ -469,5 +502,51 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(existsSync(fixture.candidatePath), true);
     assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
     assert.equal(process.env.SDL_GRAPH_DB_PATH, fixture.activePath);
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
+  });
+
+  it("returns no result or marker when final strict close fails", async () => {
+    const fixture = createFixture();
+
+    await assert.rejects(
+      runSafeRebuild({
+        options: {
+          config: fixture.configPath,
+          force: true,
+          safeRebuildPath: fixture.candidatePath,
+        },
+        config: loadConfig(fixture.configPath),
+        configPath: fixture.configPath,
+        activeGraphDbPath: fixture.activePath,
+        _validateCandidateForTesting: async (config) => {
+          const validation = await validateSafeRebuildCandidate(config);
+          registerDbCloseHook(() => {
+            throw new Error("injected final candidate close failure");
+          });
+          return validation;
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof AggregateError);
+        assert.match(error.message, /strict close failed/iu);
+        assert.ok(
+          error.errors.some(
+            (cause) =>
+              cause instanceof Error &&
+              /injected final candidate close failure/iu.test(cause.message),
+          ),
+        );
+        return true;
+      },
+    );
+
+    assert.equal(getLadybugDbPath(), null);
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
   });
 });

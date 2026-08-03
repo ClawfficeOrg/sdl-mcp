@@ -18,6 +18,7 @@ describe("computeClustersTS", () => {
   const graphDbPath = join(tmpdir(), ".lbug-ts-cluster-test-db");
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -107,6 +108,7 @@ describe("computeClustersTS", () => {
     await closeLadybugDb();
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

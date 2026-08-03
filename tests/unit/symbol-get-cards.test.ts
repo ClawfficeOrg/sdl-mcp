@@ -39,6 +39,7 @@ describe("handleSymbolGetCard", () => {
   let foreignSymbolId: string;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -189,6 +190,7 @@ describe("handleSymbolGetCard", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

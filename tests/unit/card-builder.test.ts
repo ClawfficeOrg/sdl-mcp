@@ -40,6 +40,7 @@ async function resetDb(): Promise<void> {
     `${TEST_DB_PATH}.wal`,
     `${TEST_DB_PATH}.shadow`,
     `${TEST_DB_PATH}.lock`,
+    `${TEST_DB_PATH}.sdl-lineage.json`,
   ]) {
     if (existsSync(p)) rmSync(p, { recursive: true, force: true });
   }
@@ -118,6 +119,7 @@ describe("card-builder", () => {
       `${TEST_DB_PATH}.wal`,
       `${TEST_DB_PATH}.shadow`,
       `${TEST_DB_PATH}.lock`,
+    `${TEST_DB_PATH}.sdl-lineage.json`,
     ]) {
       if (existsSync(path)) {
         rmSync(path, { recursive: true, force: true });

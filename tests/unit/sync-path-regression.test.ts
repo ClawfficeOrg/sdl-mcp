@@ -29,6 +29,7 @@ describe("sync path regressions", () => {
     const runId = randomUUID();
     dbPath = join(tmpdir(), `.lbug-sync-path-regression-db-${runId}`);
     repoRoot = join(__dirname, `.tmp-sync-repo-root-${runId}`);
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) {
       rmSync(dbPath, { recursive: true, force: true });
     }
@@ -85,6 +86,7 @@ describe("sync path regressions", () => {
 
   afterEach(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) {
       rmSync(dbPath, { recursive: true, force: true });
     }

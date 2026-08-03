@@ -32,6 +32,7 @@ function removeLadybugDbFiles(dbPath: string): void {
     `${dbPath}.wal`,
     `${dbPath}.shadow`,
     `${dbPath}.lock`,
+    `${dbPath}.sdl-lineage.json`,
   ]) {
     if (existsSync(p)) rmSync(p, { recursive: true, force: true });
   }

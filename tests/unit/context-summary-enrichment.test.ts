@@ -24,6 +24,7 @@ describe("context summary enrichment", () => {
   const symbolMain = `${REPO_ID}-main`;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -119,6 +120,7 @@ describe("context summary enrichment", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

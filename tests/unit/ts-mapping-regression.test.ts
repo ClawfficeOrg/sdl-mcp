@@ -20,6 +20,7 @@ describe("TS diagnostic mapping regression", () => {
   const fileId = "ts-mapping-file";
 
   beforeEach(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) {
       rmSync(dbPath, { recursive: true, force: true });
     }
@@ -63,6 +64,7 @@ describe("TS diagnostic mapping regression", () => {
 
   afterEach(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) {
       rmSync(dbPath, { recursive: true, force: true });
     }

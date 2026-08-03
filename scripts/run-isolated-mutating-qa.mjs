@@ -209,6 +209,8 @@ export function assertNoDatabaseSidecars(qaDbPath) {
   const databaseName = basename(qaDbPath);
   const dangling = readdirSync(directory)
     .filter((name) => name.startsWith(`${databaseName}.`))
+    // The exact-build receipt is a durable member of the database family.
+    .filter((name) => name !== `${databaseName}.sdl-lineage.json`)
     .map((name) => join(directory, name));
   if (dangling.length > 0) {
     throw new Error(

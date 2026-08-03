@@ -32,7 +32,7 @@ function writeRepoFile(
 
 function removeGraphDbFiles(graphDbPath: string): void {
   // LadybugDB can leave sidecar files behind after interrupted test runs.
-  for (const suffix of ["", ".wal", ".lock", ".shm"]) {
+  for (const suffix of ["", ".wal", ".lock", ".shm", ".sdl-lineage.json"]) {
     try {
       rmSync(graphDbPath + suffix, { recursive: true, force: true });
     } catch {}

@@ -22,6 +22,7 @@ describe("Indexer cluster/process integration", () => {
   const prevSDL_CONFIG_PATH = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -103,6 +104,7 @@ describe("Indexer cluster/process integration", () => {
     }
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

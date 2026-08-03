@@ -45,6 +45,7 @@ afterEach(async () => {
   enableDerivedRefreshQueue();
   resetToolDispatchLimiter();
   await closeLadybugDb();
+  if (graphDbPath) rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
   if (graphDbPath && existsSync(graphDbPath)) {
     rmSync(graphDbPath, { recursive: true, force: true });
   }

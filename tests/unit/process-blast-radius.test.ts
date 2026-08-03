@@ -29,6 +29,7 @@ describe("process-aware blast radius", () => {
   const foreignStep = `${foreignRepoId}-step`;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -231,6 +232,7 @@ describe("process-aware blast radius", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

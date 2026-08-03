@@ -130,8 +130,8 @@ async function assertFixtureRows(
   });
 }
 
-describe("Ladybug storage upgrade", () => {
-  it("opens a checksum-pinned v40 fixture with 0.19.0 storage v43 and preserves non-derived rows", async () => {
+describe("Ladybug raw-driver storage compatibility evidence", () => {
+  it("uses the raw driver to probe a checksum-pinned v40 fixture without production init", async () => {
     const kuzu = await import("kuzu");
     assert.equal(
       String(kuzu.STORAGE_VERSION),

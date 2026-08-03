@@ -32,6 +32,7 @@ describe("Sync Artifact Model", () => {
     const runId = randomUUID();
     graphDbPath = join(tmpdir(), `.lbug-sync-artifact-test-db-${runId}`);
     syncDir = join(__dirname, `.tmp-sync-artifacts-${runId}`);
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -84,6 +85,7 @@ describe("Sync Artifact Model", () => {
 
   afterEach(async () => {
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -237,6 +239,7 @@ describe("Sync Artifact Model", () => {
 
     await closeLadybugDb();
     rmSync(graphDbPath, { recursive: true, force: true });
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     await initLadybugDb(graphDbPath);
 
     const importResult = await importArtifact({
@@ -351,6 +354,7 @@ describe("Sync Artifact Model", () => {
 
     await closeLadybugDb();
     rmSync(graphDbPath, { recursive: true, force: true });
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     await initLadybugDb(graphDbPath);
 
     await importArtifact({

@@ -87,6 +87,7 @@ describe("context overlay evidence invariant", () => {
 
   before(async () => {
     rmSync(graphDbPath, { recursive: true, force: true });
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     repoDir = mkdtempSync(join(tmpdir(), "sdl-context-overlay-evidence-"));
     mkdirSync(join(repoDir, "src"), { recursive: true });
     writeFileSync(
@@ -145,6 +146,7 @@ describe("context overlay evidence invariant", () => {
     clearSnapshotCache();
     await closeLadybugDb();
     rmSync(graphDbPath, { recursive: true, force: true });
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     rmSync(configPath, { force: true });
     if (repoDir && existsSync(repoDir)) {
       rmSync(repoDir, { recursive: true, force: true });

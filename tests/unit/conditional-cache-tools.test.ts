@@ -28,6 +28,7 @@ const symbolId = `${REPO_ID}-symbol-1`;
 
 describe("conditional cache-aware tool handlers", () => {
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -114,6 +115,7 @@ describe("conditional cache-aware tool handlers", () => {
   after(async () => {
     mock.restoreAll();
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

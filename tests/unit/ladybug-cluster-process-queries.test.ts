@@ -21,6 +21,7 @@ describe("kuzu cluster/process queries", () => {
   let symbolC: string;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -95,6 +96,7 @@ describe("kuzu cluster/process queries", () => {
     await closeLadybugDb();
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

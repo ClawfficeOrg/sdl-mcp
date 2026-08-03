@@ -28,6 +28,7 @@ async function createTestDb(): Promise<{
   db: LadybugDatabase;
   conn: LadybugConnection;
 }> {
+  rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
   if (existsSync(TEST_DB_PATH)) {
     rmSync(TEST_DB_PATH, { recursive: true, force: true });
   }
@@ -51,6 +52,7 @@ async function cleanupTestDb(
     await db.close();
   } catch {}
   try {
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }
@@ -297,7 +299,9 @@ describe("LadybugDB Version & Snapshot Queries", () => {
 
       const ladybug = await import("../../dist/db/ladybug.js");
       try {
-        await ladybug.initLadybugDb(TEST_DB_PATH);
+        await ladybug.initLadybugDb(TEST_DB_PATH, {
+          lineagePurpose: "validatedClone",
+        });
         const snapshotConn = await ladybug.getLadybugConn();
         const { createVersionAndSnapshot } = await import(
           "../../dist/indexer/indexer-version.js"

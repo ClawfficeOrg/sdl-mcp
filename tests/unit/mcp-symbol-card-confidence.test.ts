@@ -19,8 +19,10 @@ const TEST_DB_PATH = join(tmpdir(), ".lbug-mcp-symbol-card-confidence-test-db.lb
 describe("symbol card confidence-aware filtering", () => {
   beforeEach(async () => {
     clearAllCaches();
-    if (existsSync(TEST_DB_PATH)) {
-      rmSync(TEST_DB_PATH, { recursive: true, force: true });
+    for (const path of [TEST_DB_PATH, `${TEST_DB_PATH}.sdl-lineage.json`]) {
+      if (existsSync(path)) {
+        rmSync(path, { recursive: true, force: true });
+      }
     }
     mkdirSync(dirname(TEST_DB_PATH), { recursive: true });
 
@@ -118,8 +120,10 @@ describe("symbol card confidence-aware filtering", () => {
   afterEach(async () => {
     clearAllCaches();
     await closeLadybugDb();
-    if (existsSync(TEST_DB_PATH)) {
-      rmSync(TEST_DB_PATH, { recursive: true, force: true });
+    for (const path of [TEST_DB_PATH, `${TEST_DB_PATH}.sdl-lineage.json`]) {
+      if (existsSync(path)) {
+        rmSync(path, { recursive: true, force: true });
+      }
     }
   });
 

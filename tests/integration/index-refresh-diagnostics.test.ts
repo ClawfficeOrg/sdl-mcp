@@ -132,6 +132,7 @@ describe("index.refresh diagnostics", () => {
     if (repoDir && existsSync(repoDir)) {
       rmSync(repoDir, { recursive: true, force: true });
     }
+    if (graphDbPath) rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (graphDbPath && existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

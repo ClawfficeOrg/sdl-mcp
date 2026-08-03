@@ -51,6 +51,13 @@ describe("HTTP degraded startup", () => {
         await conn.close();
         await db.close();
 
+        // Keep this fixture past the lineage gate so the test still isolates
+        // the intentionally incompatible schema preflight.
+        const { writeLadybugReadyLineageMarker } = await import(
+          "../../dist/db/ladybug.js"
+        );
+        await writeLadybugReadyLineageMarker(dbPath);
+
         await writeFile(
           configPath,
           JSON.stringify({

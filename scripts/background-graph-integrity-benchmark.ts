@@ -1486,7 +1486,7 @@ function hashPath(root: string): string {
 
 async function openDatabase(path: string): Promise<void> {
   process.env.SDL_GRAPH_DB_PATH = path;
-  await initLadybugDb(path);
+  await initLadybugDb(path, { lineagePurpose: "validatedClone" });
 }
 
 function parseOutPath(argv: readonly string[]): string {

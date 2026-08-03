@@ -25,6 +25,7 @@ describe("cluster-aware slice cohesion (integration)", () => {
   const symbolB1 = `${REPO_ID}-b1`;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -161,6 +162,7 @@ describe("cluster-aware slice cohesion (integration)", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }

@@ -145,6 +145,7 @@ describe("Ladybug E2E (clusters + processes + slices + delta)", () => {
 
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

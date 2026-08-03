@@ -108,6 +108,7 @@ describe("pass2Concurrency — parity and progress", () => {
   const REPO_ID = "test-pass2-concurrency";
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -175,6 +176,7 @@ describe("pass2Concurrency — parity and progress", () => {
     }
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {}
     try {
       rmSync(configPath, { recursive: true, force: true });

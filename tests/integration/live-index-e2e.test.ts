@@ -31,6 +31,7 @@ describe("live index end-to-end flow", () => {
   const prevConfigPath = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     repoDir = mkdtempSync(join(tmpdir(), "sdl-live-index-e2e-repo-"));
     mkdirSync(join(repoDir, "src"), { recursive: true });
@@ -93,6 +94,7 @@ describe("live index end-to-end flow", () => {
   after(async () => {
     resetDefaultLiveIndexCoordinator();
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (existsSync(configPath)) rmSync(configPath, { force: true });
     if (repoDir && existsSync(repoDir)) rmSync(repoDir, { recursive: true, force: true });

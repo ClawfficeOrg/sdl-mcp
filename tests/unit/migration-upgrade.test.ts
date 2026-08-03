@@ -5,6 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 
 let initLadybugDb: (dbPath: string) => Promise<void>;
+let writeLadybugReadyLineageMarker: (dbPath: string) => Promise<void>;
 let closeLadybugDb: () => Promise<void>;
 let getLadybugConn: () => Promise<import("kuzu").Connection>;
 let getSchemaVersion: (
@@ -20,6 +21,7 @@ try {
   const migMod = await import("../../dist/db/migrations/index.js");
   ladybugQueries = await import("../../dist/db/ladybug-queries.js");
   initLadybugDb = ladybugMod.initLadybugDb;
+  writeLadybugReadyLineageMarker = ladybugMod.writeLadybugReadyLineageMarker;
   closeLadybugDb = ladybugMod.closeLadybugDb;
   getLadybugConn = ladybugMod.getLadybugConn;
   getSchemaVersion = schemaMod.getSchemaVersion;
@@ -78,6 +80,7 @@ async function createV4Database(dbPath: string): Promise<void> {
 
   await conn.close();
   await db.close();
+  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 async function createV8DatabaseWithoutSummaryMetadata(
@@ -152,6 +155,7 @@ async function createV8DatabaseWithoutSummaryMetadata(
 
   await conn.close();
   await db.close();
+  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 async function createV15DatabaseWithLegacyScipExternal(
@@ -194,6 +198,7 @@ async function createV15DatabaseWithLegacyScipExternal(
 
   await conn.close();
   await db.close();
+  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
@@ -529,6 +534,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     }
     await seedConn.close();
     await db.close();
+    await writeLadybugReadyLineageMarker(dbPath);
 
     await initLadybugDb(dbPath);
     const conn = await getLadybugConn();
@@ -590,6 +596,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     }
     await seedConn.close();
     await db.close();
+    await writeLadybugReadyLineageMarker(dbPath);
 
     await initLadybugDb(dbPath);
     const conn = await getLadybugConn();
@@ -652,6 +659,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     }
     await seedConn.close();
     await db.close();
+    await writeLadybugReadyLineageMarker(dbPath);
 
     await initLadybugDb(dbPath);
     const conn = await getLadybugConn();
@@ -816,6 +824,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     );
     await conn.close();
     await db.close();
+    await writeLadybugReadyLineageMarker(dbPath);
 
     // Should NOT throw — best-effort mode
     await assert.doesNotReject(async () => {

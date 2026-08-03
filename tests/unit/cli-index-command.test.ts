@@ -158,6 +158,16 @@ describe("CLI index command", () => {
       assert.match(result.externalOwnerWarning, /external LadybugDB owner/i);
     });
 
+    it("rejects a leftover lineage marker in the candidate family", () => {
+      assert.throws(
+        () =>
+          validate({
+            pathExists: (path) => path.endsWith(".sdl-lineage.json"),
+          }),
+        /candidate-graph\.lbug\.sdl-lineage\.json/iu,
+      );
+    });
+
     it("requires force and rejects watch or repository scope", () => {
       assert.throws(
         () => validate({ options: { safeRebuildPath: candidatePath } }),

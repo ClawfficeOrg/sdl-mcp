@@ -36,6 +36,7 @@ describe("symbol.search _rawContext.fileIds (camelFallback regression)", () => {
   const prevConfigPath = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     repoDir = mkdtempSync(join(tmpdir(), "sdl-symbol-search-fileids-repo-"));
     mkdirSync(join(repoDir, "src"), { recursive: true });
@@ -101,6 +102,7 @@ describe("symbol.search _rawContext.fileIds (camelFallback regression)", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (repoDir) rmSync(repoDir, { recursive: true, force: true });
     if (existsSync(configPath)) rmSync(configPath, { force: true });

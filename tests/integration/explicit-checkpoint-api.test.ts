@@ -33,6 +33,7 @@ describe("explicit checkpoint API", () => {
   const prevConfigPath = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     repoDir = mkdtempSync(join(tmpdir(), "sdl-explicit-checkpoint-repo-"));
     mkdirSync(join(repoDir, "src"), { recursive: true });
@@ -79,6 +80,7 @@ describe("explicit checkpoint API", () => {
   after(async () => {
     resetDefaultLiveIndexCoordinator();
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (existsSync(configPath)) rmSync(configPath, { force: true });
     if (repoDir && existsSync(repoDir)) rmSync(repoDir, { recursive: true, force: true });

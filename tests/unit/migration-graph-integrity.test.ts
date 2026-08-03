@@ -8,6 +8,7 @@ import {
   closeLadybugDb,
   getLadybugConn,
   initLadybugDb,
+  writeLadybugReadyLineageMarker,
 } from "../../dist/db/ladybug.js";
 import {
   exec,
@@ -126,6 +127,8 @@ async function createVersion22Database(
   }
   await conn.close();
   await db.close();
+  // This fixture represents an older SDL schema created by the pinned driver.
+  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 describe("migration: graph integrity revisions and manifest", () => {

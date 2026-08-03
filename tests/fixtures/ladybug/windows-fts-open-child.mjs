@@ -63,7 +63,7 @@ async function seedFtsDatabase() {
 async function openWithProductionDatabase() {
   const { closeLadybugDb, getLadybugConn, getLadybugDb } =
     await import("../../../dist/db/ladybug.js");
-  await getLadybugDb(dbPath);
+  await getLadybugDb(dbPath, { lineagePurpose: "validatedClone" });
   try {
     const conn = await getLadybugConn();
     const rows = await execute(conn, "RETURN 1 AS value", true);

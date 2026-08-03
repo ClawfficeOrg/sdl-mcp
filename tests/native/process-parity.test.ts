@@ -26,6 +26,7 @@ describe("native process parity", () => {
   let exitId: string;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -160,6 +161,7 @@ describe("native process parity", () => {
     await closeLadybugDb();
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

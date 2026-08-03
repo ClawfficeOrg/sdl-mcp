@@ -22,6 +22,7 @@ describe("traceProcessesTS", () => {
   let exitId: string;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -156,6 +157,7 @@ describe("traceProcessesTS", () => {
     await closeLadybugDb();
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

@@ -25,6 +25,7 @@ const TEST_DB_PATH = join(tmpdir(), `.lbug-feedback-schema-test-${process.pid}.l
 describe("AgentFeedback retrieval schema", () => {
   before(async () => {
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }
@@ -34,6 +35,7 @@ describe("AgentFeedback retrieval schema", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }

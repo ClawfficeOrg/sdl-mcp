@@ -27,6 +27,7 @@ describe("symbol.search placeholder contract", () => {
   const previousConfigPath = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     mkdirSync(tmpdir(), { recursive: true });
     writeFileSync(
@@ -156,6 +157,7 @@ describe("symbol.search placeholder contract", () => {
 
   after(async () => {
     await closeLadybugDb();
+    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
     if (existsSync(configPath)) rmSync(configPath, { force: true });
     if (previousConfig === undefined) delete process.env.SDL_CONFIG;

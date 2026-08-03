@@ -67,6 +67,7 @@ function writeMemoryEnabledConfig(tmpDir: string, repoRoot: string): string {
 }
 
 async function setupDb(dbPath: string): Promise<void> {
+  rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
   if (existsSync(dbPath)) {
     rmSync(dbPath, { recursive: true, force: true });
   }
@@ -78,6 +79,7 @@ async function setupDb(dbPath: string): Promise<void> {
 async function teardownDb(dbPath: string): Promise<void> {
   await closeLadybugDb();
   delete process.env.SDL_CONFIG;
+  rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
   if (existsSync(dbPath)) {
     rmSync(dbPath, { recursive: true, force: true });
   }

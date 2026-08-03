@@ -317,6 +317,7 @@ export async function validateContextQualityCacheFamily(
   try {
     await initLadybugDb(copiedPrimaryPath, {
       bufferPoolBytes: options.bufferPoolBytes,
+      lineagePurpose: "validatedClone",
     });
     const connection = await getLadybugConn();
     const plan = resolveSemanticEmbeddingModelPlan(options.semanticConfig);

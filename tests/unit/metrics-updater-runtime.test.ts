@@ -14,6 +14,7 @@ const TEST_DB_PATH = join(
 async function resetTestDb(): Promise<void> {
   const { closeLadybugDb, initLadybugDb } = await import("../../dist/db/ladybug.js");
   await closeLadybugDb();
+  rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
   if (existsSync(TEST_DB_PATH)) {
     rmSync(TEST_DB_PATH, { recursive: true, force: true });
   }
@@ -53,6 +54,7 @@ describe("materializeFileSummaries incremental targeting", () => {
   after(async () => {
     const { closeLadybugDb } = await import("../../dist/db/ladybug.js");
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }
@@ -918,6 +920,7 @@ describe("finalizeIndexing embedding model plan", () => {
   after(async () => {
     const { closeLadybugDb } = await import("../../dist/db/ladybug.js");
     await closeLadybugDb();
+    rmSync(TEST_DB_PATH + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(TEST_DB_PATH)) {
       rmSync(TEST_DB_PATH, { recursive: true, force: true });
     }

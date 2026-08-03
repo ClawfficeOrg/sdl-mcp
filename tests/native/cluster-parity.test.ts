@@ -25,6 +25,7 @@ describe("native cluster parity", () => {
   let edges: Array<{ fromSymbolId: string; toSymbolId: string }>;
 
   before(async () => {
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     if (existsSync(graphDbPath)) {
       rmSync(graphDbPath, { recursive: true, force: true });
     }
@@ -114,6 +115,7 @@ describe("native cluster parity", () => {
     await closeLadybugDb();
     try {
       rmSync(graphDbPath, { recursive: true, force: true });
+      rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
     } catch {
       // ignore
     }

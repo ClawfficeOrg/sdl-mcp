@@ -7,8 +7,10 @@ import {
   getLadybugConn,
   getLadybugDbPath,
   withWriteConn,
+  writeLadybugReadyLineageMarker,
 } from "../../db/ladybug.js";
 import { initGraphDb } from "../../db/initGraphDb.js";
+import { getLadybugLineageMarkerPath } from "../../db/ladybug-lineage.js";
 import { execCheckpoint, queryStoredProcAll } from "../../db/ladybug-core.js";
 import { withExclusiveLadybugOperation } from "../../db/ladybug-operation-gate.js";
 import {
@@ -165,6 +167,7 @@ export function validateSafeRebuildRequest(
     targetGraphDbPath,
     `${targetGraphDbPath}.wal`,
     `${targetGraphDbPath}.wal.checkpoint`,
+    getLadybugLineageMarkerPath(targetGraphDbPath),
   ];
   const existingCandidateEntry = candidateFamily.find(pathExists);
   if (existingCandidateEntry) {
@@ -471,7 +474,9 @@ export async function runSafeRebuild(
     // Own cleanup before initialization starts: LadybugDB can expose a pool
     // before later schema/extension work rejects.
     candidateOpen = true;
-    await initCandidate(params.config, params.configPath);
+    await initCandidate(params.config, params.configPath, {
+      lineagePurpose: "safeRebuildCandidate",
+    });
     params.onLifecycleEvent?.("candidate:opened");
     await loadConfiguredAdapterPlugins(
       params.config,
@@ -515,18 +520,21 @@ export async function runSafeRebuild(
     await shutdownDerivedRefreshQueue();
     await checkpointSafeRebuild();
     params.onLifecycleEvent?.("candidate:checkpointed");
-    await closeLadybugDb({ preserveCloseHooks: true });
+    await closeLadybugDb({ preserveCloseHooks: true, strict: true });
     candidateOpen = false;
     params.onLifecycleEvent?.("candidate:closed-before-reopen");
 
     candidateOpen = true;
-    await initCandidate(params.config, params.configPath);
+    await initCandidate(params.config, params.configPath, {
+      lineagePurpose: "safeRebuildCandidate",
+    });
     params.onLifecycleEvent?.("candidate:reopened");
     const validation = await validateCandidate(params.config);
     params.onLifecycleEvent?.("candidate:validated");
-    await closeLadybugDb();
+    await closeLadybugDb({ strict: true });
     candidateOpen = false;
     params.onLifecycleEvent?.("candidate:closed-after-validation");
+    await writeLadybugReadyLineageMarker(request.targetGraphDbPath);
     completed = true;
     return {
       targetGraphDbPath: request.targetGraphDbPath,
@@ -540,7 +548,7 @@ export async function runSafeRebuild(
     let teardownFailure: unknown;
     if (candidateOpen) {
       try {
-        await closeLadybugDb();
+        await closeLadybugDb({ strict: true });
         if (!completed) {
           params.onLifecycleEvent?.("candidate:closed-after-failure");
         }
