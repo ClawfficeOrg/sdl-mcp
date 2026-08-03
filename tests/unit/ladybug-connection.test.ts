@@ -18,6 +18,7 @@ let initLadybugDb: (dbPath: string) => Promise<void>;
 let isLadybugAvailable: () => boolean;
 let getLadybugDbPath: () => string | null;
 let getReadPool: () => readonly Connection[];
+let recycleReadConnection: (conn: Connection) => Promise<void>;
 let withExclusiveReadConnection: <T>(
   fn: (conn: Connection) => Promise<T>,
 ) => Promise<T>;
@@ -45,6 +46,7 @@ await import("../../dist/db/ladybug.js")
     isLadybugAvailable = kuzu.isLadybugAvailable;
     getLadybugDbPath = kuzu.getLadybugDbPath;
     getReadPool = kuzu.getReadPool;
+    recycleReadConnection = kuzu.recycleReadConnection;
     withExclusiveReadConnection = kuzu.withExclusiveReadConnection;
     ladybugAvailable = true;
   })
@@ -63,6 +65,7 @@ await import("../../dist/db/ladybug.js")
     isLadybugAvailable = () => false;
     getLadybugDbPath = () => null;
     getReadPool = () => [];
+    recycleReadConnection = async () => {};
     withExclusiveReadConnection = async () => {
       throw new Error("Module not built");
     };
@@ -528,8 +531,13 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       const prototype = kuzu.Connection.prototype;
       const originalClose = prototype.close;
       let leased: Connection | undefined;
+      let leasedCloseCalls = 0;
+      let failLeasedClose = true;
       prototype.close = async function () {
-        if (this === leased) throw closeFailure;
+        if (this === leased) {
+          leasedCloseCalls += 1;
+          if (failLeasedClose) throw closeFailure;
+        }
         await originalClose.call(this);
       };
 
@@ -541,7 +549,8 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
           }),
           (error) => error === callbackFailure,
         );
-        prototype.close = originalClose;
+        assert.equal(leasedCloseCalls, 1);
+        failLeasedClose = false;
 
         let artifactPublished = false;
         await assert.rejects(
@@ -555,6 +564,7 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
           },
         );
         assert.strictEqual(artifactPublished, false);
+        assert.equal(leasedCloseCalls, 2);
       } finally {
         prototype.close = originalClose;
         await closeLadybugDb();
@@ -574,6 +584,7 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       const originalClose = prototype.close;
       let constructed: Connection | undefined;
       const closed = new Set<Connection>();
+      const closeAttempts = new Map<Connection, number>();
       let closeShouldFail = false;
       prototype.setMaxNumThreadForExec = async function () {
         constructed = this;
@@ -581,6 +592,7 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       };
       prototype.close = async function () {
         closed.add(this);
+        closeAttempts.set(this, (closeAttempts.get(this) ?? 0) + 1);
         if (closeShouldFail) throw new Error("close failed");
         await originalClose.call(this);
       };
@@ -605,10 +617,15 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
         );
         assert.ok(constructed);
         assert.ok(closed.has(constructed));
+        assert.equal(closeAttempts.get(constructed), 1);
+
+        closeShouldFail = false;
+        await closeLadybugDb({ strict: true });
+        assert.equal(closeAttempts.get(constructed), 2);
       } finally {
         prototype.setMaxNumThreadForExec = originalThreadSetter;
         prototype.close = originalClose;
-        if (constructed && (closeShouldFail || !closed.has(constructed))) {
+        if (constructed && closeAttempts.get(constructed) === 1) {
           await originalClose.call(constructed);
         }
         await closeLadybugDb();
@@ -723,6 +740,76 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
         await closeLadybugDb().catch(() => {});
         cleanupTestDb("native-close-retry");
         cleanupTestDb("native-close-retry-competing");
+      }
+    });
+
+    it("strict-closes the source before a path switch can create the target", async (t) => {
+      const sourcePath = getTestDbPath("path-switch-source");
+      const targetPath = getTestDbPath("path-switch-target");
+      cleanupTestDb("path-switch-source");
+      cleanupTestDb("path-switch-target");
+      await initLadybugDb(sourcePath);
+
+      const kuzu = await import("kuzu");
+      const originalClose = kuzu.Database.prototype.close;
+      const closeFailure = new Error("path-switch-close-failure");
+      let closeCalls = 0;
+      t.mock.method(kuzu.Database.prototype, "close", async function () {
+        closeCalls += 1;
+        if (closeCalls === 1) throw closeFailure;
+        return originalClose.call(this);
+      });
+
+      try {
+        await assert.rejects(
+          getLadybugDb(targetPath),
+          /path-switch-close-failure|native ownership|family lease/iu,
+        );
+        assert.equal(existsSync(targetPath), false);
+        assert.equal(existsSync(targetPath + ".sdl-family.lock"), false);
+        await closeLadybugDb({ strict: true });
+        assert.equal(closeCalls, 2);
+      } finally {
+        await closeLadybugDb().catch(() => {});
+        cleanupTestDb("path-switch-source");
+        cleanupTestDb("path-switch-target");
+      }
+    });
+
+    it("retains an unhealthy read handle until strict close retries it", async (t) => {
+      const sourcePath = getTestDbPath("read-recovery-close-retry");
+      const targetPath = getTestDbPath("read-recovery-close-retry-target");
+      cleanupTestDb("read-recovery-close-retry");
+      cleanupTestDb("read-recovery-close-retry-target");
+      await initLadybugDb(sourcePath);
+      const unhealthy = (await getLadybugConn()) as Connection;
+
+      const kuzu = await import("kuzu");
+      const originalClose = kuzu.Connection.prototype.close;
+      let unhealthyCloseCalls = 0;
+      t.mock.method(kuzu.Connection.prototype, "close", async function () {
+        if (this === unhealthy) {
+          unhealthyCloseCalls += 1;
+          if (unhealthyCloseCalls === 1) {
+            throw new Error("unhealthy-read-close-failure");
+          }
+        }
+        return originalClose.call(this);
+      });
+
+      try {
+        await recycleReadConnection(unhealthy);
+        assert.equal(unhealthyCloseCalls, 1);
+        await assert.rejects(
+          getLadybugDb(targetPath),
+          /native ownership|close retry/iu,
+        );
+        await closeLadybugDb({ strict: true });
+        assert.equal(unhealthyCloseCalls, 2);
+      } finally {
+        await closeLadybugDb().catch(() => {});
+        cleanupTestDb("read-recovery-close-retry");
+        cleanupTestDb("read-recovery-close-retry-target");
       }
     });
 

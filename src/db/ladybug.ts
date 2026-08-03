@@ -30,6 +30,7 @@ import {
   verifySafeRebuildFamilyBeforeReopen,
   type LadybugFamilyLease,
   type LadybugLineageDriver,
+  type QualificationLadybugCloneCapability,
 } from "./ladybug-lineage.js";
 import type { VerifiedLadybugFamilyCopy } from "./ladybug-family-files.js";
 import {
@@ -284,6 +285,21 @@ let strictCloseForCurrentClose = false;
 let preserveFamilyLeaseForCurrentClose = false;
 const activeExclusiveReadLeases = new Set<Promise<void>>();
 const exclusiveReadCloseFailures: unknown[] = [];
+const retainedNativeConnections = new Set<LadybugConnection>();
+
+function retainNativeConnectionForCloseRetry(
+  conn: LadybugConnection,
+  label: string,
+  error: unknown,
+): void {
+  retainedNativeConnections.add(conn);
+  familyOwnershipPoisoned = true;
+  familyCloseMustAbandon = true;
+  logger.warn(label, {
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 const sessionWriteBodyLimiters = new WeakMap<
   LadybugConnection,
   ConcurrencyLimiter
@@ -503,7 +519,19 @@ async function getLadybugDbInternal(
 
     if (dbInstance) {
       logger.warn("LadybugDB path changed, closing existing connection");
-      await closeLadybugDb();
+      await closeLadybugDb({ strict: true });
+      if (
+        dbInstance ||
+        poisonedOpeningDb ||
+        activeFamilyLease ||
+        currentDbPath ||
+        retainedNativeConnections.size > 0 ||
+        familyOwnershipPoisoned
+      ) {
+        throw new DatabaseError(
+          "LadybugDB path switch cleanup is incomplete; target family was not acquired",
+        );
+      }
     }
 
     const parentDir = dirname(normalizedPath);
@@ -653,9 +681,11 @@ async function createConnection(
     try {
       await conn.close();
     } catch (closeErr) {
-      logger.warn("Error closing LadybugDB connection after setup failure", {
-        error: closeErr instanceof Error ? closeErr.message : String(closeErr),
-      });
+      retainNativeConnectionForCloseRetry(
+        conn,
+        "Error closing LadybugDB connection after setup failure",
+        closeErr,
+      );
     }
     throw err;
   }
@@ -677,25 +707,36 @@ async function getHealthyConnection(
   try {
     await conn.close();
   } catch (closeError) {
-    logger.debug(
+    retainNativeConnectionForCloseRetry(
+      conn,
       `Failed to close unhealthy LadybugDB ${label} connection before recreation`,
-      {
-        error:
-          closeError instanceof Error ? closeError.message : String(closeError),
-      },
+      closeError,
     );
   } finally {
     clearConnectionPoisoned(conn);
   }
 
   const replacement = await createConnection(db);
-  await loadExtensionsAfterWalCheckpoint(
-    replacement,
-    [replacement],
-    `pre-extension-load-${label}-replacement`,
-    getActiveConnectionsWithReplacement(replacement, conn),
-  );
-  return replacement;
+  try {
+    await loadExtensionsAfterWalCheckpoint(
+      replacement,
+      [replacement],
+      `pre-extension-load-${label}-replacement`,
+      getActiveConnectionsWithReplacement(replacement, conn),
+    );
+    return replacement;
+  } catch (error) {
+    try {
+      await replacement.close();
+    } catch (closeError) {
+      retainNativeConnectionForCloseRetry(
+        replacement,
+        `Failed to close LadybugDB ${label} replacement after setup failure`,
+        closeError,
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1003,8 +1044,12 @@ async function recoverReadConnectionSlot(
 
     try {
       await unhealthyConn.close();
-    } catch {
-      // Best-effort close of the broken connection.
+    } catch (closeError) {
+      retainNativeConnectionForCloseRetry(
+        unhealthyConn,
+        `Failed to close unhealthy LadybugDB read connection [${idx}]`,
+        closeError,
+      );
     } finally {
       clearConnectionPoisoned(unhealthyConn);
     }
@@ -1033,7 +1078,15 @@ async function recoverReadConnectionSlot(
     replacement = undefined;
   } catch (err) {
     if (replacement) {
-      await replacement.close().catch(() => {});
+      try {
+        await replacement.close();
+      } catch (closeError) {
+        retainNativeConnectionForCloseRetry(
+          replacement,
+          `Failed to close LadybugDB read replacement [${idx}] after recovery failure`,
+          closeError,
+        );
+      }
     }
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`Failed to recreate read connection [${idx}]: ${msg}`);
@@ -1163,9 +1216,11 @@ async function withExclusiveReadConnectionAdmitted<T>(
         closeFailed = true;
         closeError = err;
         exclusiveReadCloseFailures.push(err);
-        logger.warn("Error closing LadybugDB exclusive read connection", {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        retainNativeConnectionForCloseRetry(
+          conn,
+          "Error closing LadybugDB exclusive read connection",
+          err,
+        );
       }
     }
     activeExclusiveReadLeases.delete(lease);
@@ -1553,11 +1608,11 @@ export function reopenSafeRebuildLadybugDb(
 
 export function initQualificationLadybugClone(
   dbPath: string,
-  rawAuthority: unknown,
+  capability: QualificationLadybugCloneCapability,
   options?: LadybugDbInitOptions,
 ): Promise<void> {
   return initLadybugDbInternal(dbPath, options, (path, driver) =>
-    acquireQualificationLadybugCloneFamily(path, rawAuthority, driver),
+    acquireQualificationLadybugCloneFamily(path, capability, driver),
   );
 }
 
@@ -1926,6 +1981,9 @@ async function closeLadybugDbImpl(): Promise<void> {
   const closeFailures: unknown[] = [];
   const nativeCloseFailures: unknown[] = [];
   await Promise.allSettled([...activeExclusiveReadLeases]);
+  const retainedConnectionSnapshot = [...retainedNativeConnections].filter(
+    (conn) => !readPool.includes(conn) && conn !== writeConn,
+  );
   closeFailures.push(...exclusiveReadCloseFailures);
   exclusiveReadCloseFailures.length = 0;
 
@@ -2032,6 +2090,7 @@ async function closeLadybugDbImpl(): Promise<void> {
   for (const conn of poolSnapshot) {
     try {
       await conn.close();
+      retainedNativeConnections.delete(conn);
     } catch (err) {
       closeFailures.push(err);
       nativeCloseFailures.push(err);
@@ -2079,11 +2138,26 @@ async function closeLadybugDbImpl(): Promise<void> {
     }
     try {
       await writeConn.close();
+      retainedNativeConnections.delete(writeConn);
       writeConn = null;
     } catch (err) {
       closeFailures.push(err);
       nativeCloseFailures.push(err);
       logger.warn("Error closing LadybugDB write connection", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  for (const conn of retainedConnectionSnapshot) {
+    if (!retainedNativeConnections.has(conn)) continue;
+    try {
+      await conn.close();
+      retainedNativeConnections.delete(conn);
+    } catch (err) {
+      closeFailures.push(err);
+      nativeCloseFailures.push(err);
+      logger.warn("Error retrying retained LadybugDB connection close", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -2114,7 +2188,10 @@ async function closeLadybugDbImpl(): Promise<void> {
     }
   }
 
-  if (nativeCloseFailures.length > 0) {
+  if (
+    nativeCloseFailures.length > 0 ||
+    retainedNativeConnections.size > 0
+  ) {
     familyOwnershipPoisoned = true;
     familyCloseMustAbandon = true;
     logger.warn("LadybugDB native ownership retained for close retry", {

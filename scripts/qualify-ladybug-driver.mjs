@@ -24,8 +24,10 @@ import {
   copyLadybugFamilyVerified,
   fingerprintLadybugFamily,
   inventoryLadybugFamilyIdentities,
+  readBoundedLadybugConfigFile,
   readBoundedLadybugControlFile,
 } from "../dist/db/ladybug-family-files.js";
+import { issueNonceConsumedQualificationLadybugCloneAuthority } from "../dist/db/ladybug-authority.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { resolveGraphDbPath } from "../dist/db/graph-db-path.js";
 import {
@@ -171,7 +173,7 @@ function collectExistingFamily(primaryPath) {
 
 function fileSha256(path) {
   return createHash("sha256")
-    .update(readBoundedLadybugControlFile(path, "qualification config"))
+    .update(readBoundedLadybugConfigFile(path, "qualification config"))
     .digest("hex");
 }
 
@@ -331,7 +333,7 @@ export function consumeQualificationChildAuthority(
   ) {
     invalidQualificationAuthority("phase or canonical paths do not match");
   }
-  const verifiedConfigBytes = readBoundedLadybugControlFile(
+  const verifiedConfigBytes = readBoundedLadybugConfigFile(
     options.configPath,
     "qualification config",
   );
@@ -405,11 +407,13 @@ export function consumeQualificationChildAuthority(
   // Consume the capability before any LadybugDB module is imported or opened.
   rmSync(authorityPath);
   return {
-    version: QUALIFICATION_AUTHORITY_VERSION,
-    phase: authority.phase,
-    clonePath,
-    cloneFamily,
-    forbiddenFamilies: authority.forbiddenFamilies,
+    dbCapability: issueNonceConsumedQualificationLadybugCloneAuthority({
+      version: QUALIFICATION_AUTHORITY_VERSION,
+      phase: authority.phase,
+      clonePath,
+      cloneFamily,
+      forbiddenFamilies: authority.forbiddenFamilies,
+    }),
     verifiedConfigBytes,
   };
 }
@@ -807,19 +811,15 @@ export async function qualifyLadybugDriver(options) {
   const activePaths = resolveActiveDatabasePaths(config, configPath);
   assertOfflineSourceDistinct(sourcePath, activePaths);
 
-  const sourceBefore = fingerprintLadybugFamily(sourcePath);
   const cloneRootPath = await mkdtemp(
     join(tmpdir(), "sdl-ladybug-qualification-"),
   );
   const clonePath = join(cloneRootPath, "candidate.lbug");
+  let sourceBefore;
 
   try {
-    copyLadybugFamilyVerified(sourcePath, clonePath);
-    assertFingerprintEqual(
-      sourceBefore,
-      fingerprintLadybugFamily(sourcePath),
-      "Offline source changed while copying the database family",
-    );
+    const copied = copyLadybugFamilyVerified(sourcePath, clonePath);
+    sourceBefore = copied.sourceFingerprint;
     assertOfflineSourceDistinct(clonePath, [sourcePath, ...activePaths]);
 
     let expectedGraphIdentity;
@@ -889,7 +889,7 @@ export async function qualifyLadybugDriver(options) {
   } catch (cause) {
     let error = cause instanceof Error ? cause : new Error(String(cause));
     try {
-      assertFingerprintEqual(
+      if (sourceBefore) assertFingerprintEqual(
         sourceBefore,
         fingerprintLadybugFamily(sourcePath),
         "Offline source changed during failed Ladybug qualification",
@@ -1702,10 +1702,11 @@ export async function closeQualificationPhaseStrictly(
 }
 
 async function runChildMode(options) {
-  const qualificationAuthority = consumeQualificationChildAuthority(options);
+  const qualificationAuthorization =
+    consumeQualificationChildAuthority(options);
   const verifiedConfigPath = writeVerifiedQualificationConfigCopy(
     options.configPath,
-    qualificationAuthority.verifiedConfigBytes,
+    qualificationAuthorization.verifiedConfigBytes,
   );
   const previousConfigPath = process.env.SDL_CONFIG;
   process.env.SDL_CONFIG = verifiedConfigPath;
@@ -1734,7 +1735,7 @@ async function runChildMode(options) {
   try {
     await initQualificationLadybugClone(
       options.clonePath,
-      qualificationAuthority,
+      qualificationAuthorization.dbCapability,
     );
     if (
       canonicalizePath(getLadybugDbPath()) !==

@@ -18,6 +18,13 @@ import { isProcessAlive } from "../util/pidfile.js";
 import { normalizePath } from "../util/paths.js";
 import { normalizeGraphDbPath } from "./graph-db-path.js";
 import {
+  consumeQualificationLadybugCloneAuthority,
+  type QualificationFamilyAuthority,
+  type QualificationFamilyMemberAuthority,
+  type QualificationLadybugCloneAuthority,
+  type QualificationLadybugCloneCapability,
+} from "./ladybug-authority.js";
+import {
   canonicalLadybugPath,
   collectLadybugFamilyFiles,
   consumeVerifiedLadybugFamilyCopy,
@@ -48,6 +55,11 @@ export type {
   LadybugFamilyFileFingerprint,
   LadybugFamilyFingerprint,
 } from "./ladybug-family-files.js";
+export type {
+  QualificationFamilyAuthority,
+  QualificationLadybugCloneAuthority,
+  QualificationLadybugCloneCapability,
+} from "./ladybug-authority.js";
 
 type FileIdentity = LadybugFileIdentity;
 
@@ -55,27 +67,6 @@ interface FamilySnapshot {
   canonicalDbPath: string;
   primaryFile: FileIdentity;
   family: LadybugFamilyFingerprint;
-}
-
-interface FamilyMemberAuthority {
-  path: string;
-  device: string;
-  inode: string;
-}
-
-export interface QualificationFamilyAuthority {
-  role: string;
-  primaryPath: string;
-  members: FamilyMemberAuthority[];
-  fingerprint?: LadybugFamilyFingerprint;
-}
-
-export interface QualificationLadybugCloneAuthority {
-  version: 1;
-  phase: string;
-  clonePath: string;
-  cloneFamily: QualificationFamilyAuthority;
-  forbiddenFamilies: QualificationFamilyAuthority[];
 }
 
 export interface LadybugFamilyLease {
@@ -311,13 +302,18 @@ function requireLease(
 function release(lease: LadybugFamilyLease): void {
   if (lease.released) return;
   requireLease(lease);
-  closeSync(lease.lockDescriptor!);
-  lease.lockDescriptor = null;
   if (!same(pathIdentity(lease.lockPath), lease.lockIdentity)) {
+    closeSync(lease.lockDescriptor!);
+    lease.lockDescriptor = null;
     lease.released = true;
     throw lineageError(lease.dbPath, "family lock changed before release");
   }
+
+  // Keep the validated descriptor and lease live until the directory entry is gone.
+  // A transient unlink failure can then be retried without surrendering ownership.
   unlinkSync(lease.lockPath);
+  closeSync(lease.lockDescriptor!);
+  lease.lockDescriptor = null;
   lease.released = true;
 }
 
@@ -472,13 +468,6 @@ function assertUnchanged(
   throw lineageError(path, reason);
 }
 
-const QUALIFICATION_AUTHORITY = Symbol("QualificationLadybugCloneAuthority");
-
-interface ValidatedQualificationAuthority {
-  readonly [QUALIFICATION_AUTHORITY]: true;
-  readonly value: QualificationLadybugCloneAuthority;
-}
-
 function familyAuthority(
   role: string,
   primaryPath: string,
@@ -509,9 +498,8 @@ function familyAuthority(
 
 function validateQualificationAuthority(
   db: string,
-  input: unknown,
-): ValidatedQualificationAuthority {
-  const authority = input as Partial<QualificationLadybugCloneAuthority>;
+  authority: QualificationLadybugCloneAuthority,
+): void {
   if (
     !authority ||
     typeof authority !== "object" ||
@@ -546,10 +534,6 @@ function validateQualificationAuthority(
   if (new Set(paths).size !== paths.length) {
     throw lineageError(db, "qualification family roles overlap");
   }
-  return {
-    [QUALIFICATION_AUTHORITY]: true,
-    value: authority as QualificationLadybugCloneAuthority,
-  };
 }
 
 function verifyDigestAuthorityFamily(
@@ -578,7 +562,7 @@ function verifyDigestAuthorityFamily(
 function currentActiveAuthorityMembers(
   db: string,
   expected: QualificationFamilyAuthority,
-): FamilyMemberAuthority[] {
+): readonly QualificationFamilyMemberAuthority[] {
   const canonicalPrimary = qualificationCanonical(expected.primaryPath);
   if (canonicalPrimary !== expected.primaryPath) {
     throw lineageError(db, "qualification active family path changed");
@@ -691,14 +675,22 @@ export function acquireValidatedLadybugCloneFamily(
 
 export function acquireQualificationLadybugCloneFamily(
   path: string,
-  rawAuthority: unknown,
+  capability: QualificationLadybugCloneCapability,
   driver: LadybugLineageDriver,
 ): LadybugFamilyLease {
   const normalized = dbPath(path);
   const lease = newLease(normalized, driver, "qualification");
   return guardedAcquire(lease, () => {
-    const capability = validateQualificationAuthority(normalized, rawAuthority);
-    const authority = capability.value;
+    let authority: Readonly<QualificationLadybugCloneAuthority>;
+    try {
+      authority = consumeQualificationLadybugCloneAuthority(capability);
+    } catch (error) {
+      throw lineageError(
+        normalized,
+        error instanceof Error ? error.message : "qualification authority failed",
+      );
+    }
+    validateQualificationAuthority(normalized, authority);
     const expectedPath = qualificationCanonical(normalized);
     if (
       authority.clonePath !== expectedPath ||

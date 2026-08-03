@@ -16,12 +16,15 @@ import { basename, dirname, join } from "node:path";
 
 import { normalizePath } from "../util/paths.js";
 import { normalizeGraphDbPath } from "./graph-db-path.js";
+import {
+  createOpaqueLadybugAuthorityIssuer,
+  type OpaqueLadybugAuthority,
+} from "./ladybug-authority.js";
 
 export const MAX_LADYBUG_CONTROL_BYTES = 16 * 1024;
+export const MAX_LADYBUG_QUALIFICATION_CONFIG_BYTES = 10 * 1024 * 1024;
 const MAX_FAMILY_MEMBERS = 32;
 const HASH_BUFFER_BYTES = 64 * 1024;
-const VERIFIED_COPY = Symbol("VerifiedLadybugFamilyCopy");
-const unconsumedCopies = new WeakSet<object>();
 
 export interface LadybugFamilyFileFingerprint {
   path: string;
@@ -43,8 +46,7 @@ export interface LadybugFamilyMemberIdentity extends LadybugFileIdentity {
   path: string;
 }
 
-export interface VerifiedLadybugFamilyCopy {
-  readonly [VERIFIED_COPY]: true;
+interface VerifiedLadybugFamilyCopyState {
   readonly sourcePath: string;
   readonly destinationPath: string;
   readonly sourceFingerprint: LadybugFamilyFingerprint;
@@ -52,6 +54,19 @@ export interface VerifiedLadybugFamilyCopy {
   readonly sourceMembers: readonly LadybugFamilyMemberIdentity[];
   readonly destinationMembers: readonly LadybugFamilyMemberIdentity[];
 }
+
+export type VerifiedLadybugFamilyCopy =
+  OpaqueLadybugAuthority<"validated-copy">;
+
+export interface LadybugFamilyCopyEvidence {
+  readonly sourceFingerprint: LadybugFamilyFingerprint;
+  readonly destinationFingerprint: LadybugFamilyFingerprint;
+}
+
+const verifiedLadybugFamilyCopies = createOpaqueLadybugAuthorityIssuer<
+  VerifiedLadybugFamilyCopyState,
+  "validated-copy"
+>("Validated LadybugDB copy capability is invalid or already consumed");
 
 function primaryPath(path: string): string {
   return normalizePath(normalizeGraphDbPath(path));
@@ -79,6 +94,12 @@ export function withStableLadybugRegularFile<T>(
   label: string,
   body: (descriptor: number, opened: ReturnType<typeof fstatSync>) => T,
 ): T {
+  const pathBefore = lstatSync(path, { bigint: true });
+  if (pathBefore.isSymbolicLink() || !pathBefore.isFile()) {
+    throw new Error(label + " must be a regular non-symlink file");
+  }
+  const beforeIdentity = identity(pathBefore);
+
   let descriptor: number;
   try {
     descriptor = openSync(
@@ -102,8 +123,11 @@ export function withStableLadybugRegularFile<T>(
   }
   try {
     const opened = fstatSync(descriptor, { bigint: true });
-    if (!opened.isFile()) {
-      throw new Error(label + " must be a regular non-symlink file");
+    if (
+      !opened.isFile() ||
+      JSON.stringify(identity(opened)) !== JSON.stringify(beforeIdentity)
+    ) {
+      throw new Error(label + " changed while being opened");
     }
     const openedIdentity = identity(opened);
     const pathStat = lstatSync(path, { bigint: true });
@@ -152,6 +176,17 @@ export function readBoundedLadybugControlFile(
     }
     return buffer.subarray(0, total);
   });
+}
+
+export function readBoundedLadybugConfigFile(
+  path: string,
+  label: string,
+): Buffer {
+  return readBoundedLadybugControlFile(
+    path,
+    label,
+    MAX_LADYBUG_QUALIFICATION_CONFIG_BYTES,
+  );
 }
 
 export function collectLadybugFamilyFiles(path: string): string[] {
@@ -261,7 +296,7 @@ function mappedFingerprint(
 function copyVerified(
   sourcePath: string,
   destinationPath: string,
-): Omit<VerifiedLadybugFamilyCopy, typeof VERIFIED_COPY> {
+): VerifiedLadybugFamilyCopyState {
   const source = primaryPath(sourcePath);
   const destination = primaryPath(destinationPath);
   const sourceName = basename(source);
@@ -327,39 +362,34 @@ function copyVerified(
 export function copyLadybugFamilyVerified(
   sourcePath: string,
   destinationPath: string,
-): LadybugFamilyFingerprint {
-  return copyVerified(sourcePath, destinationPath).destinationFingerprint;
+): LadybugFamilyCopyEvidence {
+  const copied = copyVerified(sourcePath, destinationPath);
+  return {
+    sourceFingerprint: copied.sourceFingerprint,
+    destinationFingerprint: copied.destinationFingerprint,
+  };
 }
 
 export function copyLadybugFamilyForValidatedClone(
   sourcePath: string,
   destinationPath: string,
 ): VerifiedLadybugFamilyCopy {
-  const capability = {
-    [VERIFIED_COPY]: true as const,
-    ...copyVerified(sourcePath, destinationPath),
-  };
-  unconsumedCopies.add(capability);
-  return capability;
+  return verifiedLadybugFamilyCopies.issue(
+    copyVerified(sourcePath, destinationPath),
+  );
 }
 
 export function consumeVerifiedLadybugFamilyCopy(
   capability: VerifiedLadybugFamilyCopy,
   destinationPath: string,
 ): void {
-  if (
-    !capability ||
-    capability[VERIFIED_COPY] !== true ||
-    !unconsumedCopies.delete(capability)
-  ) {
-    throw new Error("Validated LadybugDB copy capability is invalid or already consumed");
-  }
+  const state = verifiedLadybugFamilyCopies.consume(capability);
   const destination = primaryPath(destinationPath);
-  if (capability.destinationPath !== canonicalLadybugPath(destination)) {
+  if (state.destinationPath !== canonicalLadybugPath(destination)) {
     throw new Error("Validated LadybugDB copy destination changed");
   }
-  const sourceFingerprint = fingerprintLadybugFamily(capability.sourcePath, {
-    exclude: [basename(capability.sourcePath) + ".sdl-family.lock"],
+  const sourceFingerprint = fingerprintLadybugFamily(state.sourcePath, {
+    exclude: [basename(state.sourcePath) + ".sdl-family.lock"],
   });
   const destinationFingerprint = fingerprintLadybugFamily(destination, {
     exclude: [basename(destination) + ".sdl-family.lock"],
@@ -367,25 +397,25 @@ export function consumeVerifiedLadybugFamilyCopy(
   if (
     !ladybugFamilyFingerprintsEqual(
       sourceFingerprint,
-      capability.sourceFingerprint,
+      state.sourceFingerprint,
     ) ||
     !ladybugFamilyFingerprintsEqual(
       destinationFingerprint,
-      capability.destinationFingerprint,
+      state.destinationFingerprint,
     )
   ) {
     throw new Error("Validated LadybugDB copy bytes changed before open");
   }
-  const sourceMembers = inventoryLadybugFamilyIdentities(capability.sourcePath, {
-    exclude: [basename(capability.sourcePath) + ".sdl-family.lock"],
+  const sourceMembers = inventoryLadybugFamilyIdentities(state.sourcePath, {
+    exclude: [basename(state.sourcePath) + ".sdl-family.lock"],
   });
   const destinationMembers = inventoryLadybugFamilyIdentities(destination, {
     exclude: [basename(destination) + ".sdl-family.lock"],
   });
   if (
-    JSON.stringify(sourceMembers) !== JSON.stringify(capability.sourceMembers) ||
+    JSON.stringify(sourceMembers) !== JSON.stringify(state.sourceMembers) ||
     JSON.stringify(destinationMembers) !==
-      JSON.stringify(capability.destinationMembers)
+      JSON.stringify(state.destinationMembers)
   ) {
     throw new Error("Validated LadybugDB copy identities changed before open");
   }

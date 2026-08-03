@@ -612,7 +612,7 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     );
     writeFileSync(activePath, "active-after-authority");
     writeFileSync(activePath + ".wal", "new-active-wal");
-    const authority = consumeQualificationChildAuthority(
+    const { dbCapability } = consumeQualificationChildAuthority(
       { mode: "seed-first-batch", clonePath, configPath },
       env,
     );
@@ -621,12 +621,80 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     linkSync(activePath, clonePath);
     try {
       await assert.rejects(
-        initQualificationLadybugClone(clonePath, authority),
+        initQualificationLadybugClone(clonePath, dbCapability),
         /hardlinks a forbidden database family/iu,
       );
     } finally {
       await closeLadybugDb({ strict: true }).catch(() => {});
     }
+  });
+
+  it("accepts large valid configs but gives the DB only an opaque one-use child capability", async () => {
+    const {
+      buildQualificationChildEnv,
+      consumeQualificationChildAuthority,
+      createQualificationChildAuthority,
+    } = await import("../../scripts/qualify-ladybug-driver.mjs");
+    const {
+      abandonLadybugFamily,
+      acquireQualificationLadybugCloneFamily,
+    } = await import("../../dist/db/ladybug-lineage.js");
+    const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-authority-source-"));
+    const cloneRoot = mkdtempSync(join(tmpdir(), "sdl-ladybug-qualification-"));
+    cleanupRoots.push(root, cloneRoot);
+    const sourcePath = join(root, "source.lbug");
+    const clonePath = join(cloneRoot, "candidate.lbug");
+    const configPath = join(cloneRoot, "config.json");
+    writeFileSync(sourcePath, "source-bytes");
+    writeFileSync(clonePath, "clone-bytes");
+    writeFileSync(
+      configPath,
+      JSON.stringify({ repos: [], policy: {}, padding: "x".repeat(20 * 1024) }),
+    );
+    const marker = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath,
+      configPath,
+      sourcePath,
+    });
+    const authorization = consumeQualificationChildAuthority(
+      { mode: "seed-first-batch", clonePath, configPath },
+      buildQualificationChildEnv(
+        process.env,
+        clonePath,
+        configPath,
+        marker,
+      ),
+    );
+
+    assert.ok(authorization.verifiedConfigBytes.length > 16 * 1024);
+    assert.equal(Object.isFrozen(authorization.dbCapability), true);
+    assert.deepEqual(Reflect.ownKeys(authorization.dbCapability), []);
+    assert.throws(
+      () =>
+        acquireQualificationLadybugCloneFamily(
+          clonePath,
+          { ...authorization.dbCapability },
+          { version: "test", storageVersion: "1" },
+        ),
+      /invalid or already consumed/iu,
+    );
+
+    const lease = acquireQualificationLadybugCloneFamily(
+      clonePath,
+      authorization.dbCapability,
+      { version: "test", storageVersion: "1" },
+    );
+    abandonLadybugFamily(lease);
+    assert.throws(
+      () =>
+        acquireQualificationLadybugCloneFamily(
+          clonePath,
+          authorization.dbCapability,
+          { version: "test", storageVersion: "1" },
+        ),
+      /invalid or already consumed/iu,
+    );
   });
 
   it("does not return a phase when strict close fails and preserves both failures", async () => {

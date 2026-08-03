@@ -87,4 +87,26 @@ describe("Ladybug production lineage guard", { concurrency: 1 }, () => {
     assert.equal(existsSync(markerPath), true);
     await assert.doesNotReject(initLadybugDb(dbPath));
   });
+
+  it("keeps validated-copy authority opaque, immutable, and one-use", async () => {
+    const sourcePath = createPath();
+    await initLadybugDb(sourcePath);
+    await closeLadybugDb({ strict: true });
+
+    const clonePath = join(testRoot, "opaque-clone.lbug");
+    const capability = copyLadybugFamilyForValidatedClone(sourcePath, clonePath);
+    assert.equal(Object.isFrozen(capability), true);
+    assert.deepEqual(Reflect.ownKeys(capability), []);
+    assert.throws(() => {
+      (capability as unknown as Record<string, unknown>).destinationPath =
+        join(testRoot, "redirected.lbug");
+    }, TypeError);
+
+    await initValidatedLadybugClone(clonePath, capability);
+    await closeLadybugDb({ strict: true });
+    await assert.rejects(
+      initValidatedLadybugClone(clonePath, capability),
+      /invalid or already consumed/iu,
+    );
+  });
 });
