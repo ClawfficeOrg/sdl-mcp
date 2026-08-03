@@ -18,10 +18,7 @@ import {
   getLadybugDbPath,
   initValidatedLadybugClone,
 } from "../db/ladybug.js";
-import {
-  bindVerifiedLadybugClone,
-  type LadybugFamilyFingerprint,
-} from "../db/ladybug-lineage.js";
+import type { VerifiedLadybugFamilyCopy } from "../db/ladybug-family-files.js";
 import {
   hasExactHealthyIndex,
   resolveRequiredRetrievalIndexes,
@@ -300,7 +297,7 @@ async function vectorIndexIdentity(
 export interface ValidateContextQualityCacheFamilyOptions {
   expectation: ContextQualityCacheExpectation;
   semanticConfig: SemanticConfig | undefined;
-  verifiedCopyFingerprint: LadybugFamilyFingerprint;
+  verifiedCopyFingerprint: VerifiedLadybugFamilyCopy;
   bufferPoolBytes?: number;
 }
 
@@ -320,13 +317,13 @@ export async function validateContextQualityCacheFamily(
   }
 
   try {
-    const cloneAuthority = bindVerifiedLadybugClone(
+    await initValidatedLadybugClone(
       copiedPrimaryPath,
       options.verifiedCopyFingerprint,
+      {
+        bufferPoolBytes: options.bufferPoolBytes,
+      },
     );
-    await initValidatedLadybugClone(copiedPrimaryPath, cloneAuthority, {
-      bufferPoolBytes: options.bufferPoolBytes,
-    });
     const connection = await getLadybugConn();
     const plan = resolveSemanticEmbeddingModelPlan(options.semanticConfig);
     if (plan.unsupportedModels.length > 0) {

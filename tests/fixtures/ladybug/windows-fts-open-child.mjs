@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 const [mode, dbPath, ...extraArgs] = process.argv.slice(2);
 assert.ok(
@@ -21,7 +23,9 @@ async function seedFtsDatabase() {
   const kuzu = await import("kuzu");
   const { isWindowsFtsRuntimeUnavailable, withWindowsFtsRuntime } =
     await import("../../../dist/db/ladybug-windows-fts-runtime.js");
-  const db = new kuzu.Database(dbPath);
+  const seedPath = join(dirname(dbPath), ".fts-seed", basename(dbPath));
+  mkdirSync(dirname(seedPath), { recursive: true });
+  const db = new kuzu.Database(seedPath);
   const conn = new kuzu.Connection(db);
   try {
     await execute(conn, "INSTALL fts");
@@ -58,26 +62,28 @@ async function seedFtsDatabase() {
     await conn.close();
     await db.close();
   }
+
+  const { copyLadybugFamilyForValidatedClone } = await import(
+    "../../../dist/db/ladybug-family-files.js"
+  );
+  const { closeLadybugDb, initValidatedLadybugClone } = await import(
+    "../../../dist/db/ladybug.js"
+  );
+  const capability = copyLadybugFamilyForValidatedClone(seedPath, dbPath);
+  await initValidatedLadybugClone(dbPath, capability);
+  await closeLadybugDb({ strict: true });
 }
 
 async function openWithProductionDatabase() {
-  const { closeLadybugDb, getLadybugConn, initValidatedLadybugClone } =
+  const { closeLadybugDb, getLadybugConn, initLadybugDb } =
     await import("../../../dist/db/ladybug.js");
-  const { fingerprintDbFamily } =
-    await import("../../../dist/benchmark/external-runner.js");
-  const { bindVerifiedLadybugClone } =
-    await import("../../../dist/db/ladybug-lineage.js");
-  const authority = bindVerifiedLadybugClone(
-    dbPath,
-    fingerprintDbFamily(dbPath),
-  );
-  await initValidatedLadybugClone(dbPath, authority);
+  await initLadybugDb(dbPath);
   try {
     const conn = await getLadybugConn();
     const rows = await execute(conn, "RETURN 1 AS value", true);
     assert.equal(Number(rows[0]?.value), 1);
   } finally {
-    await closeLadybugDb();
+    await closeLadybugDb({ strict: true });
   }
 }
 

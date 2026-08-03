@@ -234,6 +234,48 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       }
     });
 
+
+    it("retains family ownership when failed initialization cannot close its native handle", async (t) => {
+      const testPath = getTestDbPath("lazy-init-close-failure");
+      const competingPath = getTestDbPath("lazy-init-close-failure-competing");
+      cleanupTestDb("lazy-init-close-failure");
+      cleanupTestDb("lazy-init-close-failure-competing");
+
+      const kuzu = await import("kuzu");
+      const initFailure = new Error("init-failure-sentinel");
+      const closeFailure = new Error("init-close-failure-sentinel");
+      t.mock.method(kuzu.Database.prototype, "init", async () => {
+        throw initFailure;
+      });
+      let closeCalls = 0;
+      t.mock.method(kuzu.Database.prototype, "close", async () => {
+        closeCalls += 1;
+        if (closeCalls === 1) throw closeFailure;
+      });
+
+      try {
+        await assert.rejects(getLadybugDb(testPath), (error: unknown) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /init-failure-sentinel/);
+          assert.match(error.message, /init-close-failure-sentinel/);
+          return true;
+        });
+        await assert.rejects(
+          getLadybugDb(competingPath),
+          /native ownership|close retry|family lease/iu,
+        );
+        assert.strictEqual(closeCalls, 1);
+
+        await closeLadybugDb({ strict: true });
+        assert.strictEqual(closeCalls, 2);
+        assert.strictEqual(getLadybugDbPath(), null);
+      } finally {
+        await closeLadybugDb().catch(() => {});
+        cleanupTestDb("lazy-init-close-failure");
+        cleanupTestDb("lazy-init-close-failure-competing");
+      }
+    });
+
     it("should create database successfully through Ladybug alias", async () => {
       const testPath = getTestDbPath("alias-db-create");
       cleanupTestDb("alias-db-create");
@@ -643,6 +685,45 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       await closeLadybugDb();
       await closeLadybugDb();
       await closeLadybugDb();
+    });
+
+
+    it("retains family ownership until a failed native database close is retried successfully", async (t) => {
+      const testPath = getTestDbPath("native-close-retry");
+      const competingPath = getTestDbPath("native-close-retry-competing");
+      cleanupTestDb("native-close-retry");
+      cleanupTestDb("native-close-retry-competing");
+      await initLadybugDb(testPath);
+
+      const ownedPath = getLadybugDbPath();
+
+      const kuzu = await import("kuzu");
+      const originalClose = kuzu.Database.prototype.close;
+      const closeFailure = new Error("native-database-close-failure-sentinel");
+      let closeCalls = 0;
+      t.mock.method(kuzu.Database.prototype, "close", async function () {
+        closeCalls += 1;
+        if (closeCalls === 1) throw closeFailure;
+        return originalClose.call(this);
+      });
+
+      try {
+        await closeLadybugDb();
+        assert.strictEqual(getLadybugDbPath(), ownedPath);
+        await assert.rejects(
+          getLadybugDb(competingPath),
+          /native ownership|close retry|family lease/iu,
+        );
+        assert.strictEqual(closeCalls, 1);
+
+        await closeLadybugDb({ strict: true });
+        assert.strictEqual(closeCalls, 2);
+        assert.strictEqual(getLadybugDbPath(), null);
+      } finally {
+        await closeLadybugDb().catch(() => {});
+        cleanupTestDb("native-close-retry");
+        cleanupTestDb("native-close-retry-competing");
+      }
     });
 
     it("strict close-hook failure resets state and leaves the family stale", async () => {

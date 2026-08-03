@@ -10,8 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 
-import { fingerprintDbFamily } from "../../dist/benchmark/external-runner.js";
-import { bindVerifiedLadybugClone } from "../../dist/db/ladybug-lineage.js";
+import { copyLadybugFamilyForValidatedClone } from "../../dist/db/ladybug-family-files.js";
 import {
   closeLadybugDb,
   initLadybugDb,
@@ -75,17 +74,14 @@ describe("Ladybug production lineage guard", { concurrency: 1 }, () => {
   });
 
   it("promotes a verified clone into the normal closed-family lifecycle", async () => {
-    const dbPath = createPath();
-    const markerPath = dbPath + ".sdl-lineage.json";
-    await initLadybugDb(dbPath);
+    const sourcePath = createPath();
+    await initLadybugDb(sourcePath);
     await closeLadybugDb({ strict: true });
-    rmSync(markerPath, { force: true });
 
-    const authority = bindVerifiedLadybugClone(
-      dbPath,
-      fingerprintDbFamily(dbPath),
-    );
-    await initValidatedLadybugClone(dbPath, authority);
+    const dbPath = join(testRoot, "clone.lbug");
+    const markerPath = dbPath + ".sdl-lineage.json";
+    const capability = copyLadybugFamilyForValidatedClone(sourcePath, dbPath);
+    await initValidatedLadybugClone(dbPath, capability);
     await closeLadybugDb({ strict: true });
 
     assert.equal(existsSync(markerPath), true);

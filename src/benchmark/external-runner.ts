@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, { existsSync, readdirSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
 import {
   basename,
   dirname,
@@ -13,7 +13,14 @@ import { fileURLToPath } from "node:url";
 
 import { RUNTIME_SIGKILL_GRACE_MS } from "../config/constants.js";
 import { killProcessTree } from "../runtime/executor.js";
-import { normalizePath } from "../util/paths.js";
+import {
+  assertLadybugFamilyAbsent,
+  collectLadybugFamilyFiles,
+  copyLadybugFamilyForValidatedClone,
+  copyLadybugFamilyVerified,
+  fingerprintLadybugFamily,
+  type VerifiedLadybugFamilyCopy,
+} from "../db/ladybug-family-files.js";
 
 import {
   buildExternalBenchmarkResults,
@@ -44,53 +51,33 @@ export interface DbFamilyFingerprint {
   sha256: string;
 }
 
-function familyEntries(primaryPath: string) {
-  const directory = dirname(primaryPath);
-  const primaryName = basename(primaryPath);
-  if (!existsSync(directory)) return [];
-
-  return readdirSync(directory, { withFileTypes: true }).filter(
-    (entry) =>
-      entry.name === primaryName || entry.name.startsWith(primaryName + "."),
-  );
-}
-
 export function collectDbFamilyFiles(primaryPath: string): string[] {
-  const directory = dirname(primaryPath);
-  return familyEntries(primaryPath)
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(directory, entry.name))
-    .sort((left, right) =>
-      compareArtifactPath(normalizePath(left), normalizePath(right)),
-    );
+  return collectLadybugFamilyFiles(primaryPath);
 }
 
 export function assertDbFamilyAbsent(primaryPath: string): void {
-  const existing = familyEntries(primaryPath);
-  if (existing.length > 0) {
-    throw new Error(
-      "Database family must be absent: " +
-        existing
-          .map((entry) => join(dirname(primaryPath), entry.name))
-          .sort()
-          .join(", "),
-    );
-  }
+  assertLadybugFamilyAbsent(primaryPath);
 }
 
 export function fingerprintDbFamily(primaryPath: string): DbFamilyFingerprint {
-  const entries = familyEntries(primaryPath);
-  const nonRegular = entries.find((entry) => !entry.isFile());
-  if (nonRegular !== undefined) {
-    throw new Error(
-      "Database family entry must be a regular file: " + nonRegular.name,
-    );
+  let shared;
+  try {
+    shared = fingerprintLadybugFamily(primaryPath);
+  } catch (error) {
+    if (error instanceof Error && /regular non-symlink file/u.test(error.message)) {
+      throw new Error("Database family entry must be a regular file");
+    }
+    throw error;
   }
-
-  return fingerprintFiles(
-    dirname(primaryPath),
-    entries.map((entry) => entry.name),
+  const files = shared.files.map(
+    ({ path, sha256 }) => ({ path, sha256 }),
   );
+  return {
+    files,
+    sha256: createHash("sha256")
+      .update(JSON.stringify(files), "utf8")
+      .digest("hex"),
+  };
 }
 
 function assertFingerprintsEqual(
@@ -103,66 +90,22 @@ function assertFingerprintsEqual(
   }
 }
 
-function mapDbFamilyFingerprint(
-  fingerprint: DbFamilyFingerprint,
-  sourceName: string,
-  destinationName: string,
-): HashedArtifactFile[] {
-  return fingerprint.files.map((file) => {
-    if (file.path !== sourceName && !file.path.startsWith(sourceName + ".")) {
-      throw new Error("Invalid database family member: " + file.path);
-    }
-    return {
-      ...file,
-      path: destinationName + file.path.slice(sourceName.length),
-    };
-  });
-}
-
-/**
- * Copies a closed database family without omitting LadybugDB sidecars.
- *
- * The source is fingerprinted before and after the exclusive copy so callers
- * never publish bytes from a family that changed while it was being staged.
- */
 export function copyDbFamilyVerified(
   sourcePrimaryPath: string,
   destinationPrimaryPath: string,
 ): DbFamilyFingerprint {
-  const sourceName = basename(sourcePrimaryPath);
-  const destinationName = basename(destinationPrimaryPath);
-  const before = fingerprintDbFamily(sourcePrimaryPath);
-  if (!before.files.some((file) => file.path === sourceName)) {
-    throw new Error(
-      "Database family primary file is missing: " + sourcePrimaryPath,
-    );
-  }
+  copyLadybugFamilyVerified(sourcePrimaryPath, destinationPrimaryPath);
+  return fingerprintDbFamily(destinationPrimaryPath);
+}
 
-  assertDbFamilyAbsent(destinationPrimaryPath);
-  fs.mkdirSync(dirname(destinationPrimaryPath), { recursive: true });
-
-  for (const sourcePath of collectDbFamilyFiles(sourcePrimaryPath)) {
-    const sourceFileName = basename(sourcePath);
-    const destinationPath = join(
-      dirname(destinationPrimaryPath),
-      destinationName + sourceFileName.slice(sourceName.length),
-    );
-    fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
-  }
-
-  const after = fingerprintDbFamily(sourcePrimaryPath);
-  assertFingerprintsEqual(after, before, "Database family changed during copy");
-
-  const copied = fingerprintDbFamily(destinationPrimaryPath);
-  const expectedFiles = mapDbFamilyFingerprint(
-    before,
-    sourceName,
-    destinationName,
+export function copyDbFamilyForValidatedClone(
+  sourcePrimaryPath: string,
+  destinationPrimaryPath: string,
+): VerifiedLadybugFamilyCopy {
+  return copyLadybugFamilyForValidatedClone(
+    sourcePrimaryPath,
+    destinationPrimaryPath,
   );
-  if (JSON.stringify(copied.files) !== JSON.stringify(expectedFiles)) {
-    throw new Error("Copied database family fingerprint mismatch");
-  }
-  return copied;
 }
 
 export interface VerifiedDbFamilyCacheMarker<TValidation = unknown> {
@@ -177,7 +120,7 @@ interface PublishVerifiedDbFamilyCacheOptions<TValidation> {
   readyMarkerPath: string;
   validateCopiedFamily: (
     copiedPrimaryPath: string,
-    verifiedCopyFingerprint: DbFamilyFingerprint,
+    verifiedCopyFingerprint: VerifiedLadybugFamilyCopy,
   ) => Promise<TValidation> | TValidation;
 }
 
@@ -195,7 +138,7 @@ export async function publishVerifiedDbFamilyCache<TValidation>(
   }
 
   const sourceBefore = fingerprintDbFamily(options.sourcePrimaryPath);
-  const verifiedCopyFingerprint = copyDbFamilyVerified(
+  const verifiedCopyFingerprint = copyDbFamilyForValidatedClone(
     options.sourcePrimaryPath,
     options.destinationPrimaryPath,
   );
@@ -243,7 +186,7 @@ interface RestoreVerifiedDbFamilyCacheOptions<TValidation> {
   workingPrimaryPath: string;
   validateCopiedFamily: (
     copiedPrimaryPath: string,
-    verifiedCopyFingerprint: DbFamilyFingerprint,
+    verifiedCopyFingerprint: VerifiedLadybugFamilyCopy,
   ) => Promise<TValidation> | TValidation;
 }
 
@@ -286,7 +229,7 @@ export async function restoreVerifiedDbFamilyCache<TValidation>(
     "Cached database family does not match its ready marker",
   );
 
-  const verifiedCopyFingerprint = copyDbFamilyVerified(
+  const verifiedCopyFingerprint = copyDbFamilyForValidatedClone(
     options.cachedPrimaryPath,
     options.workingPrimaryPath,
   );

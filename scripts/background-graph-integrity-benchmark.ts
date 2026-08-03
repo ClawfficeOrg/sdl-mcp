@@ -24,11 +24,8 @@ import {
   initValidatedLadybugClone,
   withWriteConn,
 } from "../dist/db/ladybug.js";
-import { bindVerifiedLadybugClone } from "../dist/db/ladybug-lineage.js";
-import {
-  copyDbFamilyVerified,
-  type DbFamilyFingerprint,
-} from "../dist/benchmark/external-runner.js";
+import { copyDbFamilyForValidatedClone } from "../dist/benchmark/external-runner.js";
+import type { VerifiedLadybugFamilyCopy } from "../dist/db/ladybug-family-files.js";
 import {
   getDerivedState,
   markGraphIntegrityVerifiedIfVerifying,
@@ -1459,7 +1456,7 @@ async function seedBaseDatabase(
   ) {
     throw new Error("Fixture index did not publish verified revision zero");
   }
-  await closeLadybugDb();
+  await closeLadybugDb({ strict: true });
   if (!existsSync(dbPath)) {
     throw new Error(`Fixture database was not created under ${workRoot}`);
   }
@@ -1484,11 +1481,10 @@ function hashPath(root: string): string {
 
 async function openDatabase(
   path: string,
-  verifiedCopyFingerprint: DbFamilyFingerprint,
+  capability: VerifiedLadybugFamilyCopy,
 ): Promise<void> {
   process.env.SDL_GRAPH_DB_PATH = path;
-  const authority = bindVerifiedLadybugClone(path, verifiedCopyFingerprint);
-  await initValidatedLadybugClone(path, authority);
+  await initValidatedLadybugClone(path, capability);
 }
 
 function parseOutPath(argv: readonly string[]): string {
@@ -1666,8 +1662,8 @@ async function runBenchmarkWorker(workRoot: string): Promise<BenchmarkArtifact> 
       fixture,
       repoId,
     );
-    const candidateFingerprint = copyDbFamilyVerified(baseDb, candidateDb);
-    const controlFingerprint = copyDbFamilyVerified(baseDb, controlDb);
+    const candidateFingerprint = copyDbFamilyForValidatedClone(baseDb, candidateDb);
+    const controlFingerprint = copyDbFamilyForValidatedClone(baseDb, controlDb);
     const candidateStartHash = hashPath(candidateDb);
     const controlStartHash = hashPath(controlDb);
     if (candidateStartHash !== controlStartHash) {
@@ -1686,11 +1682,11 @@ async function runBenchmarkWorker(workRoot: string): Promise<BenchmarkArtifact> 
       fixture.concurrentEdits,
       reporter,
     );
-    await closeLadybugDb();
+    await closeLadybugDb({ strict: true });
 
     await openDatabase(controlDb, controlFingerprint);
     const control = await runControlLane(repoId, lanes.control.edits, reporter);
-    await closeLadybugDb();
+    await closeLadybugDb({ strict: true });
 
     return buildBenchmarkArtifact({
       ...metadata,

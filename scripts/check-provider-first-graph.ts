@@ -168,11 +168,11 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   mkdirSync(args.outDir, { recursive: true });
 
-  // Even this read-only checker must prove the exact closed DB family before
-  // native open and hold the cooperative family lease through strict close.
-  await getLadybugDb(args.db);
-  const conn = await getLadybugConn();
+  // Own cleanup before initialization so partial native/schema opens also take
+  // the strict close path and cannot strand a cooperative family lease.
   try {
+    await getLadybugDb(args.db);
+    const conn = await getLadybugConn();
     const files = await queryAll<FileRow>(
       conn,
       `MATCH (f:File)-[:FILE_IN_REPO]->(r:Repo)

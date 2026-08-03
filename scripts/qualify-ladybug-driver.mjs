@@ -5,14 +5,10 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   closeSync,
-  constants,
   existsSync,
-  fstatSync,
   fsyncSync,
-  lstatSync,
   openSync,
   readFileSync,
-  readSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -24,10 +20,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  collectDbFamilyFiles,
-  copyDbFamilyVerified,
-  fingerprintDbFamily,
-} from "../dist/benchmark/external-runner.js";
+  collectLadybugFamilyFiles,
+  copyLadybugFamilyVerified,
+  fingerprintLadybugFamily,
+  inventoryLadybugFamilyIdentities,
+  readBoundedLadybugControlFile,
+} from "../dist/db/ladybug-family-files.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { resolveGraphDbPath } from "../dist/db/graph-db-path.js";
 import {
@@ -139,9 +137,9 @@ function canonicalizePath(value) {
   const canonicalPath = existsSync(absolutePath)
     ? realpathSync.native(absolutePath)
     : absolutePath;
-  return process.platform === "win32"
-    ? canonicalPath.toLowerCase()
-    : canonicalPath;
+  return normalizePath(
+    process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath,
+  );
 }
 
 function packageJsonFor(modulePath) {
@@ -167,69 +165,23 @@ function sameFilesystemIdentity(left, right) {
 
 function collectExistingFamily(primaryPath) {
   return existsSync(dirname(resolve(primaryPath)))
-    ? collectDbFamilyFiles(primaryPath)
+    ? collectLadybugFamilyFiles(primaryPath)
     : [];
 }
 
 function fileSha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  return createHash("sha256")
+    .update(readBoundedLadybugControlFile(path, "qualification config"))
+    .digest("hex");
 }
 
 function readBoundedQualificationAuthority(path) {
-  const pathStat = lstatSync(path, { bigint: true });
-  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
-    invalidQualificationAuthority("marker must be a regular non-symlink file");
-  }
-  const descriptor = openSync(
-    path,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
   try {
-    const openedStat = fstatSync(descriptor, { bigint: true });
-    if (
-      !openedStat.isFile() ||
-      openedStat.dev !== pathStat.dev ||
-      openedStat.ino !== pathStat.ino
-    ) {
-      invalidQualificationAuthority("marker changed while being opened");
-    }
-    if (openedStat.size > BigInt(MAX_QUALIFICATION_AUTHORITY_BYTES)) {
-      invalidQualificationAuthority(
-        "marker exceeds " + MAX_QUALIFICATION_AUTHORITY_BYTES + " bytes",
-      );
-    }
-    const bytes = Buffer.allocUnsafe(MAX_QUALIFICATION_AUTHORITY_BYTES + 1);
-    let total = 0;
-    while (total < bytes.length) {
-      const count = readSync(
-        descriptor,
-        bytes,
-        total,
-        bytes.length - total,
-        null,
-      );
-      if (count === 0) break;
-      total += count;
-    }
-    if (total > MAX_QUALIFICATION_AUTHORITY_BYTES) {
-      invalidQualificationAuthority(
-        "marker exceeds " + MAX_QUALIFICATION_AUTHORITY_BYTES + " bytes",
-      );
-    }
-    const finalStat = fstatSync(descriptor, { bigint: true });
-    const finalPathStat = lstatSync(path, { bigint: true });
-    if (
-      finalStat.dev !== openedStat.dev ||
-      finalStat.ino !== openedStat.ino ||
-      finalStat.size !== openedStat.size ||
-      finalPathStat.dev !== openedStat.dev ||
-      finalPathStat.ino !== openedStat.ino
-    ) {
-      invalidQualificationAuthority("marker changed while being read");
-    }
-    return bytes.subarray(0, total);
-  } finally {
-    closeSync(descriptor);
+    return readBoundedLadybugControlFile(path, "qualification authority");
+  } catch (error) {
+    invalidQualificationAuthority(
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 
@@ -253,20 +205,32 @@ function writeVerifiedQualificationConfigCopy(configPath, bytes) {
 }
 
 function databaseFamilyAuthority(role, primaryPath) {
+  const primary = canonicalizePath(primaryPath);
+  const identities = inventoryLadybugFamilyIdentities(primaryPath);
+  if (role === "active") {
+    const primaryIdentity = identities.find((member) => member.path === primary);
+    if (!primaryIdentity) {
+      throw new Error("Active database family primary file is missing: " + primaryPath);
+    }
+    return {
+      role,
+      primaryPath: primary,
+      members: [{
+        path: primaryIdentity.path,
+        device: primaryIdentity.dev,
+        inode: primaryIdentity.ino,
+      }],
+    };
+  }
   return {
     role,
-    primaryPath: canonicalizePath(primaryPath),
-    members: collectExistingFamily(primaryPath)
-      .map((path) => {
-        const stat = statSync(path, { bigint: true });
-        return {
-          path: canonicalizePath(path),
-          device: stat.dev.toString(),
-          inode: stat.ino.toString(),
-        };
-      })
-      .sort((left, right) => left.path.localeCompare(right.path)),
-    fingerprint: fingerprintDbFamily(primaryPath),
+    primaryPath: primary,
+    members: identities.map(({ path, dev, ino }) => ({
+      path,
+      device: dev,
+      inode: ino,
+    })),
+    fingerprint: fingerprintLadybugFamily(primaryPath),
   };
 }
 
@@ -333,11 +297,6 @@ export function consumeQualificationChildAuthority(
       "clone and marker must be contained in the parent qualification root",
     );
   }
-  const markerStat = lstatSync(authorityPath);
-  if (!markerStat.isFile() || markerStat.isSymbolicLink()) {
-    invalidQualificationAuthority("marker must be a regular file");
-  }
-
   let authority;
   try {
     authority = JSON.parse(
@@ -372,7 +331,10 @@ export function consumeQualificationChildAuthority(
   ) {
     invalidQualificationAuthority("phase or canonical paths do not match");
   }
-  const verifiedConfigBytes = readFileSync(options.configPath);
+  const verifiedConfigBytes = readBoundedLadybugControlFile(
+    options.configPath,
+    "qualification config",
+  );
   if (
     authority.configSha256 !==
     createHash("sha256").update(verifiedConfigBytes).digest("hex")
@@ -404,18 +366,24 @@ export function consumeQualificationChildAuthority(
   for (const family of authority.forbiddenFamilies) {
     if (
       typeof family.primaryPath !== "string" ||
-      !Array.isArray(family.members) ||
-      JSON.stringify(databaseFamilyAuthority(family.role, family.primaryPath)) !==
-        JSON.stringify(family)
+      !Array.isArray(family.members)
     ) {
+      invalidQualificationAuthority("forbidden database family is malformed");
+    }
+    const current =
+      family.role === "active"
+        ? databaseFamilyAuthority("active", family.primaryPath)
+        : databaseFamilyAuthority("source", family.primaryPath);
+    if (JSON.stringify(current) !== JSON.stringify(family)) {
       invalidQualificationAuthority(
-        "forbidden database family identity changed",
+        "forbidden database family path or identity changed",
       );
     }
-    forbiddenPaths.add(family.primaryPath);
-    for (const member of family.members) {
+    forbiddenPaths.add(current.primaryPath);
+    const currentMembers = inventoryLadybugFamilyIdentities(family.primaryPath);
+    for (const member of currentMembers) {
       forbiddenPaths.add(member.path);
-      forbiddenIdentities.add(`${member.device}:${member.inode}`);
+      forbiddenIdentities.add(member.dev + ":" + member.ino);
     }
   }
   const cloneFamily = databaseFamilyAuthority("clone", options.clonePath);
@@ -839,17 +807,17 @@ export async function qualifyLadybugDriver(options) {
   const activePaths = resolveActiveDatabasePaths(config, configPath);
   assertOfflineSourceDistinct(sourcePath, activePaths);
 
-  const sourceBefore = fingerprintDbFamily(sourcePath);
+  const sourceBefore = fingerprintLadybugFamily(sourcePath);
   const cloneRootPath = await mkdtemp(
     join(tmpdir(), "sdl-ladybug-qualification-"),
   );
   const clonePath = join(cloneRootPath, "candidate.lbug");
 
   try {
-    copyDbFamilyVerified(sourcePath, clonePath);
+    copyLadybugFamilyVerified(sourcePath, clonePath);
     assertFingerprintEqual(
       sourceBefore,
-      fingerprintDbFamily(sourcePath),
+      fingerprintLadybugFamily(sourcePath),
       "Offline source changed while copying the database family",
     );
     assertOfflineSourceDistinct(clonePath, [sourcePath, ...activePaths]);
@@ -868,7 +836,7 @@ export async function qualifyLadybugDriver(options) {
       });
       assertFingerprintEqual(
         sourceBefore,
-        fingerprintDbFamily(sourcePath),
+        fingerprintLadybugFamily(sourcePath),
         `Offline source changed during qualification phase ${phase.phase}`,
       );
       assertPhaseReceipt(result, phase);
@@ -900,7 +868,7 @@ export async function qualifyLadybugDriver(options) {
       throw new Error("Qualification phase digest lifecycle is inconsistent");
     }
 
-    const sourceAfter = fingerprintDbFamily(sourcePath);
+    const sourceAfter = fingerprintLadybugFamily(sourcePath);
     assertFingerprintEqual(
       sourceBefore,
       sourceAfter,
@@ -923,7 +891,7 @@ export async function qualifyLadybugDriver(options) {
     try {
       assertFingerprintEqual(
         sourceBefore,
-        fingerprintDbFamily(sourcePath),
+        fingerprintLadybugFamily(sourcePath),
         "Offline source changed during failed Ladybug qualification",
       );
     } catch (fingerprintError) {
@@ -2152,17 +2120,20 @@ async function runChildMode(options) {
   }
 }
 
-function formatQualificationFailure(error) {
-  const primary = error instanceof Error ? error.message : String(error);
-  if (!(error instanceof AggregateError)) return primary;
-  const components = error.errors.map(
-    (component, index) =>
-      "[component " +
-      (index + 1) +
-      "] " +
-      (component instanceof Error ? component.message : String(component)),
-  );
-  return [primary, ...components].join("\n");
+export function formatQualificationFailure(error) {
+  const lines = [];
+  const visit = (component, path) => {
+    const message =
+      component instanceof Error ? component.message : String(component);
+    lines.push(path ? "[component " + path + "] " + message : message);
+    if (component instanceof AggregateError) {
+      component.errors.forEach((nested, index) =>
+        visit(nested, path ? path + "." + (index + 1) : String(index + 1)),
+      );
+    }
+  };
+  visit(error, "");
+  return lines.join("\n");
 }
 
 function parseArgs(argv) {

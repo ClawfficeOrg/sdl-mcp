@@ -30,9 +30,8 @@ import {
   verifySafeRebuildFamilyBeforeReopen,
   type LadybugFamilyLease,
   type LadybugLineageDriver,
-  type QualificationLadybugCloneAuthority,
-  type ValidatedLadybugCloneAuthority,
 } from "./ladybug-lineage.js";
+import type { VerifiedLadybugFamilyCopy } from "./ladybug-family-files.js";
 import {
   isWindowsFtsRuntimeUnavailable,
   withWindowsFtsRuntime,
@@ -173,8 +172,11 @@ const require = createRequire(import.meta.url);
 
 let ladybugModule: LadybugModule | null = null;
 let dbInstance: LadybugDatabase | null = null;
+let poisonedOpeningDb: LadybugDatabase | null = null;
 let currentDbPath: string | null = null;
 let activeFamilyLease: LadybugFamilyLease | null = null;
+let familyOwnershipPoisoned = false;
+let familyCloseMustAbandon = false;
 
 const SAFE_REBUILD_SESSION = Symbol("SafeRebuildLadybugSession");
 
@@ -478,6 +480,12 @@ async function getLadybugDbInternal(
     );
   }
 
+  if (familyOwnershipPoisoned) {
+    throw new DatabaseError(
+      "LadybugDB native ownership cleanup is pending; retry closeLadybugDb() before opening another family",
+    );
+  }
+
   if (dbInstance && currentDbPath === resolvedPath) {
     return dbInstance;
   }
@@ -562,10 +570,18 @@ async function getLadybugDbInternal(
       });
       return openingDb;
     } catch (err) {
+      const failures: unknown[] = [err];
+      let nativeCloseFailed = false;
       if (openingDb) {
         try {
           await openingDb.close();
         } catch (closeErr) {
+          failures.push(closeErr);
+          nativeCloseFailed = true;
+          poisonedOpeningDb = openingDb;
+          familyOwnershipPoisoned = true;
+          familyCloseMustAbandon = true;
+          currentDbPath = normalizedPath;
           logger.warn("Error closing LadybugDB after initialization failure", {
             error:
               closeErr instanceof Error ? closeErr.message : String(closeErr),
@@ -574,12 +590,15 @@ async function getLadybugDbInternal(
       }
       if (dbInstance === openingDb) {
         dbInstance = null;
-        currentDbPath = null;
       }
-      if (activeFamilyLease === openingLease) {
+      if (!nativeCloseFailed && activeFamilyLease === openingLease) {
         try {
           abandonLadybugFamily(openingLease);
         } catch (leaseError) {
+          failures.push(leaseError);
+          familyOwnershipPoisoned = true;
+          familyCloseMustAbandon = true;
+          currentDbPath = normalizedPath;
           logger.warn("Error releasing LadybugDB family lease after open failure", {
             error:
               leaseError instanceof Error
@@ -587,9 +606,10 @@ async function getLadybugDbInternal(
                 : String(leaseError),
           });
         }
-        activeFamilyLease = null;
+        if (openingLease.released) activeFamilyLease = null;
       }
-      const msg = err instanceof Error ? err.message : String(err);
+      if (!familyOwnershipPoisoned) currentDbPath = null;
+      const msg = flattenErrorMessages(failures).join("; ");
       throw new DatabaseError(formatReindexGuidanceError(normalizedPath, msg));
     }
   };
@@ -1533,21 +1553,21 @@ export function reopenSafeRebuildLadybugDb(
 
 export function initQualificationLadybugClone(
   dbPath: string,
-  authority: QualificationLadybugCloneAuthority,
+  rawAuthority: unknown,
   options?: LadybugDbInitOptions,
 ): Promise<void> {
   return initLadybugDbInternal(dbPath, options, (path, driver) =>
-    acquireQualificationLadybugCloneFamily(path, authority, driver),
+    acquireQualificationLadybugCloneFamily(path, rawAuthority, driver),
   );
 }
 
 export function initValidatedLadybugClone(
   dbPath: string,
-  authority: ValidatedLadybugCloneAuthority,
+  capability: VerifiedLadybugFamilyCopy,
   options?: LadybugDbInitOptions,
 ): Promise<void> {
   return initLadybugDbInternal(dbPath, options, (path, driver) =>
-    acquireValidatedLadybugCloneFamily(path, authority, driver),
+    acquireValidatedLadybugCloneFamily(path, capability, driver),
   );
 }
 
@@ -1840,8 +1860,9 @@ export function closeLadybugDb(
 
 function abandonActiveFamilyLease(): void {
   const lease = activeFamilyLease;
-  activeFamilyLease = null;
-  if (lease) abandonLadybugFamily(lease);
+  if (!lease) return;
+  abandonLadybugFamily(lease);
+  if (lease.released) activeFamilyLease = null;
 }
 
 export async function closeSafeRebuildBeforeReopen(
@@ -1855,10 +1876,12 @@ export async function closeSafeRebuildBeforeReopen(
     );
     sealSafeRebuildFamilyForReopen(lease);
   } catch (error) {
-    try {
-      abandonActiveFamilyLease();
-    } catch {
-      // Preserve the strict-close or closed-family sealing failure.
+    if (!familyOwnershipPoisoned) {
+      try {
+        abandonActiveFamilyLease();
+      } catch {
+        // Preserve the strict-close or closed-family sealing failure.
+      }
     }
     throw error;
   }
@@ -1874,7 +1897,7 @@ export async function closeAndPublishSafeRebuildLadybugDb(
     finalizeSafeRebuildLadybugFamily(lease, beforePublication);
     activeFamilyLease = null;
   } catch (error) {
-    if (activeFamilyLease === lease) {
+    if (activeFamilyLease === lease && !familyOwnershipPoisoned) {
       try {
         abandonActiveFamilyLease();
       } catch {
@@ -1885,8 +1908,23 @@ export async function closeAndPublishSafeRebuildLadybugDb(
   }
 }
 
+function flattenErrorMessages(errors: readonly unknown[]): string[] {
+  const messages: string[] = [];
+  const visit = (error: unknown): void => {
+    if (error instanceof AggregateError) {
+      for (const nested of error.errors) visit(nested);
+      if (error.message) messages.push(error.message);
+      return;
+    }
+    messages.push(error instanceof Error ? error.message : String(error));
+  };
+  for (const error of errors) visit(error);
+  return messages;
+}
+
 async function closeLadybugDbImpl(): Promise<void> {
   const closeFailures: unknown[] = [];
+  const nativeCloseFailures: unknown[] = [];
   await Promise.allSettled([...activeExclusiveReadLeases]);
   closeFailures.push(...exclusiveReadCloseFailures);
   exclusiveReadCloseFailures.length = 0;
@@ -1989,12 +2027,15 @@ async function closeLadybugDbImpl(): Promise<void> {
   readPoolIndex = 0;
   recyclingSlots.clear();
 
-  // Close captured read connections
+  // Retain every failed native handle so a later close can retry ownership
+  // cleanup without allowing another family to acquire this process.
   for (const conn of poolSnapshot) {
     try {
       await conn.close();
     } catch (err) {
       closeFailures.push(err);
+      nativeCloseFailures.push(err);
+      readPool.push(conn);
       logger.warn("Error closing LadybugDB read connection", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -2038,25 +2079,54 @@ async function closeLadybugDbImpl(): Promise<void> {
     }
     try {
       await writeConn.close();
+      writeConn = null;
     } catch (err) {
       closeFailures.push(err);
+      nativeCloseFailures.push(err);
       logger.warn("Error closing LadybugDB write connection", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    writeConn = null;
   }
 
   if (dbInstance) {
     try {
       await dbInstance.close();
+      dbInstance = null;
     } catch (err) {
       closeFailures.push(err);
+      nativeCloseFailures.push(err);
       logger.warn("Error closing LadybugDB database", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    dbInstance = null;
+  }
+  if (poisonedOpeningDb) {
+    try {
+      await poisonedOpeningDb.close();
+      poisonedOpeningDb = null;
+    } catch (err) {
+      closeFailures.push(err);
+      nativeCloseFailures.push(err);
+      logger.warn("Error retrying failed LadybugDB initialization close", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (nativeCloseFailures.length > 0) {
+    familyOwnershipPoisoned = true;
+    familyCloseMustAbandon = true;
+    logger.warn("LadybugDB native ownership retained for close retry", {
+      errors: flattenErrorMessages(nativeCloseFailures),
+    });
+    if (strictCloseForCurrentClose) {
+      throw new AggregateError(
+        closeFailures,
+        "LadybugDB strict close failed; native ownership retained",
+      );
+    }
+    return;
   }
 
   currentDbPath = null;
@@ -2081,13 +2151,17 @@ async function closeLadybugDbImpl(): Promise<void> {
 
   if (!preserveFamilyLeaseForCurrentClose && activeFamilyLease) {
     const lease = activeFamilyLease;
-    activeFamilyLease = null;
     try {
-      if (closeFailures.length === 0 && lease.mode === "normal") {
+      if (
+        !familyCloseMustAbandon &&
+        closeFailures.length === 0 &&
+        lease.mode === "normal"
+      ) {
         // Only a fully successful checkpoint/close may refresh the active
         // closed-family receipt. Any earlier failure leaves it stale.
         finalizeNormalLadybugFamilyClose(lease);
       } else if (
+        !familyCloseMustAbandon &&
         closeFailures.length === 0 &&
         lease.mode === "validated-clone"
       ) {
@@ -2101,6 +2175,18 @@ async function closeLadybugDbImpl(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    if (lease.released) {
+      activeFamilyLease = null;
+      familyOwnershipPoisoned = false;
+      familyCloseMustAbandon = false;
+    } else {
+      familyOwnershipPoisoned = true;
+      familyCloseMustAbandon = true;
+      currentDbPath = lease.dbPath;
+    }
+  } else if (!activeFamilyLease) {
+    familyOwnershipPoisoned = false;
+    familyCloseMustAbandon = false;
   }
 
   logger.debug("LadybugDB closed");

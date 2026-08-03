@@ -7,9 +7,6 @@ import {
   fsyncSync,
   lstatSync,
   openSync,
-  readSync,
-  readdirSync,
-  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -20,14 +17,25 @@ import { DatabaseError } from "../domain/errors.js";
 import { isProcessAlive } from "../util/pidfile.js";
 import { normalizePath } from "../util/paths.js";
 import { normalizeGraphDbPath } from "./graph-db-path.js";
+import {
+  canonicalLadybugPath,
+  collectLadybugFamilyFiles,
+  consumeVerifiedLadybugFamilyCopy,
+  fingerprintLadybugFamily,
+  inventoryLadybugFamilyIdentities,
+  ladybugFamilyFingerprintsEqual,
+  ladybugFileIdentity,
+  readBoundedLadybugControlFile,
+  type LadybugFamilyFingerprint,
+  type LadybugFileIdentity,
+  type VerifiedLadybugFamilyCopy,
+} from "./ladybug-family-files.js";
 
 const RECEIPT_KIND = "sdl-mcp-ladybug-ready";
 const RECEIPT_VERSION = 2;
 const MARKER_SUFFIX = ".sdl-lineage.json";
 const LOCK_SUFFIX = ".sdl-family.lock";
-const MAX_CONTROL_BYTES = 16 * 1024;
 const MAX_FAMILY_MEMBERS = 32;
-const HASH_BUFFER_BYTES = 64 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const LEASE = Symbol("LadybugFamilyLease");
 
@@ -36,21 +44,12 @@ export interface LadybugLineageDriver {
   storageVersion: string;
 }
 
-export interface LadybugFamilyFileFingerprint {
-  path: string;
-  size?: number;
-  sha256: string;
-}
+export type {
+  LadybugFamilyFileFingerprint,
+  LadybugFamilyFingerprint,
+} from "./ladybug-family-files.js";
 
-export interface LadybugFamilyFingerprint {
-  files: LadybugFamilyFileFingerprint[];
-  sha256: string;
-}
-
-interface FileIdentity {
-  dev: string;
-  ino: string;
-}
+type FileIdentity = LadybugFileIdentity;
 
 interface FamilySnapshot {
   canonicalDbPath: string;
@@ -68,7 +67,7 @@ export interface QualificationFamilyAuthority {
   role: string;
   primaryPath: string;
   members: FamilyMemberAuthority[];
-  fingerprint: LadybugFamilyFingerprint;
+  fingerprint?: LadybugFamilyFingerprint;
 }
 
 export interface QualificationLadybugCloneAuthority {
@@ -77,13 +76,6 @@ export interface QualificationLadybugCloneAuthority {
   clonePath: string;
   cloneFamily: QualificationFamilyAuthority;
   forbiddenFamilies: QualificationFamilyAuthority[];
-}
-
-export interface ValidatedLadybugCloneAuthority {
-  authorityKind: "validated-ladybug-clone";
-  canonicalDbPath: string;
-  primaryFile: FileIdentity;
-  family: LadybugFamilyFingerprint;
 }
 
 export interface LadybugFamilyLease {
@@ -104,24 +96,19 @@ function dbPath(path: string): string {
 }
 
 function canonical(path: string): string {
-  return normalizePath(realpathSync.native(path));
+  return canonicalLadybugPath(path);
 }
 
 function qualificationCanonical(path: string): string {
-  const value = realpathSync.native(path);
-  return process.platform === "win32" ? value.toLowerCase() : value;
+  return canonicalLadybugPath(path);
+}
+
+function pathIdentity(path: string): FileIdentity {
+  return ladybugFileIdentity(path);
 }
 
 function identity(stat: { dev: bigint | number; ino: bigint | number }): FileIdentity {
   return { dev: stat.dev.toString(), ino: stat.ino.toString() };
-}
-
-function pathIdentity(path: string): FileIdentity {
-  const stat = lstatSync(path, { bigint: true });
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw lineageError(path, "database family member is not a regular file");
-  }
-  return identity(stat);
 }
 
 function same(left: unknown, right: unknown): boolean {
@@ -140,117 +127,11 @@ function lineageError(path: string, reason: string): DatabaseError {
 }
 
 function familyNames(path: string): string[] {
-  const normalized = dbPath(path);
-  const directory = dirname(normalized);
-  const primary = basename(normalized);
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory)
-    .filter((name) => name === primary || name.startsWith(primary + "."))
-    .sort((left, right) => left.localeCompare(right, "en"));
-}
-
-function withStableRegularFile<T>(
-  path: string,
-  label: string,
-  body: (
-    descriptor: number,
-    opened: ReturnType<typeof fstatSync>,
-  ) => T,
-): T {
-  const before = lstatSync(path, { bigint: true });
-  if (!before.isFile() || before.isSymbolicLink()) {
-    throw new Error(label + " must be a regular non-symlink file");
-  }
-  const descriptor = openSync(
-    path,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
-  try {
-    const opened = fstatSync(descriptor, { bigint: true });
-    if (
-      !opened.isFile() ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino
-    ) {
-      throw new Error(label + " changed while being opened");
-    }
-    const result = body(descriptor, opened);
-    const afterOpen = fstatSync(descriptor, { bigint: true });
-    const afterPath = lstatSync(path, { bigint: true });
-    if (
-      afterOpen.dev !== opened.dev ||
-      afterOpen.ino !== opened.ino ||
-      afterOpen.size !== opened.size ||
-      afterPath.dev !== opened.dev ||
-      afterPath.ino !== opened.ino
-    ) {
-      throw new Error(label + " changed while being read");
-    }
-    return result;
-  } finally {
-    closeSync(descriptor);
-  }
+  return collectLadybugFamilyFiles(path).map((member) => basename(member));
 }
 
 function readBounded(path: string, label: string): Buffer {
-  return withStableRegularFile(path, label, (descriptor, stat) => {
-    if (stat.size > BigInt(MAX_CONTROL_BYTES)) {
-      throw new Error(label + " exceeds " + MAX_CONTROL_BYTES + " bytes");
-    }
-    const buffer = Buffer.allocUnsafe(MAX_CONTROL_BYTES + 1);
-    let total = 0;
-    while (total < buffer.length) {
-      const count = readSync(
-        descriptor,
-        buffer,
-        total,
-        buffer.length - total,
-        null,
-      );
-      if (count === 0) break;
-      total += count;
-    }
-    if (total > MAX_CONTROL_BYTES) {
-      throw new Error(label + " exceeds " + MAX_CONTROL_BYTES + " bytes");
-    }
-    return buffer.subarray(0, total);
-  });
-}
-
-function hashFile(path: string): LadybugFamilyFileFingerprint {
-  return withStableRegularFile(path, "database family member", (descriptor, stat) => {
-    if (stat.size > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error("database family member is too large to inventory");
-    }
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(HASH_BUFFER_BYTES);
-    let size = 0;
-    for (;;) {
-      const count = readSync(descriptor, buffer, 0, buffer.length, null);
-      if (count === 0) break;
-      hash.update(buffer.subarray(0, count));
-      size += count;
-    }
-    if (size !== Number(stat.size)) {
-      throw new Error("database family member changed while hashing");
-    }
-    return { path: basename(path), size, sha256: hash.digest("hex") };
-  });
-}
-
-function fingerprint(paths: readonly string[]): LadybugFamilyFingerprint {
-  if (paths.length > MAX_FAMILY_MEMBERS) {
-    throw new Error(
-      "database family exceeds " + MAX_FAMILY_MEMBERS + " members",
-    );
-  }
-  const files = paths.map(hashFile);
-  return {
-    files,
-    sha256: createHash("sha256")
-      .update(JSON.stringify(files), "utf8")
-      .digest("hex"),
-  };
+  return readBoundedLadybugControlFile(path, label);
 }
 
 function closedSnapshot(path: string): FamilySnapshot {
@@ -277,22 +158,10 @@ function closedSnapshot(path: string): FamilySnapshot {
   return {
     canonicalDbPath: canonical(normalized),
     primaryFile: pathIdentity(normalized),
-    family: fingerprint(
-      names
-        .filter((name) => allowed.has(name))
-        .map((name) => join(dirname(normalized), name)),
-    ),
+    family: fingerprintLadybugFamily(normalized, {
+      exclude: [...metadata],
+    }),
   };
-}
-
-function broadFingerprint(path: string): LadybugFamilyFingerprint {
-  const normalized = dbPath(path);
-  const lockName = basename(normalized) + LOCK_SUFFIX;
-  return fingerprint(
-    familyNames(normalized)
-      .filter((name) => name !== lockName)
-      .map((name) => join(dirname(normalized), name)),
-  );
 }
 
 function validateFingerprint(
@@ -309,36 +178,15 @@ function validateFingerprint(
       (file) =>
         !file ||
         basename(file.path) !== file.path ||
-        !SHA256.test(file.sha256) ||
-        (file.size !== undefined &&
-          (!Number.isSafeInteger(file.size) || file.size < 0)),
-    )
+        !Number.isSafeInteger(file.size) ||
+        file.size < 0 ||
+        !SHA256.test(file.sha256),
+    ) ||
+    createHash("sha256")
+      .update(JSON.stringify(value.files), "utf8")
+      .digest("hex") !== value.sha256
   ) {
     throw lineageError(path, "verified copy fingerprint is invalid");
-  }
-}
-
-function fingerprintMatches(
-  actual: LadybugFamilyFingerprint,
-  expected: LadybugFamilyFingerprint,
-): boolean {
-  return (
-    actual.files.length === expected.files.length &&
-    expected.files.every((file, index) => {
-      const candidate = actual.files[index];
-      return (
-        candidate?.path === file.path &&
-        candidate.sha256 === file.sha256 &&
-        (file.size === undefined || candidate.size === file.size)
-      );
-    })
-  );
-}
-
-function verifyCopy(path: string, expected: LadybugFamilyFingerprint): void {
-  validateFingerprint(path, expected);
-  if (!fingerprintMatches(broadFingerprint(path), expected)) {
-    throw lineageError(path, "verified copy fingerprint mismatch");
   }
 }
 
@@ -624,47 +472,129 @@ function assertUnchanged(
   throw lineageError(path, reason);
 }
 
+const QUALIFICATION_AUTHORITY = Symbol("QualificationLadybugCloneAuthority");
+
+interface ValidatedQualificationAuthority {
+  readonly [QUALIFICATION_AUTHORITY]: true;
+  readonly value: QualificationLadybugCloneAuthority;
+}
+
 function familyAuthority(
   role: string,
   primaryPath: string,
+  includeFingerprint: boolean,
 ): QualificationFamilyAuthority {
   const normalized = dbPath(primaryPath);
-  const lock = basename(normalized) + LOCK_SUFFIX;
-  const paths = familyNames(normalized)
-    .filter((name) => name !== lock)
-    .map((name) => join(dirname(normalized), name));
+  const lockName = basename(normalized) + LOCK_SUFFIX;
+  const identities = inventoryLadybugFamilyIdentities(normalized, {
+    exclude: [lockName],
+  });
   return {
     role,
     primaryPath: qualificationCanonical(normalized),
-    members: paths.map((path) => {
-      const value = pathIdentity(path);
-      return {
-        path: qualificationCanonical(path),
-        device: value.dev,
-        inode: value.ino,
-      };
-    }),
-    fingerprint: fingerprint(paths),
+    members: identities.map(({ path, dev, ino }) => ({
+      path,
+      device: dev,
+      inode: ino,
+    })),
+    ...(includeFingerprint
+      ? {
+          fingerprint: fingerprintLadybugFamily(normalized, {
+            exclude: [lockName],
+          }),
+        }
+      : {}),
   };
 }
 
-function verifyAuthorityFamily(
+function validateQualificationAuthority(
+  db: string,
+  input: unknown,
+): ValidatedQualificationAuthority {
+  const authority = input as Partial<QualificationLadybugCloneAuthority>;
+  if (
+    !authority ||
+    typeof authority !== "object" ||
+    authority.version !== 1 ||
+    typeof authority.phase !== "string" ||
+    !/^[a-z0-9-]+$/u.test(authority.phase) ||
+    typeof authority.clonePath !== "string" ||
+    !authority.cloneFamily ||
+    typeof authority.cloneFamily !== "object" ||
+    !Array.isArray(authority.forbiddenFamilies)
+  ) {
+    throw lineageError(db, "qualification clone authority is malformed");
+  }
+  const families = [authority.cloneFamily, ...authority.forbiddenFamilies];
+  if (
+    families.some(
+      (family) =>
+        typeof family.role !== "string" ||
+        typeof family.primaryPath !== "string" ||
+        !Array.isArray(family.members),
+    ) ||
+    authority.cloneFamily.role !== "clone" ||
+    authority.forbiddenFamilies.filter((family) => family.role === "source")
+      .length !== 1 ||
+    authority.forbiddenFamilies.some(
+      (family) => family.role !== "source" && family.role !== "active",
+    )
+  ) {
+    throw lineageError(db, "qualification family roles are invalid");
+  }
+  const paths = families.map((family) => family.primaryPath);
+  if (new Set(paths).size !== paths.length) {
+    throw lineageError(db, "qualification family roles overlap");
+  }
+  return {
+    [QUALIFICATION_AUTHORITY]: true,
+    value: authority as QualificationLadybugCloneAuthority,
+  };
+}
+
+function verifyDigestAuthorityFamily(
   db: string,
   expected: QualificationFamilyAuthority,
-): void {
+): QualificationFamilyAuthority {
+  if (!expected.fingerprint) {
+    throw lineageError(db, "qualification digest-bound family is missing a fingerprint");
+  }
   validateFingerprint(db, expected.fingerprint);
-  const actual = familyAuthority(expected.role, expected.primaryPath);
+  const actual = familyAuthority(expected.role, expected.primaryPath, true);
   if (
-    actual.role !== expected.role ||
     actual.primaryPath !== expected.primaryPath ||
     !same(actual.members, expected.members) ||
-    !fingerprintMatches(actual.fingerprint, expected.fingerprint)
+    !actual.fingerprint ||
+    !ladybugFamilyFingerprintsEqual(actual.fingerprint, expected.fingerprint)
   ) {
     throw lineageError(
       db,
       "qualification authority family identity or digest changed",
     );
   }
+  return actual;
+}
+
+function currentActiveAuthorityMembers(
+  db: string,
+  expected: QualificationFamilyAuthority,
+): FamilyMemberAuthority[] {
+  const canonicalPrimary = qualificationCanonical(expected.primaryPath);
+  if (canonicalPrimary !== expected.primaryPath) {
+    throw lineageError(db, "qualification active family path changed");
+  }
+  const expectedPrimary = expected.members.find(
+    (member) => member.path === expected.primaryPath,
+  );
+  const currentPrimary = pathIdentity(expected.primaryPath);
+  if (
+    !expectedPrimary ||
+    expectedPrimary.device !== currentPrimary.dev ||
+    expectedPrimary.inode !== currentPrimary.ino
+  ) {
+    throw lineageError(db, "qualification active primary identity changed");
+  }
+  return familyAuthority("active", expected.primaryPath, false).members;
 }
 
 function removeCopiedMarker(path: string): void {
@@ -738,36 +668,22 @@ export function reserveSafeRebuildLadybugFamily(
   return guardedAcquire(lease, () => reservePrimary(lease));
 }
 
-export function bindVerifiedLadybugClone(
-  path: string,
-  family: LadybugFamilyFingerprint,
-): ValidatedLadybugCloneAuthority {
-  const normalized = dbPath(path);
-  verifyCopy(normalized, family);
-  return {
-    authorityKind: "validated-ladybug-clone",
-    canonicalDbPath: canonical(normalized),
-    primaryFile: pathIdentity(normalized),
-    family,
-  };
-}
-
 export function acquireValidatedLadybugCloneFamily(
   path: string,
-  authority: ValidatedLadybugCloneAuthority,
+  capability: VerifiedLadybugFamilyCopy,
   driver: LadybugLineageDriver,
 ): LadybugFamilyLease {
   const normalized = dbPath(path);
   const lease = newLease(normalized, driver, "validated-clone");
   return guardedAcquire(lease, () => {
-    if (
-      authority.authorityKind !== "validated-ladybug-clone" ||
-      authority.canonicalDbPath !== canonical(normalized) ||
-      !same(authority.primaryFile, pathIdentity(normalized))
-    ) {
-      throw lineageError(normalized, "validated clone identity mismatch");
+    try {
+      consumeVerifiedLadybugFamilyCopy(capability, normalized);
+    } catch (error) {
+      throw lineageError(
+        normalized,
+        error instanceof Error ? error.message : "validated clone capability failed",
+      );
     }
-    verifyCopy(normalized, authority.family);
     removeCopiedMarker(normalized);
     closedSnapshot(normalized);
   });
@@ -775,22 +691,14 @@ export function acquireValidatedLadybugCloneFamily(
 
 export function acquireQualificationLadybugCloneFamily(
   path: string,
-  authority: QualificationLadybugCloneAuthority,
+  rawAuthority: unknown,
   driver: LadybugLineageDriver,
 ): LadybugFamilyLease {
   const normalized = dbPath(path);
   const lease = newLease(normalized, driver, "qualification");
   return guardedAcquire(lease, () => {
-    if (
-      authority.version !== 1 ||
-      typeof authority.phase !== "string" ||
-      authority.phase.length === 0
-    ) {
-      throw lineageError(
-        normalized,
-        "qualification clone authority version or phase mismatch",
-      );
-    }
+    const capability = validateQualificationAuthority(normalized, rawAuthority);
+    const authority = capability.value;
     const expectedPath = qualificationCanonical(normalized);
     if (
       authority.clonePath !== expectedPath ||
@@ -798,24 +706,49 @@ export function acquireQualificationLadybugCloneFamily(
     ) {
       throw lineageError(normalized, "qualification clone authority path mismatch");
     }
-    verifyCopy(normalized, authority.cloneFamily.fingerprint);
-    verifyAuthorityFamily(normalized, authority.cloneFamily);
-    for (const forbidden of authority.forbiddenFamilies) {
-      verifyAuthorityFamily(normalized, forbidden);
+
+    if (!authority.cloneFamily.fingerprint) {
+      throw lineageError(
+        normalized,
+        "qualification digest-bound family is missing a fingerprint",
+      );
     }
+    validateFingerprint(normalized, authority.cloneFamily.fingerprint);
+    const clone = familyAuthority("clone", authority.cloneFamily.primaryPath, true);
+    const source = authority.forbiddenFamilies.find(
+      (family) => family.role === "source",
+    )!;
+    const sourceCurrent = verifyDigestAuthorityFamily(normalized, source);
+    const activeMembers = authority.forbiddenFamilies
+      .filter((family) => family.role === "active")
+      .flatMap((family) => currentActiveAuthorityMembers(normalized, family));
     const forbiddenIdentities = new Set(
-      authority.forbiddenFamilies.flatMap((family) =>
-        family.members.map((member) => member.device + ":" + member.inode),
+      [...sourceCurrent.members, ...activeMembers].map(
+        (member) => member.device + ":" + member.inode,
       ),
     );
     if (
-      authority.cloneFamily.members.some((member) =>
+      clone.members.some((member) =>
         forbiddenIdentities.has(member.device + ":" + member.inode),
       )
     ) {
       throw lineageError(
         normalized,
         "qualification clone hardlinks a forbidden database family",
+      );
+    }
+    if (
+      clone.primaryPath !== authority.cloneFamily.primaryPath ||
+      !same(clone.members, authority.cloneFamily.members) ||
+      !clone.fingerprint ||
+      !ladybugFamilyFingerprintsEqual(
+        clone.fingerprint,
+        authority.cloneFamily.fingerprint,
+      )
+    ) {
+      throw lineageError(
+        normalized,
+        "qualification authority family identity or digest changed",
       );
     }
     removeCopiedMarker(normalized);

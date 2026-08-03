@@ -57,7 +57,7 @@ describe("HTTP degraded startup", () => {
         // Move the raw fixture through the explicit clone capability and a
         // strict close so the child reaches the incompatible-schema preflight.
         const { closeLadybugDb } = await import("../../dist/db/ladybug.js");
-        await initValidatedTestLadybugClone(dbPath);
+        const validatedDbPath = await initValidatedTestLadybugClone(dbPath);
         await closeLadybugDb({ strict: true });
 
         await writeFile(
@@ -70,7 +70,7 @@ describe("HTTP degraded startup", () => {
                 languages: ["ts"],
               },
             ],
-            graphDatabase: { path: dbPath },
+            graphDatabase: { path: validatedDbPath },
             indexing: { enableFileWatching: true },
             httpAuth: { enabled: false },
             policy: {},
@@ -90,7 +90,7 @@ describe("HTTP degraded startup", () => {
         });
 
         const childEnv = { ...process.env };
-        childEnv.SDL_GRAPH_DB_PATH = dbPath;
+        childEnv.SDL_GRAPH_DB_PATH = validatedDbPath;
         childEnv.SDL_LOG_LEVEL = "error";
         childEnv.SDL_MCP_DISABLE_NATIVE_ADDON = "1";
         delete childEnv.SDL_GRAPH_DB_DIR;

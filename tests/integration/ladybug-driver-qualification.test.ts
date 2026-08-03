@@ -576,12 +576,92 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     );
   });
 
+  it("allows active bytes and WAL changes but rejects a post-consume hardlink alias", async () => {
+    const {
+      buildQualificationChildEnv,
+      consumeQualificationChildAuthority,
+      createQualificationChildAuthority,
+    } = await import("../../scripts/qualify-ladybug-driver.mjs");
+    const { closeLadybugDb, initQualificationLadybugClone } = await import(
+      "../../dist/db/ladybug.js"
+    );
+    const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-active-race-"));
+    const cloneRoot = mkdtempSync(join(tmpdir(), "sdl-ladybug-qualification-"));
+    cleanupRoots.push(root, cloneRoot);
+    const sourcePath = join(root, "source.lbug");
+    const activePath = join(root, "active.lbug");
+    const clonePath = join(cloneRoot, "candidate.lbug");
+    const configPath = join(cloneRoot, "config.json");
+    writeFileSync(sourcePath, "source-bytes");
+    writeFileSync(activePath, "active-before");
+    writeFileSync(clonePath, "clone-bytes");
+    writeFileSync(configPath, JSON.stringify({ repos: [], policy: {} }));
+
+    const marker = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath,
+      configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    const env = buildQualificationChildEnv(
+      process.env,
+      clonePath,
+      configPath,
+      marker,
+    );
+    writeFileSync(activePath, "active-after-authority");
+    writeFileSync(activePath + ".wal", "new-active-wal");
+    const authority = consumeQualificationChildAuthority(
+      { mode: "seed-first-batch", clonePath, configPath },
+      env,
+    );
+
+    rmSync(clonePath);
+    linkSync(activePath, clonePath);
+    try {
+      await assert.rejects(
+        initQualificationLadybugClone(clonePath, authority),
+        /hardlinks a forbidden database family/iu,
+      );
+    } finally {
+      await closeLadybugDb({ strict: true }).catch(() => {});
+    }
+  });
+
   it("does not return a phase when strict close fails and preserves both failures", async () => {
-    const { closeQualificationPhaseStrictly } = await import(
+    const { closeQualificationPhaseStrictly, formatQualificationFailure } = await import(
       "../../scripts/qualify-ladybug-driver.mjs"
     );
     const phaseError = new Error("phase failed");
     const closeError = new Error("close failed");
+
+    const formatted = formatQualificationFailure(
+      new AggregateError(
+        [
+          phaseError,
+          new AggregateError(
+            [
+              new Error("read connection close failed"),
+              new Error("write connection close failed"),
+              new Error("database close failed"),
+            ],
+            "native close components failed",
+          ),
+        ],
+        "qualification failed",
+      ),
+    );
+    for (const message of [
+      "qualification failed",
+      "phase failed",
+      "native close components failed",
+      "read connection close failed",
+      "write connection close failed",
+      "database close failed",
+    ]) {
+      assert.match(formatted, new RegExp(message));
+    }
 
     await assert.rejects(
       closeQualificationPhaseStrictly(async () => {
