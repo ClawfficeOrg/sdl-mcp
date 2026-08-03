@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **LadybugDB 0.19.0 qualification**: Updated the `kuzu` alias to `@ladybugdb/core@0.19.0`. The offline, 15-phase behavioral qualification passed its large STRING projection, checkpoint/reopen, delete/reinsert, graph-invariance, and HNSW lifecycle checks. This is evidence for the upgrade, not proof that the upstream defect is fixed: [LadybugDB issue #725](https://github.com/LadybugDB/ladybug/issues/725) remains open.
+- **LadybugDB durability admission**: SDL-MCP now enables strict WAL replay, disables native automatic checkpoints, and manages scheduled, manual, and pre-close checkpoints behind operation admission. Destructive HNSW rebuilds are fenced by exclusive admission and pre/post checkpoints; post-index timeout reporting remains a soft deadline and does not cancel active finalization.
 - **Truthful HTTP readiness**: HTTP binding now reports liveness only. `/health` returns `200` after one stable global storage preflight and all configured watchers are ready; degraded servers remain available for read-only/status diagnostics, return `503`, print `DEGRADED — watchers not ready`, and reject mutations with `STORAGE_NOT_WRITE_READY`.
 
 ### Fixed

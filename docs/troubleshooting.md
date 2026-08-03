@@ -382,6 +382,22 @@ live outside those defaults.
 
 ### LadybugDB Issues
 
+#### Incoherent STRING values during a large scan
+
+- Symptom: graph validation reports inconsistent or malformed STRING values during a large multi-column scan, often after a checkpoint/reopen boundary.
+- Cause: LadybugDB 0.18.1 has a confirmed result-projection defect for this scan shape. It is not, by itself, proof of logical graph corruption or damaged source data. SDL-MCP's 0.19.0 qualification passed 15 behavioral phases, but [upstream issue #725](https://github.com/LadybugDB/ladybug/issues/725) remains open, so treat the result as upgrade evidence rather than proof.
+- Resolution:
+  - do not repair, reopen, or upgrade the current or quarantined database family in place
+  - qualify the installed driver only from a stopped, offline source family that is separate from every configured active database:
+
+    ```bash
+    npm run qualify:ladybug -- --source /absolute/path/to/offline-source.lbug --config /absolute/path/to/sdlmcp.config.json --expect-version 0.19.0
+    ```
+
+  - the qualifier rejects source paths, family members, and filesystem aliases that identify an active database; it verifies the offline source family's fingerprint after copying and after every phase
+  - a successful qualification removes its disposable clone. A failed qualification retains and prints its diagnostic clone path; preserve that clone for investigation
+  - complete the separate safe-rebuild/cutover procedure in the [CLI reference](./cli-reference.md#sdl-mcp-index) before using a qualified driver in production. This code change does not perform a production cutover
+
 #### Lock file prevents startup
 
 - Symptom: error about database lock or "directory in use" on startup
@@ -408,10 +424,19 @@ live outside those defaults.
   - Indexing, provider-first SCIP materialization, embeddings, and derived-state refreshes can create large WAL bursts
   - MCP tool calls also write compact Audit rows, so read-heavy work can keep the WAL timestamp current even when graph content is unchanged
 - Resolution:
-  - `sdl-mcp serve` runs best-effort WAL maintenance after startup
-  - maintenance checkpoints only when the WAL is quiet, the write pool is idle, and no indexing/post-index session is active
+  - SDL-MCP enables strict WAL replay and disables LadybugDB's native automatic checkpoint; it owns scheduled, manual, and pre-close checkpoints instead
+  - maintenance checkpoints only when the WAL is quiet, the write pool is idle, and no indexing/post-index session is active. Admission blocks new database operations and drains active ones before a checkpoint runs
   - current defaults: check every 60s, checkpoint when WAL is at least 32 MiB after 30s quiet time, or when a non-empty WAL has been quiet for 15 minutes; checkpoint attempts are rate-limited to once every 5 minutes
-  - graceful shutdown still performs a final best-effort checkpoint
+  - graceful shutdown performs a final best-effort checkpoint only after the write connection drains
+
+#### Post-index finalization reports a timeout
+
+- Symptom: indexing logs that post-index finalization exceeded `postIndexSessionTimeoutMs`.
+- Cause: this is a soft deadline for embeddings, summaries, deferred index work, memory sync, and audit flushing after pass-1/pass-2. It does not cancel the work, release its write slot, or release LadybugDB operation admission.
+- Resolution:
+  - wait for the reported session to settle before restarting, checkpointing, or beginning another maintenance operation
+  - increase `repos[].postIndexSessionTimeoutMs` only when the observed finalization duration needs a larger reporting threshold; it does not cap total finalization time
+  - do not run direct HNSW index commands as a workaround. SDL-MCP fences an HNSW rebuild with exclusive operation admission and pre/post checkpoints
 
 #### Shutdown forces exit before cleanup finishes
 

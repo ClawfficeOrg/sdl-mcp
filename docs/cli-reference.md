@@ -154,6 +154,45 @@ configuration. Keep SDL-MCP stopped while you switch `graphDatabase.path` or
 `SDL_GRAPH_DB_PATH`, retain the old database family for rollback, and restart
 only after both path sources agree.
 
+#### LadybugDB 0.19 production cutover
+
+The LadybugDB 0.19.0 offline qualification passed 15 behavioral phases,
+including large STRING projections, checkpoint/reopen boundaries, and the
+HNSW lifecycle. It is not proof of a complete upstream repair: [LadybugDB
+issue #725](https://github.com/LadybugDB/ladybug/issues/725) remains open.
+Run the qualification only against an offline source family before the
+operator-authorized cutover:
+
+```bash
+npm run qualify:ladybug -- --source /absolute/path/to/offline-source.lbug --config /absolute/path/to/sdlmcp.config.json --expect-version 0.19.0
+```
+
+The command rejects active/source aliases, verifies the original offline
+family never changes, and retains a failed diagnostic clone. A successful
+qualification deletes its disposable clone.
+
+Use this exact cutover sequence:
+
+1. Stop every SDL-MCP owner of the current database. Do not use the active or quarantined database as the qualification source or safe-rebuild target.
+2. Choose a new, non-existent absolute path, for example `/absolute/path/to/sdl-mcp-019.lbug`, and run:
+
+   ```bash
+   sdl-mcp index --config /absolute/path/to/sdlmcp.config.json --force --safe-rebuild /absolute/path/to/sdl-mcp-019.lbug
+   ```
+
+3. Require the command's checkpoint, close/reopen, graph, string, endpoint, and index validation to succeed. It leaves the candidate closed and does not alter configuration.
+4. While SDL-MCP remains stopped, atomically switch the deployment/configuration to the new path: set `graphDatabase.path` to the candidate and remove or update `SDL_GRAPH_DB_PATH` so it resolves to that same path. Do not leave the two path sources pointing at different families.
+5. Start SDL-MCP and verify the configured active path. Keep the previous family intact for rollback; to roll back, stop SDL-MCP and atomically restore the prior path configuration.
+
+Never upgrade the current or quarantined database family in place. This code
+change ships the driver and safety gates only; it performs no production
+rebuild or cutover.
+
+Post-index finalization timeouts are soft reporting deadlines: the work keeps
+its write slot and database-operation admission until it settles. Do not use a
+timeout to start a checkpoint or manual HNSW action. SDL-MCP fences HNSW
+rebuilds with exclusive admission and pre/post checkpoints.
+
 ### `sdl-mcp serve`
 
 Start the MCP server.
