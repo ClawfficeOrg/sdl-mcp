@@ -76,10 +76,56 @@ export interface LadybugFamilyLease {
   readonly mode: "normal" | "safe-rebuild" | "qualification" | "validated-clone";
   readonly lockPath: string;
   readonly lockNonce: string;
-  readonly lockIdentity: FileIdentity;
+  lockIdentity: FileIdentity | null;
   lockDescriptor: number | null;
+  lockReady: boolean;
+  lockPathDetached: boolean;
   released: boolean;
   safeRebuildSnapshot?: FamilySnapshot;
+}
+
+let pendingLeaseCleanup: LadybugFamilyLease | null = null;
+
+function retainPendingLeaseCleanup(lease: LadybugFamilyLease): void {
+  if (
+    pendingLeaseCleanup &&
+    pendingLeaseCleanup !== lease &&
+    !pendingLeaseCleanup.released
+  ) {
+    throw new DatabaseError(
+      "Another LadybugDB family lock cleanup is already pending",
+    );
+  }
+  pendingLeaseCleanup = lease;
+}
+
+function clearPendingLeaseCleanup(lease: LadybugFamilyLease): void {
+  if (pendingLeaseCleanup === lease) pendingLeaseCleanup = null;
+}
+
+function assertNoPendingLeaseCleanup(path: string): void {
+  if (pendingLeaseCleanup?.released) pendingLeaseCleanup = null;
+  if (!pendingLeaseCleanup) return;
+  throw lineageError(
+    path,
+    "family lock cleanup is pending at " +
+      pendingLeaseCleanup.lockPath +
+      "; retry closeLadybugDb({ strict: true }) before opening another family",
+  );
+}
+
+export function hasPendingLadybugFamilyLeaseCleanup(): boolean {
+  return pendingLeaseCleanup !== null && !pendingLeaseCleanup.released;
+}
+
+export function retryPendingLadybugFamilyLeaseCleanup(): void {
+  const lease = pendingLeaseCleanup;
+  if (!lease) return;
+  try {
+    release(lease);
+  } finally {
+    if (lease.released) clearPendingLeaseCleanup(lease);
+  }
 }
 
 function dbPath(path: string): string {
@@ -232,51 +278,72 @@ function newLease(
   mode: LadybugFamilyLease["mode"],
 ): LadybugFamilyLease {
   const normalized = dbPath(path);
+  assertNoPendingLeaseCleanup(normalized);
   const lockPath = getLadybugFamilyLockPath(normalized);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const nonce = createHash("sha256").update(randomUUID()).digest("hex");
-    let descriptor: number | undefined;
-    try {
-      descriptor = openSync(lockPath, "wx", 0o600);
-      writeFileSync(
-        descriptor,
-        JSON.stringify({ version: 1, pid: process.pid, nonce }) + "\n",
-      );
-      fsyncSync(descriptor);
-      return {
-        [LEASE]: true,
-        dbPath: normalized,
-        driver: { ...driver },
-        mode,
-        lockPath,
-        lockNonce: nonce,
-        lockIdentity: identity(fstatSync(descriptor, { bigint: true })),
-        lockDescriptor: descriptor,
-        released: false,
-      };
-    } catch (error) {
-      if (descriptor !== undefined) closeSync(descriptor);
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = readLock(lockPath, normalized);
-      if (isProcessAlive(owner.pid)) {
-        throw lineageError(
-          normalized,
-          "family lock is owned by active SDL-MCP process PID " + owner.pid,
+  const nonce = createHash("sha256").update(randomUUID()).digest("hex");
+  let lease: LadybugFamilyLease | undefined;
+
+  try {
+    const descriptor = openSync(lockPath, "wx", 0o600);
+    lease = {
+      [LEASE]: true,
+      dbPath: normalized,
+      driver: { ...driver },
+      mode,
+      lockPath,
+      lockNonce: nonce,
+      lockIdentity: null,
+      lockDescriptor: descriptor,
+      lockReady: false,
+      lockPathDetached: false,
+      released: false,
+    };
+    lease.lockIdentity = identity(fstatSync(descriptor, { bigint: true }));
+    writeFileSync(
+      descriptor,
+      JSON.stringify({ version: 1, pid: process.pid, nonce }) + "\n",
+    );
+    fsyncSync(descriptor);
+    lease.lockReady = true;
+    return lease;
+  } catch (error) {
+    if (lease) {
+      try {
+        release(lease);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "LadybugDB family lock initialization failed and cleanup is pending",
         );
       }
-      if (!same(owner.identity, pathIdentity(lockPath))) {
-        throw lineageError(
-          normalized,
-          "family lock changed during stale-owner recovery",
-        );
-      }
-      unlinkSync(lockPath);
+      throw error;
     }
+
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const owner = readLock(lockPath, normalized);
+    if (isProcessAlive(owner.pid)) {
+      throw lineageError(
+        normalized,
+        "family lock is owned by active SDL-MCP process PID " + owner.pid,
+      );
+    }
+    if (!same(owner.identity, pathIdentity(lockPath))) {
+      throw lineageError(
+        normalized,
+        "family lock changed while inspecting its stale owner",
+      );
+    }
+    throw lineageError(
+      normalized,
+      "family lock owner PID " +
+        owner.pid +
+        " is not running, but automatic reclamation is unsafe; stop all SDL-MCP processes, verify the database family is offline, then remove the stale lock: " +
+        lockPath,
+    );
   }
-  throw lineageError(normalized, "family lock could not be acquired");
 }
 
-function requireLease(
+function requireLeaseHandle(
   lease: LadybugFamilyLease,
   mode?: LadybugFamilyLease["mode"],
 ): void {
@@ -289,6 +356,16 @@ function requireLease(
   ) {
     throw new DatabaseError("Invalid or released LadybugDB family lease");
   }
+}
+
+function requireLease(
+  lease: LadybugFamilyLease,
+  mode?: LadybugFamilyLease["mode"],
+): void {
+  requireLeaseHandle(lease, mode);
+  if (!lease.lockReady || lease.lockIdentity === null) {
+    throw new DatabaseError("LadybugDB family lease initialization is incomplete");
+  }
   const owner = readLock(lease.lockPath, lease.dbPath);
   if (
     owner.pid !== process.pid ||
@@ -299,22 +376,73 @@ function requireLease(
   }
 }
 
+function closeLeaseAfterPathLoss(
+  lease: LadybugFamilyLease,
+  pathError: unknown,
+): never {
+  // Never inspect or unlink a lost/replaced pathname again. If close fails,
+  // strict close retries only the descriptor retained by this process.
+  lease.lockPathDetached = true;
+  try {
+    closeSync(lease.lockDescriptor!);
+  } catch (closeError) {
+    throw new AggregateError(
+      [pathError, closeError],
+      "LadybugDB family lock ownership changed and its descriptor could not be closed",
+    );
+  }
+  lease.lockDescriptor = null;
+  lease.released = true;
+  clearPendingLeaseCleanup(lease);
+  throw pathError;
+}
+
 function release(lease: LadybugFamilyLease): void {
   if (lease.released) return;
-  requireLease(lease);
-  if (!same(pathIdentity(lease.lockPath), lease.lockIdentity)) {
+
+  try {
+    requireLeaseHandle(lease);
+    if (lease.lockIdentity === null) {
+      lease.lockIdentity = identity(
+        fstatSync(lease.lockDescriptor!, { bigint: true }),
+      );
+    }
+
+    if (!lease.lockPathDetached) {
+      try {
+        if (lease.lockReady) {
+          const owner = readLock(lease.lockPath, lease.dbPath);
+          if (
+            owner.pid !== process.pid ||
+            owner.nonce !== lease.lockNonce ||
+            !same(owner.identity, lease.lockIdentity)
+          ) {
+            throw lineageError(lease.dbPath, "family lock ownership changed");
+          }
+        }
+        if (!same(pathIdentity(lease.lockPath), lease.lockIdentity)) {
+          throw lineageError(lease.dbPath, "family lock changed before release");
+        }
+      } catch (pathError) {
+        closeLeaseAfterPathLoss(lease, pathError);
+      }
+
+      // Once unlink succeeds, a close failure can retry the retained descriptor
+      // without inspecting a replacement path.
+      unlinkSync(lease.lockPath);
+      lease.lockPathDetached = true;
+    }
+
     closeSync(lease.lockDescriptor!);
     lease.lockDescriptor = null;
     lease.released = true;
-    throw lineageError(lease.dbPath, "family lock changed before release");
+    clearPendingLeaseCleanup(lease);
+  } catch (error) {
+    if (!lease.released && lease.lockDescriptor !== null) {
+      retainPendingLeaseCleanup(lease);
+    }
+    throw error;
   }
-
-  // Keep the validated descriptor and lease live until the directory entry is gone.
-  // A transient unlink failure can then be retried without surrendering ownership.
-  unlinkSync(lease.lockPath);
-  closeSync(lease.lockDescriptor!);
-  lease.lockDescriptor = null;
-  lease.released = true;
 }
 
 function reservePrimary(lease: LadybugFamilyLease): void {
@@ -604,8 +732,11 @@ function guardedAcquire<T extends LadybugFamilyLease>(
   } catch (error) {
     try {
       release(lease);
-    } catch {
-      // Preserve the verification or reservation failure.
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "LadybugDB family acquisition failed and lock cleanup is pending",
+      );
     }
     throw error;
   }
@@ -772,17 +903,42 @@ export function verifySafeRebuildFamilyBeforeReopen(
   );
 }
 
-function finalizeReusableFamilyClose(lease: LadybugFamilyLease): void {
+function finalizeAndRelease(
+  lease: LadybugFamilyLease,
+  finalize: () => void,
+): void {
+  let finalizeFailed = false;
+  let finalizeError: unknown;
   try {
+    finalize();
+  } catch (error) {
+    finalizeFailed = true;
+    finalizeError = error;
+  }
+
+  try {
+    release(lease);
+  } catch (cleanupError) {
+    if (finalizeFailed) {
+      throw new AggregateError(
+        [finalizeError, cleanupError],
+        "LadybugDB family finalization failed and lock cleanup is pending",
+      );
+    }
+    throw cleanupError;
+  }
+  if (finalizeFailed) throw finalizeError;
+}
+
+function finalizeReusableFamilyClose(lease: LadybugFamilyLease): void {
+  finalizeAndRelease(lease, () => {
     const snapshot = closedSnapshot(lease.dbPath);
     publish(
       lease,
       snapshot,
       "closed family changed before receipt publication",
     );
-  } finally {
-    release(lease);
-  }
+  });
 }
 
 export function finalizeNormalLadybugFamilyClose(
@@ -804,7 +960,7 @@ export function finalizeSafeRebuildLadybugFamily(
   beforePublication?: () => void,
 ): void {
   requireLease(lease, "safe-rebuild");
-  try {
+  finalizeAndRelease(lease, () => {
     if (!lease.safeRebuildSnapshot) {
       throw lineageError(
         lease.dbPath,
@@ -823,9 +979,7 @@ export function finalizeSafeRebuildLadybugFamily(
       validated,
       "safe rebuild target changed after validation",
     );
-  } finally {
-    release(lease);
-  }
+  });
 }
 
 export function abandonLadybugFamily(lease: LadybugFamilyLease): void {

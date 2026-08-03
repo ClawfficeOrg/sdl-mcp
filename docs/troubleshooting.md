@@ -253,8 +253,9 @@ and never changes the active database or configuration.
 Within one process, switching database paths requires
 `await closeLadybugDb({ strict: true })` before opening the new path. Once close
 starts, queued and later root database operations fail while active nested work
-drains. If native close fails, SDL-MCP keeps the lifecycle fence and family lease
-in place; retry strict close rather than opening another family. The admission
+drains. If native close fails, SDL-MCP keeps the lifecycle fence, family lease, and
+any failed short-lived shadow handles in place; retry strict close rather than
+opening another family. The admission
 queue accepts at most 256 waiters and does not add a universal operation timeout.
 
 All configured repositories are rebuilt because `Symbol.symbolId` is a global
@@ -415,10 +416,11 @@ live outside those defaults.
 - Symptom: startup reports an old-format, missing, or stale lineage receipt, a database-family mismatch, or an active family lock.
 - Cause: the previous process crashed before strict close, the family was copied, moved, renamed, replaced, or changed after its receipt, or another cooperating SDL-MCP process still owns it. A crash deliberately leaves the prior receipt stale.
 - Resolution:
-  - ensure no other `sdl-mcp serve` or `sdl-mcp index` process is running; SDL-MCP reclaims its own stale lock only after the recorded PID is dead
-  - do not manufacture, copy, or edit the receipt and do not remove a lock while ownership is ambiguous
-  - keep the rejected family stopped and intact, then use `index --force --safe-rebuild` with a new absolute target path
-  - remember that the lock is cooperative: direct LadybugDB users do not participate and must be stopped separately
+  - ensure no other `sdl-mcp serve` or `sdl-mcp index` process is running; stop direct LadybugDB users separately because they do not participate in the cooperative lock
+  - SDL-MCP never deletes a stale family lock automatically. A PID can die while another process replaces the lock, so path-based reclamation could delete the new owner's lock
+  - only when the error explicitly reports that the recorded PID is not running: keep every owner stopped, verify the database family is offline, and remove only the exact `.sdl-family.lock` path printed in the error (for example, `Remove-Item -LiteralPath "<exact-lock-path>"`)
+  - do not manufacture, copy, edit, or delete the lineage receipt, primary database, or WAL; if lock ownership remains ambiguous, leave it in place
+  - keep the rejected family intact and use `index --force --safe-rebuild` with a new absolute target path when the receipt or database family is stale
 
 #### Concurrent access errors
 

@@ -72,6 +72,7 @@
 
 **Files:**
 - Modify: `CHANGELOG.md`
+- Modify: `CHANGELOG.md`
 - Modify: `docs/troubleshooting.md`
 - Modify: `docs/cli-reference.md`
 
@@ -87,3 +88,24 @@
 2. Run the 0.19.0 qualification gate one final time from a clean build.
 3. Request LadybugDB specialist review, spec-compliance review, and code-quality review; fix and re-run checks for every actionable finding.
 4. Confirm the worktree is clean and report the branch/commits. Do not modify, migrate, delete, or cut over the active or quarantined database.
+
+## Task 7: Address review findings
+
+**Files:**
+- Modify: `src/db/ladybug-lineage.ts`
+- Modify: `src/db/ladybug-database-lifecycle.ts`
+- Modify: `src/db/ladybug-operation-gate.ts`
+- Modify: `src/db/ladybug.ts`
+- Modify: `tests/unit/ladybug-lineage.test.ts`
+- Modify: `tests/unit/ladybug-lineage-release.test.ts`
+- Modify: `tests/unit/ladybug-database-lifecycle.test.ts`
+- Modify: `docs/troubleshooting.md`
+
+1. Add a failing stale-lock regression proving acquisition never removes a path after merely observing a dead owner.
+2. Add a failing lifecycle regression that holds a shadow callback open, requests global close, and proves close cannot complete before the callback releases and both shadow handles close.
+3. Add failing cleanup regressions proving initialization/release failures retain retryable ownership, reject later acquisitions, and surface primary plus cleanup failures.
+4. Remove automatic stale-lock unlinking and return an actionable fail-closed error with the exact offline cleanup boundary.
+5. Put the complete shadow-database lifetime inside existing exclusive operation admission.
+6. Retain one pending lease cleanup, switch path-loss cases to descriptor-only retry, retry it during strict close, and preserve paired errors with `AggregateError`.
+7. Retain failed shadow native handles, latch ordinary operation admission closed, and retry them during strict global close.
+8. Update changelog/troubleshooting guidance, run the focused tests red then green, and finish with typecheck, lint, build, and the proportionate project test matrix.

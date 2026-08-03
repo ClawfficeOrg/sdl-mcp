@@ -113,7 +113,12 @@ import {
   toNumber,
 } from "../../dist/db/ladybug-core.js";
 import {
+  hasPendingShadowLadybugDatabaseCleanup,
+  retryPendingShadowLadybugDatabaseCleanup,
+} from "../../dist/db/ladybug-database-lifecycle.js";
+import {
   withExclusiveLadybugOperation,
+  withLadybugCloseOperation,
   withLadybugInitialization,
 } from "../../dist/db/ladybug-operation-gate.js";
 import {
@@ -8988,6 +8993,58 @@ describe("provider-first indexing foundation", () => {
       assert.equal(manifest.shadowDb.actualCounts, undefined);
       assert.equal(manifest.shadowDb.expectedCounts.files, 1);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves shadow DB files while failed native cleanup is pending", async (t) => {
+    const root = mkdtempSync(
+      join(tmpdir(), "sdl-provider-first-shadow-close-fail-"),
+    );
+    let failClose = true;
+    const originalClose = Connection.prototype.close;
+    t.mock.method(Connection.prototype, "close", async function () {
+      if (failClose) throw new Error("connection close failed");
+      await originalClose.call(this);
+    });
+
+    try {
+      const rows = providerFactsToGraphRows({
+        indexedAt: "2026-05-25T12:00:00.000Z",
+        facts: providerFactSet(),
+      });
+      (rows.symbols[0] as { summaryQuality: unknown }).summaryQuality =
+        "not-a-number";
+
+      const summary = await stageProviderFirstShadowBuild({
+        repoId: "repo",
+        generationId: "provider-first:close-failure",
+        activation: "shadowDb",
+        requestedFormat: "csv",
+        activeDbPath: join(root, "active.lbug"),
+        rows,
+      });
+
+      assert.equal(summary.status, "staged");
+      assert.equal(summary.shadowDb?.status, "skipped");
+      assert.equal(hasPendingShadowLadybugDatabaseCleanup(), true);
+      assert.match(
+        summary.shadowDb?.reasons.join(" ") ?? "",
+        /files retained until strict close retries native cleanup/i,
+      );
+      assert.equal(
+        existsSync(join(summary.stagingDir ?? "", "shadow.lbug")),
+        true,
+      );
+    } finally {
+      failClose = false;
+      if (hasPendingShadowLadybugDatabaseCleanup()) {
+        await withLadybugCloseOperation(
+          retryPendingShadowLadybugDatabaseCleanup,
+          () => !hasPendingShadowLadybugDatabaseCleanup(),
+        );
+      }
+      await withLadybugInitialization(async () => {});
       rmSync(root, { recursive: true, force: true });
     }
   });

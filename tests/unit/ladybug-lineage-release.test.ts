@@ -199,4 +199,286 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("retains failed lock initialization cleanup for explicit retry", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-lock-init-"));
+    const dbPath = join(root, "graph.lbug");
+    const writeFailure = new Error("lock-write-failure-sentinel");
+    const unlinkFailure = new Error("lock-unlink-failure-sentinel");
+    let failWrite = true;
+    let failUnlink = true;
+    t.mock.module("node:fs", {
+      namedExports: {
+        ...fs,
+        writeFileSync(path: fs.PathOrFileDescriptor, ...args: unknown[]): void {
+          if (failWrite && typeof path === "number") {
+            failWrite = false;
+            throw writeFailure;
+          }
+          Reflect.apply(fs.writeFileSync, fs, [path, ...args]);
+        },
+        unlinkSync(path: fs.PathLike): void {
+          if (failUnlink && String(path).endsWith(".sdl-family.lock")) {
+            throw unlinkFailure;
+          }
+          fs.unlinkSync(path);
+        },
+      },
+    });
+    const lineage = (await import(
+      `../../dist/db/ladybug-lineage.js?init-cleanup=${String(Date.now())}`
+    )) as typeof import("../../dist/db/ladybug-lineage.js") & {
+      hasPendingLadybugFamilyLeaseCleanup(): boolean;
+      retryPendingLadybugFamilyLeaseCleanup(): void;
+    };
+
+    try {
+      let thrown: unknown;
+      assert.throws(
+        () =>
+          lineage.acquireNormalLadybugFamily(dbPath, {
+            version: "test",
+            storageVersion: "1",
+          }),
+        (error) => {
+          thrown = error;
+          return true;
+        },
+      );
+      assert.ok(thrown instanceof AggregateError);
+      assert.deepEqual(thrown.errors, [writeFailure, unlinkFailure]);
+      assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), true);
+      assert.throws(
+        () =>
+          lineage.acquireNormalLadybugFamily(join(root, "other.lbug"), {
+            version: "test",
+            storageVersion: "1",
+          }),
+        /cleanup is pending/iu,
+      );
+
+      failUnlink = false;
+      assert.doesNotThrow(() =>
+        lineage.retryPendingLadybugFamilyLeaseCleanup(),
+      );
+      assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), false);
+      assert.equal(fs.existsSync(dbPath + ".sdl-family.lock"), false);
+    } finally {
+      failUnlink = false;
+      if (lineage.hasPendingLadybugFamilyLeaseCleanup?.()) {
+        lineage.retryPendingLadybugFamilyLeaseCleanup();
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves acquisition and failed release errors for cleanup retry", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-lock-acquire-"));
+    const dbPath = join(root, "graph.lbug");
+    const unlinkFailure = new Error("guarded-unlink-failure-sentinel");
+    let failUnlink = true;
+    t.mock.module("node:fs", {
+      namedExports: {
+        ...fs,
+        openSync(path: fs.PathLike, ...args: unknown[]): number {
+          if (String(path).replaceAll("\\", "/") === dbPath.replaceAll("\\", "/")) {
+            throw Object.assign(new Error("reservation-race-sentinel"), {
+              code: "EEXIST",
+            });
+          }
+          return Reflect.apply(fs.openSync, fs, [path, ...args]) as number;
+        },
+        unlinkSync(path: fs.PathLike): void {
+          if (failUnlink && String(path).endsWith(".sdl-family.lock")) {
+            throw unlinkFailure;
+          }
+          fs.unlinkSync(path);
+        },
+      },
+    });
+    const lineage = (await import(
+      `../../dist/db/ladybug-lineage.js?acquire-cleanup=${String(Date.now())}`
+    )) as typeof import("../../dist/db/ladybug-lineage.js") & {
+      hasPendingLadybugFamilyLeaseCleanup(): boolean;
+      retryPendingLadybugFamilyLeaseCleanup(): void;
+    };
+
+    try {
+      let thrown: unknown;
+      assert.throws(
+        () =>
+          lineage.acquireNormalLadybugFamily(dbPath, {
+            version: "test",
+            storageVersion: "1",
+          }),
+        (error) => {
+          thrown = error;
+          return true;
+        },
+      );
+      assert.ok(thrown instanceof AggregateError);
+      assert.equal(thrown.errors.length, 2);
+      assert.match(String(thrown.errors[0]), /primary database appeared/iu);
+      assert.equal(thrown.errors[1], unlinkFailure);
+      assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), true);
+
+      failUnlink = false;
+      lineage.retryPendingLadybugFamilyLeaseCleanup();
+      assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), false);
+    } finally {
+      failUnlink = false;
+      if (lineage.hasPendingLadybugFamilyLeaseCleanup?.()) {
+        lineage.retryPendingLadybugFamilyLeaseCleanup();
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves finalization failures when lock cleanup also fails", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-finalize-cleanup-"));
+    const unlinkFailure = new Error("finalize-unlink-failure-sentinel");
+    let failUnlink = true;
+    t.mock.module("node:fs", {
+      namedExports: {
+        ...fs,
+        unlinkSync(path: fs.PathLike): void {
+          if (failUnlink && String(path).endsWith(".sdl-family.lock")) {
+            throw unlinkFailure;
+          }
+          fs.unlinkSync(path);
+        },
+      },
+    });
+    const lineage = await import(
+      `../../dist/db/ladybug-lineage.js?finalize-cleanup=${String(Date.now())}`
+    );
+
+    try {
+      const normalPath = join(root, "normal.lbug");
+      const normalLease = lineage.acquireNormalLadybugFamily(normalPath, {
+        version: "test",
+        storageVersion: "1",
+      });
+      rmSync(normalPath, { force: true });
+
+      let normalError: unknown;
+      assert.throws(
+        () => lineage.finalizeNormalLadybugFamilyClose(normalLease),
+        (error) => {
+          normalError = error;
+          return true;
+        },
+      );
+      assert.ok(normalError instanceof AggregateError);
+      assert.match(String(normalError.errors[0]), /primary database file is missing/iu);
+      assert.equal(normalError.errors[1], unlinkFailure);
+      assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), true);
+      failUnlink = false;
+      lineage.retryPendingLadybugFamilyLeaseCleanup();
+
+      const safePath = join(root, "safe.lbug");
+      const safeLease = lineage.reserveSafeRebuildLadybugFamily(safePath, {
+        version: "test",
+        storageVersion: "1",
+      });
+      lineage.sealSafeRebuildFamilyForReopen(safeLease);
+      const publicationFailure = new Error("publication-failure-sentinel");
+      failUnlink = true;
+
+      let safeError: unknown;
+      assert.throws(
+        () =>
+          lineage.finalizeSafeRebuildLadybugFamily(safeLease, () => {
+            throw publicationFailure;
+          }),
+        (error) => {
+          safeError = error;
+          return true;
+        },
+      );
+      assert.ok(safeError instanceof AggregateError);
+      assert.deepEqual(safeError.errors, [publicationFailure, unlinkFailure]);
+      assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), true);
+      failUnlink = false;
+      lineage.retryPendingLadybugFamilyLeaseCleanup();
+    } finally {
+      failUnlink = false;
+      if (lineage.hasPendingLadybugFamilyLeaseCleanup()) {
+        lineage.retryPendingLadybugFamilyLeaseCleanup();
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retries descriptor-only cleanup without touching a lost lock path", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-detached-lock-"));
+    const descriptorCloseFailure = new Error("descriptor-close-failure-sentinel");
+    let failDescriptorClose = false;
+    t.mock.module("node:fs", {
+      namedExports: {
+        ...fs,
+        closeSync(descriptor: number): void {
+          if (failDescriptorClose) {
+            failDescriptorClose = false;
+            throw descriptorCloseFailure;
+          }
+          fs.closeSync(descriptor);
+        },
+      },
+    });
+    const lineage = await import(
+      `../../dist/db/ladybug-lineage.js?detached-cleanup=${String(Date.now())}`
+    );
+
+    try {
+      for (const mode of ["missing", "replacement"] as const) {
+        const dbPath = join(root, mode + ".lbug");
+        const lease = lineage.acquireNormalLadybugFamily(dbPath, {
+          version: "test",
+          storageVersion: "1",
+        });
+        const lockPath = lineage.getLadybugFamilyLockPath(dbPath);
+        rmSync(lockPath, { force: true });
+        const replacement =
+          JSON.stringify({
+            version: 1,
+            pid: process.pid,
+            nonce: "b".repeat(64),
+          }) + "\n";
+        if (mode === "replacement") {
+          writeFileSync(lockPath, replacement, "utf8");
+        }
+        failDescriptorClose = true;
+
+        let releaseError: unknown;
+        assert.throws(
+          () => lineage.abandonLadybugFamily(lease),
+          (error) => {
+            releaseError = error;
+            return true;
+          },
+        );
+        assert.ok(releaseError instanceof AggregateError);
+        assert.ok(releaseError.errors.includes(descriptorCloseFailure));
+        assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), true);
+
+        assert.doesNotThrow(() =>
+          lineage.retryPendingLadybugFamilyLeaseCleanup(),
+        );
+        assert.equal(lineage.hasPendingLadybugFamilyLeaseCleanup(), false);
+        if (mode === "replacement") {
+          assert.equal(fs.readFileSync(lockPath, "utf8"), replacement);
+          rmSync(lockPath, { force: true });
+        } else {
+          assert.equal(fs.existsSync(lockPath), false);
+        }
+      }
+    } finally {
+      failDescriptorClose = false;
+      if (lineage.hasPendingLadybugFamilyLeaseCleanup()) {
+        lineage.retryPendingLadybugFamilyLeaseCleanup();
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ladybug lifetime race hardening**: Dead-owner family locks now require explicit offline cleanup instead of unsafe path-based reclamation. Failed lock cleanup retains ownership for strict-close retry, path-loss cleanup retries only the retained descriptor, and paired failures remain observable. Shadow database construction, work, checkpoint, and close remain under one exclusive operation admission; rejected native closes retain their handles and fence ordinary work until strict global close succeeds.
 - **Startup and watcher write admission**: A failed storage preflight or partial watcher startup now latches a terminal degraded state, closes started watchers, suppresses database-backed audit hooks, and blocks MCP, REST, live-index, prefetch, checkpoint, WAL, and watcher writes while preserving the existing physical-Symbol and graph-integrity fail-closed guards.
 
 ## [0.13.0] - 2026-07-31

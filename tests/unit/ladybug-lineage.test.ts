@@ -214,24 +214,23 @@ describe("Ladybug closed-family lineage receipt", () => {
     );
   });
 
-  it("reclaims a well-formed lock whose owner process is stale", () => {
+  it("fails closed without deleting a stale family lock", () => {
     const dbPath = freshPath();
     const lockPath = api().getLadybugFamilyLockPath(dbPath);
-    writeFileSync(
-      lockPath,
+    const lockBytes =
       JSON.stringify({
         version: 1,
         pid: 2_147_483_647,
         nonce: "a".repeat(64),
-      }) + "\n",
-      "utf8",
-    );
+      }) + "\n";
+    writeFileSync(lockPath, lockBytes, "utf8");
 
-    const lease = track(api().acquireNormalLadybugFamily(dbPath, DRIVER));
-    assert.equal(existsSync(lockPath), true);
-    api().abandonLadybugFamily(lease);
-    openLeases.delete(lease);
-    assert.equal(existsSync(lockPath), false);
+    assert.throws(
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /automatic reclamation is unsafe[\s\S]*remove[\s\S]*\.sdl-family\.lock/iu,
+    );
+    assert.equal(readFileSync(lockPath, "utf8"), lockBytes);
+    assert.equal(existsSync(dbPath), false);
   });
 
   it("rejects oversized, malformed, and symlink lineage markers", (t) => {

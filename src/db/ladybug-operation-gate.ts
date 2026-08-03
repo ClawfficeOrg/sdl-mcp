@@ -34,6 +34,15 @@ let activeShared = 0;
 let activeExclusive = false;
 let lifecycleState: "open" | "closing" | "closed" = "open";
 
+/**
+ * Fail closed when native ownership survives an operation. Only a root close
+ * may run after this point, and it must clear every retained handle.
+ */
+export function fenceLadybugOperationsForNativeCleanup(): void {
+  lifecycleState = "closing";
+  rejectQueuedOperationsForClose();
+}
+
 function createAdmission(mode: OperationMode): Admission {
   let resolveDrained!: () => void;
   const drained = new Promise<void>((resolve) => {
@@ -263,8 +272,7 @@ export function withLadybugCloseOperation<T>(
       new DatabaseError("LadybugDB close must be started as a root operation"),
     );
   }
-  lifecycleState = "closing";
-  rejectQueuedOperationsForClose();
+  fenceLadybugOperationsForNativeCleanup();
   return withLadybugOperation("exclusive", task, undefined, "close").finally(
     () => {
       if (isFullyClosed()) lifecycleState = "closed";

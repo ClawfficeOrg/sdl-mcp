@@ -25,7 +25,9 @@ import {
   finalizeNormalLadybugFamilyClose,
   finalizeSafeRebuildLadybugFamily,
   finalizeValidatedLadybugCloneFamily,
+  hasPendingLadybugFamilyLeaseCleanup,
   reserveSafeRebuildLadybugFamily,
+  retryPendingLadybugFamilyLeaseCleanup,
   sealSafeRebuildFamilyForReopen,
   verifySafeRebuildFamilyBeforeReopen,
   type LadybugFamilyLease,
@@ -57,6 +59,8 @@ import {
 } from "./ladybug-core.js";
 import {
   createManagedLadybugDatabase,
+  hasPendingShadowLadybugDatabaseCleanup,
+  retryPendingShadowLadybugDatabaseCleanup,
 } from "./ladybug-database-lifecycle.js";
 import {
   bindCurrentLadybugOperation,
@@ -543,13 +547,13 @@ async function getLadybugDbInternal(
 
     const openingLease = acquireLease(normalizedPath, lineageDriver(modules));
     if (activeFamilyLease && activeFamilyLease !== openingLease) {
-      try {
-        abandonLadybugFamily(openingLease);
-      } catch {
-        // Preserve the process-global ownership violation.
-      }
-      throw new DatabaseError(
+      const ownershipError = new DatabaseError(
         "Another LadybugDB family lease is already active in this process",
+      );
+      rethrowAfterCleanup(
+        ownershipError,
+        () => abandonLadybugFamily(openingLease),
+        "LadybugDB family ownership collision and cleanup both failed",
       );
     }
     activeFamilyLease = openingLease;
@@ -1917,7 +1921,9 @@ function requestLadybugDbClose(
         dbInstance === null &&
         poisonedOpeningDb === null &&
         readPool.length === 0 &&
-        writeConn === null,
+        writeConn === null &&
+        !hasPendingLadybugFamilyLeaseCleanup() &&
+        !hasPendingShadowLadybugDatabaseCleanup(),
     ).finally(() => {
       dbClosePromise = null;
       preserveCloseHooksForCurrentClose = false;
@@ -1947,6 +1953,19 @@ export function closeLadybugDb(
   return requestLadybugDbClose(options, false);
 }
 
+function rethrowAfterCleanup(
+  primaryError: unknown,
+  cleanup: () => void,
+  message: string,
+): never {
+  try {
+    cleanup();
+  } catch (cleanupError) {
+    throw new AggregateError([primaryError, cleanupError], message);
+  }
+  throw primaryError;
+}
+
 function abandonActiveFamilyLease(): void {
   const lease = activeFamilyLease;
   if (!lease) return;
@@ -1966,11 +1985,11 @@ export async function closeSafeRebuildBeforeReopen(
     sealSafeRebuildFamilyForReopen(lease);
   } catch (error) {
     if (!familyOwnershipPoisoned) {
-      try {
-        abandonActiveFamilyLease();
-      } catch {
-        // Preserve the strict-close or closed-family sealing failure.
-      }
+      rethrowAfterCleanup(
+        error,
+        abandonActiveFamilyLease,
+        "Safe-rebuild close/seal and family cleanup both failed",
+      );
     }
     throw error;
   }
@@ -1987,11 +2006,11 @@ export async function closeAndPublishSafeRebuildLadybugDb(
     activeFamilyLease = null;
   } catch (error) {
     if (activeFamilyLease === lease && !familyOwnershipPoisoned) {
-      try {
-        abandonActiveFamilyLease();
-      } catch {
-        // Preserve the strict-close or publication failure.
-      }
+      rethrowAfterCleanup(
+        error,
+        abandonActiveFamilyLease,
+        "Safe-rebuild publication and family cleanup both failed",
+      );
     }
     throw error;
   }
@@ -2014,6 +2033,29 @@ function flattenErrorMessages(errors: readonly unknown[]): string[] {
 async function closeLadybugDbImpl(): Promise<void> {
   const closeFailures: unknown[] = [];
   const nativeCloseFailures: unknown[] = [];
+
+  try {
+    retryPendingLadybugFamilyLeaseCleanup();
+    if (activeFamilyLease?.released) {
+      activeFamilyLease = null;
+      familyOwnershipPoisoned = false;
+      familyCloseMustAbandon = false;
+    }
+  } catch (error) {
+    closeFailures.push(error);
+    logger.warn("LadybugDB family lock cleanup remains pending", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    await retryPendingShadowLadybugDatabaseCleanup();
+  } catch (error) {
+    closeFailures.push(error);
+    logger.warn("Shadow LadybugDB native cleanup remains pending", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   await Promise.allSettled([...activeExclusiveReadLeases]);
   const retainedConnectionSnapshot = [...retainedNativeConnections].filter(
     (conn) => !readPool.includes(conn) && conn !== writeConn,

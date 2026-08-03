@@ -3,7 +3,10 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { finished } from "node:stream/promises";
 
-import { withShadowLadybugDatabase } from "../../db/ladybug-database-lifecycle.js";
+import {
+  hasPendingShadowLadybugDatabaseCleanup,
+  withShadowLadybugDatabase,
+} from "../../db/ladybug-database-lifecycle.js";
 import {
   copyProviderFirstArtifact,
   readProviderFirstShadowDbCounts,
@@ -383,7 +386,9 @@ export async function stageProviderFirstShadowBuild(
       reasons,
     };
   } catch (err) {
-    await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    if (!hasPendingShadowLadybugDatabaseCleanup()) {
+      await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    }
     return {
       status: "skipped",
       activation: params.activation,
@@ -474,13 +479,21 @@ async function loadProviderFirstShadowDb(params: {
       },
     );
   } catch (err) {
-    await rm(params.shadowDbPath, { recursive: true, force: true }).catch(
-      () => {},
-    );
+    const nativeCleanupPending = hasPendingShadowLadybugDatabaseCleanup();
+    if (!nativeCleanupPending) {
+      await rm(params.shadowDbPath, { recursive: true, force: true }).catch(
+        () => {},
+      );
+    }
     return {
       status: "skipped",
       expectedCounts: params.expectedCounts,
-      reasons: [`shadow DB bulk load failed: ${errorMessage(err)}`],
+      reasons: [
+        `shadow DB bulk load failed: ${errorMessage(err)}`,
+        ...(nativeCleanupPending
+          ? ["shadow DB files retained until strict close retries native cleanup"]
+          : []),
+      ],
     };
   }
 }

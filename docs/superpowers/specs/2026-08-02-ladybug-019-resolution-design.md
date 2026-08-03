@@ -92,3 +92,20 @@ Pin `kuzu` to `npm:@ladybugdb/core@0.19.0`. Keep the old database quarantine, sa
 - The original offline source family remains byte-identical and active-family aliases are rejected.
 - Production cutover uses a fresh 0.19.0 safe rebuild on a new path.
 - SDL-MCP remains fail-closed when a real qualification or graph-integrity mismatch occurs.
+
+## Post-review safety remediation
+
+The implementation review found three remaining process-lifetime races. They are resolved at the existing lineage and operation-gate boundaries:
+
+1. Stale family locks are no longer deleted automatically. Even after confirming that the recorded PID is dead, a path-based unlink can delete a replacement lock created by another process. Acquisition therefore fails closed with the exact lock path and instructions to stop all SDL-MCP processes before removing that lock offline.
+2. A shadow database holds exclusive operation admission for its complete lifetime: construction, callback execution, checkpoint, connection close, and database close. Global shutdown waits for that lifetime instead of closing the gate while shadow handles are still live. If a native close rejects, SDL-MCP retains that handle, latches ordinary operation admission closed, and retries it during strict global close.
+3. A lease that cannot be initialized or released remains owned by one process-local pending-cleanup slot. New acquisitions fail while cleanup is pending, strict close retries it, and a failure during error cleanup is reported with the primary failure in an `AggregateError`. If the lock path disappears or is replaced, cleanup permanently detaches from that path and retries only the retained descriptor, never the foreign path.
+
+The single pending-cleanup slot is sufficient because SDL-MCP permits only one live family lease in a process. This avoids a second lease manager while preserving retryable ownership of the native descriptor and its recorded file identity.
+
+### Remediation acceptance criteria
+
+- Two processes cannot both reclaim a stale path or delete a replacement owner's lock.
+- Global close cannot complete while a shadow database callback or its native handles remain active; a failed shadow close fences ordinary work until strict-close retry succeeds.
+- Failed lease initialization or release cannot silently discard the last cleanup handle.
+- Strict close retries pending cleanup, ownership-loss retry never touches a replacement lock path, and both primary and cleanup failures remain observable.
