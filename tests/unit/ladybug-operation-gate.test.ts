@@ -387,6 +387,55 @@ describe("Ladybug operation gate", { timeout: 5_000 }, () => {
     await withSharedLadybugOperation(async () => {});
   });
 
+  it("rejects close inside a shared lease without wedging the gate", async () => {
+    let closeRan = false;
+
+    await withSharedLadybugOperation(async () => {
+      await assert.rejects(
+        withLadybugCloseOperation(
+          async () => {
+            closeRan = true;
+          },
+          () => false,
+        ),
+        /root operation/u,
+      );
+    });
+
+    assert.strictEqual(closeRan, false);
+    await withSharedLadybugOperation(async () => {});
+  });
+
+  it("rejects close inside an exclusive lease without overtaking nested work", async () => {
+    const nestedEntered = deferred<void>();
+    const releaseNested = deferred<void>();
+    let closeRan = false;
+
+    await withExclusiveLadybugOperation(async () => {
+      const nested = withSharedLadybugOperation(async () => {
+        nestedEntered.resolve();
+        await releaseNested.promise;
+      });
+      await nestedEntered.promise;
+
+      await assert.rejects(
+        withLadybugCloseOperation(
+          async () => {
+            closeRan = true;
+          },
+          () => true,
+        ),
+        /root operation/u,
+      );
+      assert.strictEqual(closeRan, false);
+
+      releaseNested.resolve();
+      await nested;
+    });
+
+    await withSharedLadybugOperation(async () => {});
+  });
+
   it("caps queued roots and drains the accepted queue", async () => {
     const exclusiveEntered = deferred<void>();
     const releaseExclusive = deferred<void>();

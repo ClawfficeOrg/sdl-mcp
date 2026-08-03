@@ -258,6 +258,11 @@ export function withLadybugCloseOperation<T>(
   task: () => Promise<T>,
   isFullyClosed: () => boolean,
 ): Promise<T> {
+  if (operationContext.getStore()?.active) {
+    return Promise.reject(
+      new DatabaseError("LadybugDB close must be started as a root operation"),
+    );
+  }
   lifecycleState = "closing";
   rejectQueuedOperationsForClose();
   return withLadybugOperation("exclusive", task, undefined, "close").finally(
