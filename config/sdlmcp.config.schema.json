@@ -116,7 +116,7 @@
           },
           "postIndexSessionTimeoutMs": {
             "type": "integer",
-            "description": "Hard timeout for post-index finalization writes in milliseconds. Covers embeddings, summaries, deferred index builds, memory sync, and audit flushing after pass-1/pass-2 complete.",
+            "description": "Soft deadline for post-index finalization writes in milliseconds. When the deadline elapses, SDL-MCP records and logs a timeout but cannot cancel the work; the session retains its write slot and LadybugDB operation admission, and the caller waits until the body settles. This value does not bound total finalization time. Covers embeddings, summaries, deferred index builds, memory sync, and audit flushing after pass-1/pass-2 complete.",
             "minimum": 1000,
             "maximum": 86400000,
             "default": 900000

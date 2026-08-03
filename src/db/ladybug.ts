@@ -33,11 +33,22 @@ import {
   clearConnectionPoisoned,
   clearPreparedStatementCache,
   exec,
+  execCheckpoint,
   execDdl,
   drainConnMutex,
   isConnectionPoisoned,
   isConnStuck,
 } from "./ladybug-core.js";
+import {
+  createManagedLadybugDatabase,
+} from "./ladybug-database-lifecycle.js";
+import {
+  bindCurrentLadybugOperation,
+  getCurrentLadybugOperationMode,
+  queueExclusiveLadybugOperation,
+  withExclusiveLadybugOperation,
+  withSharedLadybugOperation,
+} from "./ladybug-operation-gate.js";
 import { resetJoinHintCache } from "./ladybug-edges.js";
 import {
   configureWriteConnAcquirer,
@@ -236,6 +247,7 @@ let readPoolIndex = 0;
 
 let writeConn: LadybugConnection | null = null;
 let writeLimiter: ConcurrencyLimiter | null = null;
+let pendingWriteConnectionRecovery: Promise<void> | null = null;
 let dbClosePromise: Promise<void> | null = null;
 let preserveCloseHooksForCurrentClose = false;
 let strictCloseForCurrentClose = false;
@@ -252,6 +264,7 @@ let vecMigrationDone = false;
 
 // Per-slot recycling guard: prevents concurrent recycling of the same pool slot (TOCTOU).
 const recyclingSlots = new Set<number>();
+const pendingReadConnectionRecoveries = new Map<number, Promise<void>>();
 
 // Initialization mutex: prevents concurrent callers from double-initializing
 // the DB instance or connection pool across async boundaries.
@@ -486,14 +499,13 @@ export async function getLadybugDb(
         process.env,
         options?.checkpointThresholdBytes,
       );
-      openingDb = new modules.Database(
+      openingDb = createManagedLadybugDatabase(
+        modules.Database,
         normalizedPath,
-        bufferManagerSize,
-        true,
-        false,
-        0,
-        true,
-        checkpointThresholdBytes,
+        {
+          bufferManagerSize,
+          checkpointThresholdBytes,
+        },
       );
       // LadybugDB constructs lazily: WAL replay and storage validation happen
       // during init/first use, so do not publish an open database before this
@@ -711,7 +723,7 @@ async function checkpointWal(
 ): Promise<boolean> {
   const startedAt = Date.now();
   try {
-    await execDdl(conn, "CHECKPOINT");
+    await execCheckpoint(conn);
     logger.info(`LadybugDB CHECKPOINT completed`, {
       phase,
       durationMs: Date.now() - startedAt,
@@ -743,8 +755,12 @@ export async function runWalCheckpoint(
   if (!writeConn) return false;
 
   try {
-    return await withWriteConn(
-      (conn) => checkpointWal(conn, phase),
+    return await withExclusiveLadybugOperation(
+      () =>
+        withWriteConn(
+          (conn) => checkpointWal(conn, phase),
+          timeoutMs,
+        ),
       timeoutMs,
     );
   } catch (err) {
@@ -895,53 +911,130 @@ export async function getLadybugReadConn(): Promise<LadybugConnection> {
  * Call this from error-handling paths when a query fails due to a
  * broken connection, to trigger lazy reconnection on the next checkout.
  */
-export async function recycleReadConnection(
+async function recoverReadConnectionSlot(
+  idx: number,
   unhealthyConn: LadybugConnection,
 ): Promise<void> {
-  const idx = readPool.indexOf(unhealthyConn);
-  if (idx === -1) return;
-
-  // Per-slot recycling guard: if another caller is already recycling this
-  // slot, bail out to prevent double-close / double-create races.
-  if (recyclingSlots.has(idx)) return;
-  recyclingSlots.add(idx);
-
+  let replacement: LadybugConnection | undefined;
   try {
     const db = await getLadybugDb();
 
-    // Re-validate after await: pool may have been closed or the connection
-    // may have been recycled by a concurrent caller (H6 TOCTOU guard).
+    // Re-validate after admission: shutdown or another recycler may have
+    // changed the slot while recovery was waiting to run.
     if (readPool.length === 0 || readPool[idx] !== unhealthyConn) return;
 
     try {
       await unhealthyConn.close();
     } catch {
-      // Best-effort close of broken connection
+      // Best-effort close of the broken connection.
+    } finally {
+      clearConnectionPoisoned(unhealthyConn);
+    }
+    if (readPool.length === 0 || readPool[idx] !== unhealthyConn) return;
+
+    replacement = await createConnection(db);
+    const limiter = writeLimiter;
+    const checkpointConn = writeConn;
+    if (!limiter || !checkpointConn) {
+      throw new DatabaseError(
+        "Write connection unavailable during read connection recovery",
+      );
     }
 
-    // Re-validate again: closeLadybugDb() may have run during the close await
-    if (readPool.length === 0) return;
-
-    try {
-      const replacement = await createConnection(db);
-      const phase = `pre-extension-load-read-replacement-${idx}`;
-      const walClean = await runWalCheckpoint(phase, 2_000);
-      if (walClean) {
-        await loadExtensionsOnConnection(replacement);
-        publishExtensionCapabilitiesForConnections(
-          getActiveConnectionsWithReplacement(replacement, unhealthyConn),
-        );
-      } else {
-        markExtensionsUnavailableAfterSkippedLoad(phase);
-      }
-      readPool[idx] = replacement;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`Failed to recreate read connection [${idx}]: ${msg}`);
+    const phase = `pre-extension-load-read-replacement-${idx}`;
+    const runWithAdmission = bindCurrentLadybugOperation(() =>
+      loadExtensionsAfterWalCheckpoint(
+        checkpointConn,
+        [replacement!],
+        phase,
+        getActiveConnectionsWithReplacement(replacement, unhealthyConn),
+      ),
+    );
+    await limiter.run(runWithAdmission);
+    readPool[idx] = replacement;
+    replacement = undefined;
+  } catch (err) {
+    if (replacement) {
+      await replacement.close().catch(() => {});
     }
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn(`Failed to recreate read connection [${idx}]: ${msg}`);
   } finally {
     recyclingSlots.delete(idx);
   }
+}
+
+function trackReadConnectionRecovery(
+  idx: number,
+  recovery: Promise<void>,
+): Promise<void> {
+  pendingReadConnectionRecoveries.set(idx, recovery);
+  void recovery.then(
+    () => {
+      if (pendingReadConnectionRecoveries.get(idx) === recovery) {
+        pendingReadConnectionRecoveries.delete(idx);
+      }
+    },
+    (error: unknown) => {
+      if (pendingReadConnectionRecoveries.get(idx) === recovery) {
+        pendingReadConnectionRecoveries.delete(idx);
+      }
+      logger.warn(`Read connection recovery admission [${idx}] failed`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
+  return recovery;
+}
+
+export async function recycleReadConnection(
+  unhealthyConn: LadybugConnection,
+): Promise<void> {
+  const operationMode = getCurrentLadybugOperationMode();
+  let recovery: Promise<void> | undefined;
+
+  // Reserve the pool slot under the caller's admission. Shared/root callers
+  // synchronously queue a fresh exclusive for writer preference; an ambient
+  // exclusive must reuse itself or it would wait on its own admission.
+  await withSharedLadybugOperation(async () => {
+    const idx = readPool.indexOf(unhealthyConn);
+    if (idx === -1) return;
+
+    const pending = pendingReadConnectionRecoveries.get(idx);
+    if (pending) {
+      recovery = pending;
+      return;
+    }
+    if (recyclingSlots.has(idx)) return;
+    recyclingSlots.add(idx);
+
+    if (operationMode === "exclusive") {
+      // Start the nested lease before this reservation callback settles so
+      // detached callers keep the outer exclusive admission until recovery ends.
+      recovery = trackReadConnectionRecovery(
+        idx,
+        withExclusiveLadybugOperation(() =>
+          recoverReadConnectionSlot(idx, unhealthyConn),
+        ),
+      );
+      return;
+    }
+
+    recovery = trackReadConnectionRecovery(
+      idx,
+      queueExclusiveLadybugOperation(() =>
+        recoverReadConnectionSlot(idx, unhealthyConn),
+      ),
+    );
+  });
+
+  if (!recovery) return;
+  if (operationMode === "shared") {
+    throw new DatabaseError(
+      "LadybugDB read connection recovery is pending; retry after the current shared operation unwinds",
+    );
+  }
+  await recovery;
 }
 
 /**
@@ -956,7 +1049,7 @@ export async function getLadybugConn(): Promise<LadybugConnection> {
  * Run a read against a temporary connection owned by the callback.
  * Long-lived snapshots use this instead of occupying a round-robin pool slot.
  */
-export async function withExclusiveReadConnection<T>(
+async function withExclusiveReadConnectionAdmitted<T>(
   fn: (conn: LadybugConnection) => Promise<T>,
 ): Promise<T> {
   if (dbClosePromise) {
@@ -1004,10 +1097,69 @@ export async function withExclusiveReadConnection<T>(
     if (!callbackFailed && closeFailed) throw closeError;
   }
 }
+export function withExclusiveReadConnection<T>(
+  fn: (conn: LadybugConnection) => Promise<T>,
+): Promise<T> {
+  if (dbClosePromise) {
+    return Promise.reject(
+      new DatabaseError("LadybugDB is closing, cannot start a read lease"),
+    );
+  }
+  return withSharedLadybugOperation(() =>
+    withExclusiveReadConnectionAdmitted(fn),
+  );
+}
 
-export async function withWriteConn<T>(
+async function recoverWriteConnection(
+  unhealthyConn: LadybugConnection,
+): Promise<void> {
+  const limiter = writeLimiter;
+  if (!limiter) return;
+
+  await limiter.run(async () => {
+    // Another recovery may have replaced this connection while queued.
+    if (writeConn !== unhealthyConn) return;
+    const db = await getLadybugDb();
+    const healthy = await getHealthyConnection(unhealthyConn, db, "write");
+    if (healthy !== unhealthyConn) writeConn = healthy;
+  });
+}
+
+function queueWriteConnectionRecovery(
+  unhealthyConn: LadybugConnection,
+): Promise<void> {
+  if (pendingWriteConnectionRecovery) {
+    return pendingWriteConnectionRecovery;
+  }
+
+  const recovery = queueExclusiveLadybugOperation(() =>
+    recoverWriteConnection(unhealthyConn),
+  );
+  pendingWriteConnectionRecovery = recovery;
+  // Observe detached recovery queued by nested shared work. Avoid finally():
+  // its derived rejected promise would itself be unhandled.
+  void recovery.then(
+    () => {
+      if (pendingWriteConnectionRecovery === recovery) {
+        pendingWriteConnectionRecovery = null;
+      }
+    },
+    (error: unknown) => {
+      if (pendingWriteConnectionRecovery === recovery) {
+        pendingWriteConnectionRecovery = null;
+      }
+      logger.warn("Failed to recover LadybugDB write connection", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
+  return recovery;
+}
+
+async function withWriteConnAdmitted<T>(
   fn: (conn: LadybugConnection) => Promise<T>,
   timeoutMs?: number,
+  onWriteFailure?: (conn: LadybugConnection) => void,
 ): Promise<T> {
   await getLadybugReadConn();
   // Reuse the active post-index session conn when called from inside the
@@ -1022,14 +1174,17 @@ export async function withWriteConn<T>(
   // session is still process-active; stale context must use the global limiter.
   const session = getCurrentSession();
   if (session && getActivePostIndexSession() === session) {
-    return getSessionWriteBodyLimiter(session.conn).run(() => fn(session.conn));
+    const runWithAdmission = bindCurrentLadybugOperation(() =>
+      fn(session.conn),
+    );
+    return getSessionWriteBodyLimiter(session.conn).run(runWithAdmission);
   }
   if (!writeLimiter || !writeConn) {
     throw new DatabaseError(
       "Write connection not initialized. Call initLadybugDb() first.",
     );
   }
-  return writeLimiter.run(async () => {
+  const runWithAdmission = bindCurrentLadybugOperation(async () => {
     const conn = writeConn;
     if (!conn) {
       throw new DatabaseError(
@@ -1039,16 +1194,66 @@ export async function withWriteConn<T>(
     try {
       return await fn(conn);
     } catch (err) {
-      try {
-        const db = await getLadybugDb();
-        const healthy = await getHealthyConnection(conn, db, "write");
-        if (healthy !== conn) writeConn = healthy;
-      } catch {
-        // Best-effort health check; preserve the original write error.
-      }
+      // Queue before this callback releases the shared admission and limiter.
+      onWriteFailure?.(conn);
       throw err;
     }
-  }, timeoutMs);
+  });
+  return writeLimiter.run(runWithAdmission, timeoutMs);
+}
+
+export async function withWriteConn<T>(
+  fn: (conn: LadybugConnection) => Promise<T>,
+  timeoutMs?: number,
+): Promise<T> {
+  const operationMode = getCurrentLadybugOperationMode();
+  const reuseExclusiveAdmission = operationMode === "exclusive";
+  if (operationMode === "shared" && pendingWriteConnectionRecovery) {
+    throw new DatabaseError(
+      "LadybugDB write connection recovery is pending; retry after the current shared operation unwinds",
+    );
+  }
+
+  let failedConn: LadybugConnection | undefined;
+  let recovery: Promise<void> | undefined;
+  try {
+    return await withSharedLadybugOperation(
+      () =>
+        withWriteConnAdmitted(fn, timeoutMs, (conn) => {
+          failedConn = conn;
+          if (!reuseExclusiveAdmission) {
+            recovery = queueWriteConnectionRecovery(conn);
+          }
+        }),
+      timeoutMs,
+    );
+  } catch (err) {
+    // An ambient shared root still owns the admission here. The fresh exclusive
+    // is already queued for writer preference, so awaiting it would deadlock.
+    if (operationMode === "shared") throw err;
+
+    try {
+      if (recovery) {
+        await recovery;
+      } else if (reuseExclusiveAdmission && failedConn) {
+        // Reuse the caller's exclusive root; queueing a fresh one here would
+        // wait on the admission that is currently awaiting this callback.
+        await recoverWriteConnection(failedConn);
+      }
+    } catch (recoveryError) {
+      // Queued recoveries are observed centrally; exclusive-reuse failures are
+      // logged here because they do not pass through that observer.
+      if (!recovery) {
+        logger.warn("Failed to recover LadybugDB write connection", {
+          error:
+            recoveryError instanceof Error
+              ? recoveryError.message
+              : String(recoveryError),
+        });
+      }
+    }
+    throw err;
+  }
 }
 
 // Wire write-session.ts so withPostIndexWriteSession can acquire the same
@@ -1455,7 +1660,7 @@ export function closeLadybugDb(
   if (!dbClosePromise) {
     preserveCloseHooksForCurrentClose = options.preserveCloseHooks === true;
     strictCloseForCurrentClose = options.strict === true;
-    dbClosePromise = closeLadybugDbImpl().finally(() => {
+    dbClosePromise = withExclusiveLadybugOperation(closeLadybugDbImpl).finally(() => {
       dbClosePromise = null;
       preserveCloseHooksForCurrentClose = false;
       strictCloseForCurrentClose = false;

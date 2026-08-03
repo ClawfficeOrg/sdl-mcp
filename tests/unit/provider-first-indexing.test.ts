@@ -107,10 +107,12 @@ import {
 } from "../../dist/indexer/provider-first/semantic-readiness.js";
 import {
   exec as dbExec,
+  execCheckpoint as dbExecCheckpoint,
   execDdl as dbExecDdl,
   queryAll,
   toNumber,
 } from "../../dist/db/ladybug-core.js";
+import { withExclusiveLadybugOperation } from "../../dist/db/ladybug-operation-gate.js";
 import {
   closeLadybugDb,
   getLadybugConn,
@@ -8722,9 +8724,9 @@ describe("provider-first indexing foundation", () => {
         expectedRelationships,
       );
 
-      await withWriteConn(async (writeConn) => {
-        await dbExecDdl(writeConn, "CHECKPOINT");
-      });
+      await withExclusiveLadybugOperation(() =>
+        withWriteConn((writeConn) => dbExecCheckpoint(writeConn)),
+      );
       await closeLadybugDb();
       activeConn = undefined;
       await initLadybugDb(activeDbPath);

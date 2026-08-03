@@ -28,10 +28,42 @@ import {
 
 const FAKE_CONN_TAG = "__test-fake-write-conn__";
 
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function installFakeAcquirer(): void {
   configureWriteConnAcquirer(async (fn) => {
     return fn({ [FAKE_CONN_TAG]: true } as never);
   });
+}
+
+function installTrackingAcquirer(): {
+  settled: Promise<void>;
+  isInFlight: () => boolean;
+} {
+  const settled = deferred();
+  let inFlight = false;
+  configureWriteConnAcquirer(async (fn) => {
+    inFlight = true;
+    try {
+      return await fn({ [FAKE_CONN_TAG]: true } as never);
+    } finally {
+      inFlight = false;
+      settled.resolve();
+    }
+  });
+  return { settled: settled.promise, isInFlight: () => inFlight };
 }
 
 describe("withPostIndexWriteSession", () => {
@@ -83,32 +115,80 @@ describe("withPostIndexWriteSession", () => {
     assert.equal(isPostIndexSessionActive(), false);
   });
 
-  it("fires timeout when body exceeds the threshold", async () => {
+  it("reports timeout while retaining the acquired session until the body settles", async () => {
     process.env.SDL_POST_INDEX_SESSION_TIMEOUT_MS = "60";
-    let caught: unknown;
-    try {
-      await withPostIndexWriteSession(async () => {
-        await new Promise((r) => setTimeout(r, 200));
-      });
-    } catch (err) {
-      caught = err;
-    }
-    assert.ok(caught instanceof Error, "timeout must throw");
-    assert.match((caught as Error).message, /timed out after 60ms/);
+    const releaseBody = deferred();
+    const acquirerSettled = deferred();
+    let acquirerInFlight = false;
+    configureWriteConnAcquirer(async (fn) => {
+      acquirerInFlight = true;
+      try {
+        return await fn({ [FAKE_CONN_TAG]: true } as never);
+      } finally {
+        acquirerInFlight = false;
+        acquirerSettled.resolve();
+      }
+    });
+
+    let callerSettled = false;
+    const session = withPostIndexWriteSession(
+      async () => {
+        await releaseBody.promise;
+        throw new Error("late body failure");
+      },
+      { timeoutMs: 60 },
+    );
+    const outcome = session.then(
+      () => new Error("unexpected fulfillment"),
+      (error: unknown) => error,
+    ).finally(() => {
+      callerSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    assert.equal(callerSettled, false);
+    assert.equal(
+      acquirerInFlight,
+      true,
+      "soft deadline must not release the underlying acquirer",
+    );
+    assert.equal(
+      isPostIndexSessionActive(),
+      true,
+      "session remains active until the timed-out body settles",
+    );
+
+    releaseBody.resolve();
+    const error = await outcome;
+    await acquirerSettled.promise;
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /timed out after 60ms/);
     assert.equal(isPostIndexSessionActive(), false);
   });
 
   it("uses explicit timeout options before the process-wide env override", async () => {
     process.env.SDL_POST_INDEX_SESSION_TIMEOUT_MS = "1000";
-    await assert.rejects(
-      withPostIndexWriteSession(
-        async () => {
-          await new Promise((r) => setTimeout(r, 200));
-        },
-        { timeoutMs: 60 },
-      ),
-      /timed out after 60ms/,
+    const releaseBody = deferred();
+    const tracking = installTrackingAcquirer();
+    let callerSettled = false;
+    const session = withPostIndexWriteSession(
+      async () => releaseBody.promise,
+      { timeoutMs: 60 },
     );
+    const outcome = session.then(
+      () => new Error("unexpected fulfillment"),
+      (error: unknown) => error,
+    ).finally(() => {
+      callerSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    assert.equal(callerSettled, false);
+    assert.equal(tracking.isInFlight(), true);
+    releaseBody.resolve();
+    const error = await outcome;
+    await tracking.settled;
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /timed out after 60ms/);
     assert.equal(isPostIndexSessionActive(), false);
   });
 
@@ -166,27 +246,38 @@ describe("withPostIndexWriteSession", () => {
 
   it("skips end-hooks on timeout to avoid racing the hung body", async () => {
     process.env.SDL_POST_INDEX_SESSION_TIMEOUT_MS = "60";
+    const releaseBody = deferred();
+    const tracking = installTrackingAcquirer();
     let hookFired = false;
     const unregister = registerSessionEndHook(async () => {
       hookFired = true;
     });
-    let caught: unknown;
     try {
-      await withPostIndexWriteSession(async () => {
-        await new Promise((r) => setTimeout(r, 250));
+      let callerSettled = false;
+      const session = withPostIndexWriteSession(async () => releaseBody.promise);
+      const outcome = session.then(
+        () => new Error("unexpected fulfillment"),
+        (error: unknown) => error,
+      ).finally(() => {
+        callerSettled = true;
       });
-    } catch (err) {
-      caught = err;
+      await new Promise((resolve) => setTimeout(resolve, 90));
+      assert.equal(callerSettled, false);
+      assert.equal(hookFired, false);
+      releaseBody.resolve();
+      const error = await outcome;
+      await tracking.settled;
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /timed out/);
+      assert.equal(
+        hookFired,
+        false,
+        "end-hooks must not run after a timed-out body settles",
+      );
     } finally {
+      releaseBody.resolve();
       unregister();
     }
-    assert.ok(caught instanceof Error);
-    assert.match((caught as Error).message, /timed out/);
-    assert.equal(
-      hookFired,
-      false,
-      "end-hooks must NOT run when session times out (body's last DB call still in flight on session.conn)",
-    );
   });
 
   it("isolates a thrown end-hook from later hooks", async () => {
@@ -255,8 +346,10 @@ describe("withPostIndexWriteSession", () => {
     assert.ok(events[0].sessionId.startsWith("pi-"));
   });
 
-  it("forwards postIndexSession with timedOut=true on timeout", async () => {
+  it("forwards postIndexSession with timedOut=true after body settlement", async () => {
     const events: Array<{ timedOut: boolean }> = [];
+    const releaseBody = deferred();
+    const tracking = installTrackingAcquirer();
     installObservabilityTap({
       toolCall() {},
       indexEvent() {},
@@ -285,18 +378,29 @@ describe("withPostIndexWriteSession", () => {
     });
     process.env.SDL_POST_INDEX_SESSION_TIMEOUT_MS = "60";
     try {
-      await assert.rejects(
-        withPostIndexWriteSession(async () => {
-          await new Promise((r) => setTimeout(r, 200));
-        }),
-        /timed out/,
-      );
+      let callerSettled = false;
+      const session = withPostIndexWriteSession(async () => releaseBody.promise);
+      const outcome = session.then(
+        () => new Error("unexpected fulfillment"),
+        (error: unknown) => error,
+      ).finally(() => {
+        callerSettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 90));
+      assert.equal(callerSettled, false);
+      assert.equal(events.length, 0);
+      releaseBody.resolve();
+      const error = await outcome;
+      await tracking.settled;
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /timed out/);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].timedOut, true);
     } finally {
+      releaseBody.resolve();
       resetObservabilityTap();
       delete process.env.SDL_POST_INDEX_SESSION_TIMEOUT_MS;
     }
-    assert.equal(events.length, 1);
-    assert.equal(events[0].timedOut, true);
   });
 });
 

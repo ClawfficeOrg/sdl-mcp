@@ -1,6 +1,5 @@
 import {
   getLadybugConn,
-  runWalCheckpoint,
   withWriteConn,
 } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
@@ -41,6 +40,7 @@ import {
 import { prepareSymbolEmbeddingInputs } from "./symbol-embedding-context.js";
 import { buildSymbolEmbeddingText } from "./symbol-embedding-text.js";
 import { IndexError } from "../domain/errors.js";
+import { runHnswRebuildCycle } from "./hnsw-rebuild-cycle.js";
 
 /** Legacy dimension constant — only used by MockEmbeddingProvider */
 export const EMBEDDING_DIMENSION = 64;
@@ -320,6 +320,8 @@ export async function refreshSymbolEmbeddings(params: {
    * the rebuild path.
    */
   rebuildMinUncachedRows?: number;
+  /** Preserve the repo-specific timeout for destructive rebuild sessions. */
+  postIndexSessionTimeoutMs?: number;
   /** @internal Allows tests to exercise provider degradation deterministically. */
   embeddingProvider?: EmbeddingProvider;
 }): Promise<{
@@ -476,321 +478,318 @@ export async function refreshSymbolEmbeddings(params: {
     vecProp !== null &&
     indexName !== null &&
     uncachedItems.length >= VECTOR_REBUILD_THRESHOLD;
-  let indexDropped = false;
-  if (useRebuildPath) {
-    // Bound WAL loss if the native rebuild kills the process (recurring
-    // LadybugDB 0.16.x failure mode: silent access violation between the
-    // index drop and recreate, leaving a torn WAL). Checkpointing committed
-    // state first means a crash here can only tear this rebuild's writes,
-    // not the preceding model's cycle or unrelated committed work. Must run
-    // outside withWriteConn (checkpoint acquires its own connection).
-    // Best-effort by design.
-    await runWalCheckpoint("symbol-vector-rebuild-pre-drop");
-    const dropResult = await withWriteConn((wConn) =>
-      dropVectorIndex(wConn, "Symbol", indexName),
-    );
-    indexDropped = dropResult.status !== "failed";
-    if (dropResult.status === "dropped") {
-      logger.info(
-        `[embeddings] Bulk path: dropped vector index '${indexName}' for ${uncachedItems.length} writes (rebuild after)`,
+  const runPersistenceCycle = async () => {
+    let indexDropped = false;
+    if (useRebuildPath) {
+      // The outer HNSW lifecycle checkpoints before this session starts.
+      const dropResult = await withWriteConn((wConn) =>
+        dropVectorIndex(wConn, "Symbol", indexName),
       );
-    } else if (dropResult.status === "absent") {
-      logger.debug(
-        `[embeddings] Vector index '${indexName}' already absent before bulk rebuild`,
-      );
-    } else {
-      logger.warn(
-        `[embeddings] Vector index '${indexName}' drop failed (${dropResult.error}); falling back to per-row HNSW maintenance`,
-      );
-    }
-  }
-
-  // Resolve effective batch size: clamp caller-supplied value to a sane
-  // window so a misconfigured `embeddingBatchSize` cannot OOM tokenizer
-  // padding or violate the ONNX session's expected input shape.
-  const batchSize = Math.max(
-    1,
-    Math.min(
-      params.batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE,
-      MAX_EMBEDDING_BATCH_SIZE,
-    ),
-  );
-
-  // Split uncached items into batches of `batchSize`.
-  type UncachedBatch = Array<{
-    symbol: ladybugDb.SymbolRow;
-    prefixedText: string;
-    cardHash: string;
-  }>;
-  const batches: UncachedBatch[] = [];
-  for (let i = 0; i < uncachedItems.length; i += batchSize) {
-    batches.push(uncachedItems.slice(i, i + batchSize));
-  }
-
-  // Shared mutable counters — updated inside processBatch results (not inside
-  // concurrent closures directly) so there are no data races.
-  type BatchResult = {
-    embedded: number;
-    skipped: number;
-    terminal: boolean;
-    failed: boolean;
-    degraded?: boolean;
-  };
-
-  // P2.b: write-coalescing buffer for the rebuild path. When the HNSW index is
-  // dropped, every per-ONNX-batch DB write is just an INSERT into a plain
-  // FLOAT[] column (no HNSW maintenance), so the per-write overhead is mostly
-  // writeLimiter handshake + tx round-trip. Batching ~8 ONNX batches into one
-  // DB write cuts those handshakes ~8x without any correctness risk: the items
-  // are independent SET ops on disjoint Symbol nodes. Buffer is mutated only
-  // from non-concurrent code paths (inside processBatch's single tick of
-  // pendingWriteItems.push, and the chunk-boundary flush after allSettled),
-  // so no lock is required.
-  const COALESCE_WRITE_BUFFER_SIZE = 256;
-  const pendingWriteItems: SymbolEmbeddingBatchItem[] = [];
-
-  const flushPendingWrites = async (force: boolean): Promise<void> => {
-    if (pendingWriteItems.length === 0) return;
-    if (!force && pendingWriteItems.length < COALESCE_WRITE_BUFFER_SIZE) return;
-    const toWrite = pendingWriteItems.splice(0);
-    await withWriteConn(async (wConn) => {
-      await setSymbolEmbeddingBatchOnNode(wConn, storageModel, toWrite, {
-        hnswIndexDropped: indexDropped,
-      });
-    });
-  };
-
-  const processBatch = async (batch: UncachedBatch): Promise<BatchResult> => {
-    const batchTexts = batch.map((item) => item.prefixedText);
-    let batchVectors: number[][];
-    try {
-      batchVectors = await provider.embed(batchTexts);
-    } catch (error) {
-      recordEmbeddingFailure();
-      logger.warn("Batch embedding failed, continuing to next batch", {
-        batchSize: batch.length,
-        firstSymbolId: batch[0]?.symbol.symbolId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (
-        errorMsg.includes("SessionClosed") ||
-        errorMsg.includes("ECONNRESET")
-      ) {
-        logger.error("Terminal provider error, aborting refresh", {
-          error: errorMsg,
-        });
-        return { embedded: 0, skipped: 0, terminal: true, failed: true };
-      }
-      return { embedded: 0, skipped: 0, terminal: false, failed: true };
-    }
-
-    // Guard: validate provider returned correct vector count
-    if (batchVectors.length !== batch.length) {
-      logger.error("Provider returned wrong vector count", {
-        expected: batch.length,
-        received: batchVectors.length,
-        firstSymbolId: batch[0]?.symbol.symbolId,
-      });
-      recordEmbeddingFailure();
-      return { embedded: 0, skipped: 0, terminal: false, failed: true };
-    }
-
-    // Check if provider degraded to mock mid-refresh
-    if (provider.isMockFallback?.()) {
-      logger.debug("Provider degraded to mock, skipping batch persistence", {
-        batchSize: batch.length,
-      });
-      return {
-        embedded: 0,
-        skipped: 0,
-        terminal: true,
-        failed: false,
-        degraded: true,
-      };
-    }
-
-    // P5: post-embed recheck for race avoidance is now an in-memory lookup
-    // against the pre-pass snapshot rather than a fresh DB round-trip per
-    // batch. Authoritative reasoning: parallel calls in metrics-updater.ts
-    // each pass a distinct `model`, and each model writes to disjoint
-    // Symbol properties (embeddingJinaCode* vs embeddingNomic*), so the
-    // per-model snapshots cannot race each other. If a future change adds
-    // a same-model parallel writer, this in-memory shortcut must be
-    // re-evaluated — writeLimiter serializes connections, not the in-
-    // memory snapshot, and two refreshes of the same model could write
-    // duplicate work. Cross-process races degrade to rare duplicate
-    // identical writes (harmless).
-    const postEmbedExisting = existingEmbeddings;
-    const batchItems: SymbolEmbeddingBatchItem[] = [];
-    for (let i = 0; i < batch.length; i++) {
-      const postExisting = postEmbedExisting.get(batch[i].symbol.symbolId);
-      if (postExisting && postExisting.cardHash === batch[i].cardHash) {
-        continue;
-      }
-
-      batchItems.push({
-        symbolId: batch[i].symbol.symbolId,
-        vector: toFloat16Blob(batchVectors[i]),
-        cardHash: batch[i].cardHash,
-        vectorArray: batchVectors[i],
-      });
-    }
-
-    if (batchItems.length > 0) {
-      if (indexDropped) {
-        // Coalesced path: append to shared buffer; flush is driven by the
-        // chunk-boundary in the dispatch loop (and the force-flush in
-        // `finally` before HNSW rebuild).
-        pendingWriteItems.push(...batchItems);
+      indexDropped = dropResult.status !== "failed";
+      if (dropResult.status === "dropped") {
+        logger.info(
+          `[embeddings] Bulk path: dropped vector index '${indexName}' for ${uncachedItems.length} writes (rebuild after)`,
+        );
+      } else if (dropResult.status === "absent") {
+        logger.debug(
+          `[embeddings] Vector index '${indexName}' already absent before bulk rebuild`,
+        );
       } else {
-        // Per-batch immediate write: the index drop failed, so we are on
-        // the legacy per-row HNSW maintenance path that LADYBUG#377 likely
-        // rejects anyway. Preserved for parity with the pre-coalescing
-        // behaviour so a future upstream fix re-enables it cleanly.
-        await withWriteConn(async (wConn) => {
-          await setSymbolEmbeddingBatchOnNode(wConn, storageModel, batchItems, {
-            hnswIndexDropped: indexDropped,
+        logger.warn(
+          `[embeddings] Vector index '${indexName}' drop failed (${dropResult.error}); falling back to per-row HNSW maintenance`,
+        );
+      }
+    }
+
+    // Resolve effective batch size: clamp caller-supplied value to a sane
+    // window so a misconfigured `embeddingBatchSize` cannot OOM tokenizer
+    // padding or violate the ONNX session's expected input shape.
+    const batchSize = Math.max(
+      1,
+      Math.min(
+        params.batchSize ?? DEFAULT_EMBEDDING_BATCH_SIZE,
+        MAX_EMBEDDING_BATCH_SIZE,
+      ),
+    );
+
+    // Split uncached items into batches of `batchSize`.
+    type UncachedBatch = Array<{
+      symbol: ladybugDb.SymbolRow;
+      prefixedText: string;
+      cardHash: string;
+    }>;
+    const batches: UncachedBatch[] = [];
+    for (let i = 0; i < uncachedItems.length; i += batchSize) {
+      batches.push(uncachedItems.slice(i, i + batchSize));
+    }
+
+    // Shared mutable counters — updated inside processBatch results (not inside
+    // concurrent closures directly) so there are no data races.
+    type BatchResult = {
+      embedded: number;
+      skipped: number;
+      terminal: boolean;
+      failed: boolean;
+      degraded?: boolean;
+    };
+
+    // P2.b: write-coalescing buffer for the rebuild path. When the HNSW index is
+    // dropped, every per-ONNX-batch DB write is just an INSERT into a plain
+    // FLOAT[] column (no HNSW maintenance), so the per-write overhead is mostly
+    // writeLimiter handshake + tx round-trip. Batching ~8 ONNX batches into one
+    // DB write cuts those handshakes ~8x without any correctness risk: the items
+    // are independent SET ops on disjoint Symbol nodes. Buffer is mutated only
+    // from non-concurrent code paths (inside processBatch's single tick of
+    // pendingWriteItems.push, and the chunk-boundary flush after allSettled),
+    // so no lock is required.
+    const COALESCE_WRITE_BUFFER_SIZE = 256;
+    const pendingWriteItems: SymbolEmbeddingBatchItem[] = [];
+
+    const flushPendingWrites = async (force: boolean): Promise<void> => {
+      if (pendingWriteItems.length === 0) return;
+      if (!force && pendingWriteItems.length < COALESCE_WRITE_BUFFER_SIZE) return;
+      const toWrite = pendingWriteItems.splice(0);
+      await withWriteConn(async (wConn) => {
+        await setSymbolEmbeddingBatchOnNode(wConn, storageModel, toWrite, {
+          hnswIndexDropped: indexDropped,
+        });
+      });
+    };
+
+    const processBatch = async (batch: UncachedBatch): Promise<BatchResult> => {
+      const batchTexts = batch.map((item) => item.prefixedText);
+      let batchVectors: number[][];
+      try {
+        batchVectors = await provider.embed(batchTexts);
+      } catch (error) {
+        recordEmbeddingFailure();
+        logger.warn("Batch embedding failed, continuing to next batch", {
+          batchSize: batch.length,
+          firstSymbolId: batch[0]?.symbol.symbolId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        if (
+          errorMsg.includes("SessionClosed") ||
+          errorMsg.includes("ECONNRESET")
+        ) {
+          logger.error("Terminal provider error, aborting refresh", {
+            error: errorMsg,
           });
+          return { embedded: 0, skipped: 0, terminal: true, failed: true };
+        }
+        return { embedded: 0, skipped: 0, terminal: false, failed: true };
+      }
+
+      // Guard: validate provider returned correct vector count
+      if (batchVectors.length !== batch.length) {
+        logger.error("Provider returned wrong vector count", {
+          expected: batch.length,
+          received: batchVectors.length,
+          firstSymbolId: batch[0]?.symbol.symbolId,
+        });
+        recordEmbeddingFailure();
+        return { embedded: 0, skipped: 0, terminal: false, failed: true };
+      }
+
+      // Check if provider degraded to mock mid-refresh
+      if (provider.isMockFallback?.()) {
+        logger.debug("Provider degraded to mock, skipping batch persistence", {
+          batchSize: batch.length,
+        });
+        return {
+          embedded: 0,
+          skipped: 0,
+          terminal: true,
+          failed: false,
+          degraded: true,
+        };
+      }
+
+      // P5: post-embed recheck for race avoidance is now an in-memory lookup
+      // against the pre-pass snapshot rather than a fresh DB round-trip per
+      // batch. Authoritative reasoning: parallel calls in metrics-updater.ts
+      // each pass a distinct `model`, and each model writes to disjoint
+      // Symbol properties (embeddingJinaCode* vs embeddingNomic*), so the
+      // per-model snapshots cannot race each other. If a future change adds
+      // a same-model parallel writer, this in-memory shortcut must be
+      // re-evaluated — writeLimiter serializes connections, not the in-
+      // memory snapshot, and two refreshes of the same model could write
+      // duplicate work. Cross-process races degrade to rare duplicate
+      // identical writes (harmless).
+      const postEmbedExisting = existingEmbeddings;
+      const batchItems: SymbolEmbeddingBatchItem[] = [];
+      for (let i = 0; i < batch.length; i++) {
+        const postExisting = postEmbedExisting.get(batch[i].symbol.symbolId);
+        if (postExisting && postExisting.cardHash === batch[i].cardHash) {
+          continue;
+        }
+
+        batchItems.push({
+          symbolId: batch[i].symbol.symbolId,
+          vector: toFloat16Blob(batchVectors[i]),
+          cardHash: batch[i].cardHash,
+          vectorArray: batchVectors[i],
         });
       }
-    }
 
-    return {
-      embedded: batchItems.length,
-      skipped: batch.length - batchItems.length,
-      terminal: false,
-      failed: false,
-    };
-  };
-
-  // Process batches with bounded concurrency using a sliding window.
-  // Each "chunk" is at most maxConcurrency batches run in parallel.
-  let aborted = false;
-  let degraded = false;
-  let failedBatches = 0;
-  let processedBatches = 0;
-  try {
-    for (
-      let chunkStart = 0;
-      chunkStart < batches.length && !aborted;
-      chunkStart += maxConcurrency
-    ) {
-      const chunk = batches.slice(chunkStart, chunkStart + maxConcurrency);
-      // P6: fire progress as each batch settles, not after the chunk wraps.
-      const settled = await Promise.allSettled(
-        chunk.map(async (b) => {
-          const res = await processBatch(b);
-          embedded += res.embedded;
-          skipped += res.skipped;
-          processedBatches++;
-          if (res.failed) failedBatches++;
-          if (res.degraded) degraded = true;
-          fireProgress();
-          return res;
-        }),
-      );
-
-      for (const result of settled) {
-        if (result.status === "fulfilled") {
-          if (result.value.terminal) {
-            aborted = true;
-          }
+      if (batchItems.length > 0) {
+        if (indexDropped) {
+          // Coalesced path: append to shared buffer; flush is driven by the
+          // chunk-boundary in the dispatch loop (and the force-flush in
+          // `finally` before HNSW rebuild).
+          pendingWriteItems.push(...batchItems);
         } else {
-          // processBatch should not throw (all errors handled internally),
-          // but guard defensively.
-          logger.warn("Unexpected processBatch rejection", {
-            reason: String(result.reason),
+          // Per-batch immediate write: the index drop failed, so we are on
+          // the legacy per-row HNSW maintenance path that LADYBUG#377 likely
+          // rejects anyway. Preserved for parity with the pre-coalescing
+          // behaviour so a future upstream fix re-enables it cleanly.
+          await withWriteConn(async (wConn) => {
+            await setSymbolEmbeddingBatchOnNode(wConn, storageModel, batchItems, {
+              hnswIndexDropped: indexDropped,
+            });
           });
-          recordEmbeddingFailure();
-          failedBatches++;
-          processedBatches++;
         }
       }
 
-      if (processedBatches > 0 && failedBatches / processedBatches > 0.5) {
-        throw new IndexError("Embedding failure rate exceeds 50%");
-      }
+      return {
+        embedded: batchItems.length,
+        skipped: batch.length - batchItems.length,
+        terminal: false,
+        failed: false,
+      };
+    };
 
-      // P2.b: chunk-boundary opportunistic flush. Only flushes when the
-      // pending buffer has reached COALESCE_WRITE_BUFFER_SIZE so concurrency
-      // > 1 still amortises the writeLimiter handshake across the whole
-      // chunk. A flush failure is logged but does not abort the loop —
-      // the items remain in the buffer and the force-flush in `finally`
-      // will retry once.
-      if (indexDropped) {
+    // Process batches with bounded concurrency using a sliding window.
+    // Each "chunk" is at most maxConcurrency batches run in parallel.
+    let aborted = false;
+    let degraded = false;
+    let failedBatches = 0;
+    let processedBatches = 0;
+    try {
+      for (
+        let chunkStart = 0;
+        chunkStart < batches.length && !aborted;
+        chunkStart += maxConcurrency
+      ) {
+        const chunk = batches.slice(chunkStart, chunkStart + maxConcurrency);
+        // P6: fire progress as each batch settles, not after the chunk wraps.
+        const settled = await Promise.allSettled(
+          chunk.map(async (b) => {
+            const res = await processBatch(b);
+            embedded += res.embedded;
+            skipped += res.skipped;
+            processedBatches++;
+            if (res.failed) failedBatches++;
+            if (res.degraded) degraded = true;
+            fireProgress();
+            return res;
+          }),
+        );
+
+        for (const result of settled) {
+          if (result.status === "fulfilled") {
+            if (result.value.terminal) {
+              aborted = true;
+            }
+          } else {
+            // processBatch should not throw (all errors handled internally),
+            // but guard defensively.
+            logger.warn("Unexpected processBatch rejection", {
+              reason: String(result.reason),
+            });
+            recordEmbeddingFailure();
+            failedBatches++;
+            processedBatches++;
+          }
+        }
+
+        if (processedBatches > 0 && failedBatches / processedBatches > 0.5) {
+          throw new IndexError("Embedding failure rate exceeds 50%");
+        }
+
+        // P2.b: chunk-boundary opportunistic flush. Only flushes when the
+        // pending buffer has reached COALESCE_WRITE_BUFFER_SIZE so concurrency
+        // > 1 still amortises the writeLimiter handshake across the whole
+        // chunk. A flush failure is logged but does not abort the loop —
+        // the items remain in the buffer and the force-flush in `finally`
+        // will retry once.
+        if (indexDropped) {
+          try {
+            await flushPendingWrites(false);
+          } catch (err) {
+            logger.warn(
+              "[embeddings] Coalesced write flush failed (will retry at end)",
+              {
+                error: err instanceof Error ? err.message : String(err),
+                pending: pendingWriteItems.length,
+              },
+            );
+          }
+        }
+      }
+    } finally {
+      // P2.b: drain any remaining coalesced writes BEFORE rebuilding the
+      // index. The rebuild scans Symbol.<vecProp>, so unflushed items would
+      // not appear in HNSW until the next refresh. Failures here are logged
+      // and counted toward `embedded` only after successful flush.
+      if (indexDropped && pendingWriteItems.length > 0) {
         try {
-          await flushPendingWrites(false);
+          await flushPendingWrites(true);
         } catch (err) {
-          logger.warn(
-            "[embeddings] Coalesced write flush failed (will retry at end)",
-            {
-              error: err instanceof Error ? err.message : String(err),
-              pending: pendingWriteItems.length,
-            },
-          );
-        }
-      }
-    }
-  } finally {
-    // P2.b: drain any remaining coalesced writes BEFORE rebuilding the
-    // index. The rebuild scans Symbol.<vecProp>, so unflushed items would
-    // not appear in HNSW until the next refresh. Failures here are logged
-    // and counted toward `embedded` only after successful flush.
-    if (indexDropped && pendingWriteItems.length > 0) {
-      try {
-        await flushPendingWrites(true);
-      } catch (err) {
-        logger.error(
-          `[embeddings] Final coalesced write flush failed — ${pendingWriteItems.length} vectors will not be persisted; vector retrieval may be stale`,
-          { error: err instanceof Error ? err.message : String(err) },
-        );
-      }
-    }
-
-    // P2: rebuild the dropped index regardless of write outcome so search
-    // remains operational even if the bulk write aborted partway. Failure
-    // to recreate is non-fatal but logged loudly — vector retrieval will
-    // degrade until the next index.refresh.
-    if (indexDropped && vecProp !== null && indexName !== null) {
-      const modelInfo = EMBEDDING_MODELS[modelName];
-      if (modelInfo) {
-        const ok = await withWriteConn((wConn) =>
-          createVectorIndex(
-            wConn,
-            "Symbol",
-            vecProp,
-            indexName,
-            modelInfo.dimension,
-          ),
-        );
-        if (ok) {
-          logger.info(
-            `[embeddings] Vector index '${indexName}' rebuilt after bulk write`,
-          );
-        } else {
           logger.error(
-            `[embeddings] Vector index '${indexName}' rebuild FAILED — vector retrieval for ${modelName} will degrade until next refresh`,
+            `[embeddings] Final coalesced write flush failed — ${pendingWriteItems.length} vectors will not be persisted; vector retrieval may be stale`,
+            { error: err instanceof Error ? err.message : String(err) },
           );
         }
-        // Persist the rebuilt index + embeddings immediately instead of
-        // leaving them WAL-only until the size-based auto checkpoint; a
-        // later crash (e.g. the next model's cycle) then cannot roll this
-        // rebuild back, and the next cycle starts from a near-empty WAL.
-        // Best-effort.
-        await runWalCheckpoint("symbol-vector-rebuild-post-create");
+      }
+
+      // P2: rebuild the dropped index regardless of write outcome so search
+      // remains operational even if the bulk write aborted partway. Failure
+      // to recreate is non-fatal but logged loudly — vector retrieval will
+      // degrade until the next index.refresh.
+      if (indexDropped && vecProp !== null && indexName !== null) {
+        const modelInfo = EMBEDDING_MODELS[modelName];
+        if (modelInfo) {
+          const ok = await withWriteConn((wConn) =>
+            createVectorIndex(
+              wConn,
+              "Symbol",
+              vecProp,
+              indexName,
+              modelInfo.dimension,
+            ),
+          );
+          if (ok) {
+            logger.info(
+              `[embeddings] Vector index '${indexName}' rebuilt after bulk write`,
+            );
+          } else {
+            logger.error(
+              `[embeddings] Vector index '${indexName}' rebuild FAILED — vector retrieval for ${modelName} will degrade until next refresh`,
+            );
+          }
+          // The outer HNSW lifecycle checkpoints after this session releases.
+        }
       }
     }
-  }
 
-  // Progress: fire at end through fireProgress() so the monotonic clamp
-  // covers this final tick too — without it, a 0-symbol refresh would
-  // emit a duplicate {current:0, total:0} after the start tick. The
-  // clamp guarantees the final emit only fires when real progress was
-  // made beyond the last tick; for partial/aborted runs that means
-  // honest "current < total" rather than a dishonest forced-to-total.
-  fireProgress();
-  return degraded
-    ? { embedded, skipped, degraded: true }
-    : { embedded, skipped };
+    // Progress: fire at end through fireProgress() so the monotonic clamp
+    // covers this final tick too — without it, a 0-symbol refresh would
+    // emit a duplicate {current:0, total:0} after the start tick. The
+    // clamp guarantees the final emit only fires when real progress was
+    // made beyond the last tick; for partial/aborted runs that means
+    // honest "current < total" rather than a dishonest forced-to-total.
+    fireProgress();
+    return degraded
+      ? { embedded, skipped, degraded: true }
+      : { embedded, skipped };
+  };
+  if (!useRebuildPath) return runPersistenceCycle();
+  return runHnswRebuildCycle(
+    "symbol-vector-rebuild-pre-drop",
+    "symbol-vector-rebuild-post-create",
+    runPersistenceCycle,
+    params.postIndexSessionTimeoutMs,
+  );
 }

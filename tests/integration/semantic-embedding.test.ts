@@ -345,6 +345,37 @@ describe("Semantic Embedding Pipeline", () => {
     assert.ok(progress.every(({ current, total }) => current < total));
   });
 
+  it("refreshSymbolEmbeddings persists vectors through a real rebuild cycle", async () => {
+    const { provider } = createRecordingProvider();
+
+    const result = await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+      batchSize: 1,
+    });
+
+    assert.deepStrictEqual(result, {
+      embedded: symbols.length,
+      skipped: 0,
+    });
+
+    const conn = await getLadybugConn();
+    for (const symbol of symbols) {
+      const embedding = await ladybugDb.getSymbolEmbeddingFromNode(
+        conn,
+        symbol.symbolId,
+        jinaModel,
+      );
+      assert.ok(embedding, `${symbol.symbolId} should persist an embedding`);
+      assert.ok(embedding.vector.length > 0);
+      assert.ok(embedding.cardHash.length > 0);
+    }
+  });
+
   it("refreshFileSummaryEmbeddings marks mock fallback as degraded without persistence", async () => {
     const conn = await getLadybugConn();
     const now = new Date().toISOString();

@@ -2375,28 +2375,29 @@ async function indexRepoImpl(
     clustersComputed: number;
     processesTraced: number;
     algorithmRefresh: AlgorithmRefreshDiagnostics;
-  }> =>
-    withPostIndexWriteSession(
+  }> => {
+    const finalizeResult = await measurePhase("finalizeIndexing", () =>
+      finalizeIndexing({
+        repoId,
+        versionId: params.versionId,
+        appConfig,
+        changedFileIds: params.changedFileIdsForFinalize,
+        changedTestFilePaths: params.changedTestFilePathsForFinalize,
+        preloadedSymbolFactsByFile:
+          params.preloadedFileSummarySymbolFactsByFile,
+        hasIndexMutations: params.hasIndexMutations,
+        includeTimings: shouldCollectPostIndexSubphaseTimings(),
+        callResolutionTelemetry: params.callResolutionTelemetry,
+        prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
+        deferSemanticRefresh: params.deferSemanticRefresh,
+        preFinalize: params.preFinalize,
+        postIndexSessionTimeoutMs,
+        onProgress,
+      }),
+    );
+    recordFinalizeIndexingSubphaseTimings(finalizeResult.timings);
+    return withPostIndexWriteSession(
       async () => {
-        await params.preFinalize?.();
-        const finalizeResult = await measurePhase("finalizeIndexing", () =>
-          finalizeIndexing({
-            repoId,
-            versionId: params.versionId,
-            appConfig,
-            changedFileIds: params.changedFileIdsForFinalize,
-            changedTestFilePaths: params.changedTestFilePathsForFinalize,
-            preloadedSymbolFactsByFile:
-              params.preloadedFileSummarySymbolFactsByFile,
-            hasIndexMutations: params.hasIndexMutations,
-            includeTimings: shouldCollectPostIndexSubphaseTimings(),
-            callResolutionTelemetry: params.callResolutionTelemetry,
-            prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
-            deferSemanticRefresh: params.deferSemanticRefresh,
-            onProgress,
-          }),
-        );
-        recordFinalizeIndexingSubphaseTimings(finalizeResult.timings);
         await measurePhase("ensureCriticalSymbolFts", async () => {
           await ensureCriticalSymbolFtsIndex({
             recordTiming: recordIndexSubphaseTiming,
@@ -2491,6 +2492,7 @@ async function indexRepoImpl(
       },
       { timeoutMs: postIndexSessionTimeoutMs },
     );
+  };
 
   const finalizeProviderFirstShadowBuild = async (
     shadowBuild: ProviderFirstShadowBuildSummary | undefined,
@@ -2578,17 +2580,14 @@ async function indexRepoImpl(
       return { semanticDeferred: params.semanticDeferred };
     }
 
-    const semanticRefresh = await withPostIndexWriteSession(
-      () =>
-        runProviderFirstSemanticReadinessRefresh({
-          repoId,
-          versionId: params.versionId,
-          appConfig,
-          onProgress,
-          recordTiming: recordIndexSubphaseTiming,
-        }),
-      { timeoutMs: postIndexSessionTimeoutMs },
-    );
+    const semanticRefresh = await runProviderFirstSemanticReadinessRefresh({
+      repoId,
+      versionId: params.versionId,
+      appConfig,
+      onProgress,
+      recordTiming: recordIndexSubphaseTiming,
+      postIndexSessionTimeoutMs,
+    });
     return {
       semanticDeferred: semanticRefresh.semanticDeferred || undefined,
       summaryStats: semanticRefresh.summaryStats,
@@ -4247,48 +4246,44 @@ async function indexRepoImpl(
     // --- Phase: post-index metrics (summaries, clusters, processes,
     // deferred indexes, memory sync, audit flush) ---
     //
-    // All DB writes from finalizeIndexing through the index-event audit log
-    // are routed through a single post-index session that holds the
-    // writeLimiter end-to-end. Other writers (audit logs from interactive
-    // tools, live-index reconcile) detect the session via
-    // getActivePostIndexSession() and buffer rather than racing for a write
-    // txn. Inside the session body, withWriteConn() reuses the session conn
-    // directly via AsyncLocalStorage so nested write paths don't deadlock
-    // waiting for the limiter slot they already own.
+    // Non-semantic finalization remains session-serialized. Destructive
+    // semantic model cycles run between this phase and the tail session,
+    // each with its own durable checkpoint -> session -> checkpoint boundary.
     const sessionEdgeTotal = totalEdgesCreated + configEdgesCreated;
+    const changedFileIdsParam =
+      mode === "incremental" || scopedSourceFileListActive
+        ? changedFileIds
+        : undefined;
+    const changedTestFilePathsParam =
+      mode === "incremental" ? changedPass2FilePaths : undefined;
+    const hasIndexMutations = changedFiles > 0 || totalEdgesCreated > 0;
+    const deferSemanticRefresh = providerFirstScipMaterialized;
+    const finalizeResult = await measurePhase("finalizeIndexing", () =>
+      finalizeIndexing({
+        repoId,
+        versionId,
+        appConfig,
+        changedFileIds: changedFileIdsParam,
+        changedTestFilePaths: changedTestFilePathsParam,
+        preloadedSymbolFactsByFile:
+          providerFirstScipMaterialized && providerFirstProviderRows
+            ? buildPreloadedFileSummarySymbolFactsFromRows({
+                files: providerFirstProviderRows.files,
+                symbols: providerFirstProviderRows.symbols,
+              })
+            : undefined,
+        hasIndexMutations,
+        includeTimings: shouldCollectPostIndexSubphaseTimings(),
+        callResolutionTelemetry,
+        prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
+        deferSemanticRefresh,
+        postIndexSessionTimeoutMs,
+        onProgress,
+      }),
+    );
+    recordFinalizeIndexingSubphaseTimings(finalizeResult.timings);
     const phaseOutcome = await withPostIndexWriteSession(
       async () => {
-        const changedFileIdsParam =
-          mode === "incremental" || scopedSourceFileListActive
-            ? changedFileIds
-            : undefined;
-        const changedTestFilePathsParam =
-          mode === "incremental" ? changedPass2FilePaths : undefined;
-        const hasIndexMutations = changedFiles > 0 || totalEdgesCreated > 0;
-        const deferSemanticRefresh = providerFirstScipMaterialized;
-        const finalizeResult = await measurePhase("finalizeIndexing", () =>
-          finalizeIndexing({
-            repoId,
-            versionId,
-            appConfig,
-            changedFileIds: changedFileIdsParam,
-            changedTestFilePaths: changedTestFilePathsParam,
-            preloadedSymbolFactsByFile:
-              providerFirstScipMaterialized && providerFirstProviderRows
-                ? buildPreloadedFileSummarySymbolFactsFromRows({
-                    files: providerFirstProviderRows.files,
-                    symbols: providerFirstProviderRows.symbols,
-                  })
-                : undefined,
-            hasIndexMutations,
-            includeTimings: shouldCollectPostIndexSubphaseTimings(),
-            callResolutionTelemetry,
-            prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
-            deferSemanticRefresh,
-            onProgress,
-          }),
-        );
-        recordFinalizeIndexingSubphaseTimings(finalizeResult.timings);
         await measurePhase("ensureCriticalSymbolFts", async () => {
           await ensureCriticalSymbolFtsIndex({
             recordTiming: recordIndexSubphaseTiming,

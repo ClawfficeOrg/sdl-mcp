@@ -349,7 +349,7 @@ async function runChildMode(options) {
     getLadybugDbPath,
     initLadybugDb,
   } = await import("../dist/db/ladybug.js");
-  const { exec, execDdl, queryAll } = await import(
+  const { exec, execCheckpoint, execDdl, queryAll } = await import(
     "../dist/db/ladybug-core.js"
   );
   const { validateSafeRebuildCandidate } = await import(
@@ -422,7 +422,7 @@ async function runChildMode(options) {
         "Original Symbol validation changed across qualification probe mutation",
       );
     }
-    await execDdl(conn, "CHECKPOINT");
+    await execCheckpoint(conn);
     return {
       mode: options.mode,
       cycle: options.cycle,

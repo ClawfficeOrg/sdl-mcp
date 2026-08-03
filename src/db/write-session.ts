@@ -138,7 +138,7 @@ function resolveSessionTimeoutMs(override?: number): number {
  * index runs are not re-entrant.
  */
 export interface WithPostIndexWriteSessionOptions {
-  /** Hard timeout in ms; throws if the session body hasn't settled. */
+  /** Soft deadline in ms; surfaces after the session body actually settles. */
   timeoutMs?: number;
 }
 
@@ -166,29 +166,32 @@ export function withPostIndexWriteSession<T>(
     };
     activeSession = session;
     const timeoutMs = resolveSessionTimeoutMs(options.timeoutMs);
-    let timeoutHandle: NodeJS.Timeout | undefined;
+    let timeoutError: Error | undefined;
     let timedOut = false;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        logger.error(
-          `[write-session] post-index session ${session.id} exceeded ${timeoutMs}ms; aborting body. The writeLimiter slot will release once the underlying task settles.`,
-        );
-        reject(
-          new Error(
-            `post-index session ${session.id} timed out after ${timeoutMs}ms`,
-          ),
-        );
-      }, timeoutMs);
-      timeoutHandle.unref();
-    });
+    const timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      timeoutError = new Error(
+        `post-index session ${session.id} timed out after ${timeoutMs}ms`,
+      );
+      logger.error(
+        `[write-session] post-index session ${session.id} exceeded ${timeoutMs}ms; waiting for the underlying body to settle before releasing its write slot and Ladybug admission.`,
+      );
+    }, timeoutMs);
+    timeoutHandle.unref();
+
+    let bodyFailed = false;
+    let bodyError: unknown;
+    let value!: T;
     try {
-      return (await Promise.race([
-        sessionContext.run(session, () => body(session)),
-        timeoutPromise,
-      ])) as T;
+      // The deadline is soft: the lease-bearing callback always waits for
+      // the real body, keeping the writeLimiter slot and Ladybug admission
+      // owned until native work actually settles.
+      value = await sessionContext.run(session, () => body(session));
+    } catch (error) {
+      bodyFailed = true;
+      bodyError = error;
     } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
+      clearTimeout(timeoutHandle);
       // Clear the active-session marker BEFORE running hooks. Audit calls
       // that fire during hook execution then route to writeLimiter (queued
       // behind the session) instead of into the in-memory buffer. This
@@ -196,12 +199,9 @@ export function withPostIndexWriteSession<T>(
       // splice but BEFORE the marker clear could be stranded in the buffer
       // until the next session or shutdown.
       activeSession = null;
-      // Skip end-hooks on timeout. The body's last LadybugDB call is still
-      // running on session.conn (the limiter slot only releases when it
-      // settles), and per-conn serialization is enforced by getConnMutex
-      // — so any drain attempt would queue behind the hung call, hit
-      // queueTimeoutMs, and drop the buffered events entirely. Leave them
-      // for the next session's drain or the on-shutdown flush.
+      // Skip end-hooks after a timeout. The body has settled, but its outcome
+      // is no longer trustworthy enough to append buffered work to the same
+      // session. Leave it for the next session or shutdown flush.
       if (timedOut) {
         if (sessionEndHooks.length > 0) {
           logger.error(
@@ -244,5 +244,11 @@ export function withPostIndexWriteSession<T>(
       // activeSession was already cleared at the top of the finally so audit
       // calls that ran during hook execution didn't buffer; nothing to do.
     }
+
+    // Preserve the historical timeout precedence when the deadline wins,
+    // but surface it only after the underlying body has settled.
+    if (timedOut) throw timeoutError;
+    if (bodyFailed) throw bodyError;
+    return value;
   });
 }

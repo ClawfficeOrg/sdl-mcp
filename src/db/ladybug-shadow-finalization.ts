@@ -24,6 +24,7 @@ import {
   toBoolean,
   toNumber,
 } from "./ladybug-core.js";
+import { withShadowLadybugDatabase } from "./ladybug-database-lifecycle.js";
 import {
   getEdgesByRepo,
   normalizeProviderFirstCallEdgeProvenance,
@@ -424,9 +425,11 @@ export async function finalizeProviderFirstShadowDb(
 
   try {
     const kuzu = await import("kuzu");
-    const db = new kuzu.Database(shadowDbPath);
-    const shadowConn = new kuzu.Connection(db);
-    try {
+    return await withShadowLadybugDatabase(
+      kuzu.Database,
+      kuzu.Connection,
+      shadowDbPath,
+      async (shadowConn) => {
       const symbolCountRow = await querySingle<{ count: unknown }>(
         shadowConn,
         `MATCH (s:Symbol) RETURN count(s) AS count`,
@@ -482,7 +485,6 @@ export async function finalizeProviderFirstShadowDb(
           reasons: mismatches,
         };
       }
-      await execDdl(shadowConn, "CHECKPOINT");
       return {
         status: "finalized",
         shadowDbPath,
@@ -493,10 +495,8 @@ export async function finalizeProviderFirstShadowDb(
         finalizedAt: new Date().toISOString(),
         reasons: [],
       };
-    } finally {
-      await shadowConn.close().catch(() => {});
-      await db.close().catch(() => {});
-    }
+      },
+    );
   } catch (err) {
     return {
       status: "failed",

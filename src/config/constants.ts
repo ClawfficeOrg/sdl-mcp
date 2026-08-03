@@ -308,9 +308,10 @@ export const WATCHER_REINDEX_OPERATION_TIMEOUT_MS = 60_000;
 export const WATCHER_DEFAULT_MAX_WATCHED_FILES = 25_000;
 
 /**
- * Default hard timeout for the post-index write session. This covers the
- * finalization phases after pass-1/pass-2 have finished: embeddings,
- * summaries, deferred index builds, memory sync, and audit flushing.
+ * Default soft deadline for the post-index write session. When it elapses,
+ * SDL-MCP records and logs a timeout but cannot cancel the work. The session
+ * retains its write slot and LadybugDB operation admission, and the caller
+ * waits until the body settles, so this does not bound total finalization time.
  */
 export const DEFAULT_POST_INDEX_SESSION_TIMEOUT_MS = 15 * 60 * 1000;
 

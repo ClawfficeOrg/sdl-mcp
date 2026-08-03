@@ -9,7 +9,8 @@ import {
   withWriteConn,
 } from "../../db/ladybug.js";
 import { initGraphDb } from "../../db/initGraphDb.js";
-import { execDdl, queryStoredProcAll } from "../../db/ladybug-core.js";
+import { execCheckpoint, queryStoredProcAll } from "../../db/ladybug-core.js";
+import { withExclusiveLadybugOperation } from "../../db/ladybug-operation-gate.js";
 import {
   getDerivedStateFromConnection,
   graphIntegrityIsVerifiedForVersion,
@@ -300,13 +301,20 @@ async function validateDependencyEndpoints(
   }
 }
 
+function checkpointSafeRebuild(): Promise<void> {
+  // Operation admission must precede the write limiter.
+  return withExclusiveLadybugOperation(() =>
+    withWriteConn((conn) => execCheckpoint(conn)),
+  );
+}
+
 async function validateSafeRebuildStorageAfterRepo(
   repoId: string,
 ): Promise<void> {
   // Force the just-written node columns through LadybugDB's durable checkpoint
   // path before accepting this repository. Revalidate every earlier manifest
   // because a later repository write can expose damage in an older table page.
-  await withWriteConn((conn) => execDdl(conn, "CHECKPOINT"));
+  await checkpointSafeRebuild();
   const conn = await getLadybugConn();
   try {
     await ladybugDb.assertPhysicalSymbolUniqueness(conn);
@@ -505,7 +513,7 @@ export async function runSafeRebuild(
     await requireVerifiedCurrentVersions(params.config);
     params.onLifecycleEvent?.("candidate:verified-before-close");
     await shutdownDerivedRefreshQueue();
-    await withWriteConn((conn) => execDdl(conn, "CHECKPOINT"));
+    await checkpointSafeRebuild();
     params.onLifecycleEvent?.("candidate:checkpointed");
     await closeLadybugDb({ preserveCloseHooks: true });
     candidateOpen = false;

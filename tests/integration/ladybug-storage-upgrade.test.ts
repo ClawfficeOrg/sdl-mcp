@@ -9,6 +9,8 @@ import { fileURLToPath } from "url";
 
 import type { Connection, QueryResult } from "kuzu";
 
+import { execCheckpoint } from "../../dist/db/ladybug-core.js";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(__dirname, "..", "fixtures", "ladybug", "storage-v40");
 const MANIFEST_PATH = join(FIXTURE_DIR, "manifest.json");
@@ -173,7 +175,7 @@ describe("Ladybug storage upgrade", () => {
           `MERGE (p:DriverQualificationProbe {id: 'storage-upgrade'})
            SET p.cycle = ${cycle}`,
         );
-        await exec(conn, "CHECKPOINT");
+        await execCheckpoint(conn);
         await conn.close();
         conn = undefined;
         await db.close();

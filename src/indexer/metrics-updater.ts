@@ -5,6 +5,7 @@ import type { Connection } from "kuzu";
 import type { AppConfig } from "../config/types.js";
 import { resolveSemanticEmbeddingModelPlan } from "../config/semantic-embedding-model-plan.js";
 import { getLadybugConn, withWriteConn } from "../db/ladybug.js";
+import { withPostIndexWriteSession } from "../db/write-session.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
 import { classifyDependencyTarget } from "../db/symbol-placeholders.js";
 import { updateMetricsForRepo } from "../graph/metrics.js";
@@ -43,6 +44,8 @@ export interface FinalizeIndexingParams {
   includeTimings?: boolean;
   callResolutionTelemetry: CallResolutionTelemetry;
   deferSemanticRefresh?: boolean;
+  preFinalize?: () => Promise<void>;
+  postIndexSessionTimeoutMs?: number;
   prepareGraphIntegrityPlaceholderPruning?: (
     conn: Connection,
   ) => Promise<boolean> | boolean;
@@ -84,6 +87,8 @@ export async function finalizeIndexing({
   includeTimings,
   callResolutionTelemetry,
   deferSemanticRefresh = false,
+  preFinalize,
+  postIndexSessionTimeoutMs,
   prepareGraphIntegrityPlaceholderPruning,
   onProgress,
 }: FinalizeIndexingParams): Promise<FinalizeIndexingResult> {
@@ -114,116 +119,128 @@ export async function finalizeIndexing({
     logger.debug("Skipping finalizeIndexing for no-op incremental refresh", {
       repoId,
     });
+    if (preFinalize) {
+      await withPostIndexWriteSession(preFinalize, {
+        timeoutMs: postIndexSessionTimeoutMs,
+      });
+    }
     return { timings };
   }
 
-  await measureSubphase("symbolStatusNormalize", async () => {
-    await withWriteConn(async (wConn) => {
-      const shouldPrunePlaceholders =
-        await prepareGraphIntegrityPlaceholderPruning?.(wConn) ?? true;
-      const normalizeScope =
-        changedFileIds && changedFileIds.size > 0
-          ? { fileIds: changedFileIds }
-          : undefined;
-      const repaired = await ladybugDb.normalizeDependencyPlaceholderSymbols(
-        wConn,
-        repoId,
-        normalizeScope,
-      );
-      const providerCallProvenanceRepaired =
-        await ladybugDb.normalizeProviderFirstCallEdgeProvenance(wConn, repoId);
-      const pruned = shouldPrunePlaceholders
-        ? await ladybugDb.pruneIsolatedPlaceholderSymbols(wConn, repoId)
-        : 0;
-      if (
-        repaired.fileBackedRepaired > 0 ||
-        repaired.dependencyPlaceholdersRepaired > 0 ||
-        providerCallProvenanceRepaired > 0 ||
-        pruned > 0
-      ) {
-        logger.info(
-          "Normalized dependency placeholder quality",
-          {
+  const metricsResult = await withPostIndexWriteSession(
+    async () => {
+      await preFinalize?.();
+      await measureSubphase("symbolStatusNormalize", async () => {
+        await withWriteConn(async (wConn) => {
+          const shouldPrunePlaceholders =
+            await prepareGraphIntegrityPlaceholderPruning?.(wConn) ?? true;
+          const normalizeScope =
+            changedFileIds && changedFileIds.size > 0
+              ? { fileIds: changedFileIds }
+              : undefined;
+          const repaired = await ladybugDb.normalizeDependencyPlaceholderSymbols(
+            wConn,
             repoId,
-            fileBackedRepaired: repaired.fileBackedRepaired,
-            dependencyPlaceholdersRepaired:
-              repaired.dependencyPlaceholdersRepaired,
-            providerCallProvenanceRepaired,
-            isolatedPlaceholdersPruned: pruned,
-          },
-        );
-      }
-    });
-  });
-
-  // Parallelise metrics, fileSummaries, and audit. Each phase acquires its
-  // own writer via `withWriteConn` which serializes through a single write
-  // connection (correct, no wall-time win — but keeps call sites independent).
-  const metricsTask = measureSubphase("metrics", () =>
-    updateMetricsForRepo(repoId, changedFileIds, {
-      includeTimings,
-      changedTestFilePaths,
-      algorithmRefresh: appConfig.indexing?.algorithmRefresh,
-    }),
-  );
-  const fileSummariesTask = measureSubphase("fileSummaries", async () => {
-    const fsConn = await getLadybugConn();
-    return materializeFileSummaries(fsConn, repoId, {
-      changedFileIds,
-      includeTimings,
-      preloadedSymbolFactsByFile,
-    });
-  }).catch((error) => {
-    logger.warn(`FileSummary materialisation skipped: ${String(error)}`);
-    return null;
-  });
-  const auditTask =
-    callResolutionTelemetry.pass2EligibleFileCount > 0
-      ? measureSubphase("audit", async () => {
-          await withWriteConn(async (wConn) => {
-            await ladybugDb.insertAuditEvent(wConn, {
-              eventId: `audit_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`,
-              timestamp: new Date().toISOString(),
-              tool: "index.callResolution",
-              decision: "stats",
-              repoId,
-              symbolId: null,
-              detailsJson: JSON.stringify({
-                versionId,
-                ...callResolutionTelemetry,
-              }),
-            });
-          });
-        }).catch((error) => {
-          logger.warn(
-            `Failed to log call-resolution telemetry: ${String(error)}`,
+            normalizeScope,
           );
-          return null;
-        })
-      : Promise.resolve(null);
+          const providerCallProvenanceRepaired =
+            await ladybugDb.normalizeProviderFirstCallEdgeProvenance(wConn, repoId);
+          const pruned = shouldPrunePlaceholders
+            ? await ladybugDb.pruneIsolatedPlaceholderSymbols(wConn, repoId)
+            : 0;
+          if (
+            repaired.fileBackedRepaired > 0 ||
+            repaired.dependencyPlaceholdersRepaired > 0 ||
+            providerCallProvenanceRepaired > 0 ||
+            pruned > 0
+          ) {
+            logger.info(
+              "Normalized dependency placeholder quality",
+              {
+                repoId,
+                fileBackedRepaired: repaired.fileBackedRepaired,
+                dependencyPlaceholdersRepaired:
+                  repaired.dependencyPlaceholdersRepaired,
+                providerCallProvenanceRepaired,
+                isolatedPlaceholdersPruned: pruned,
+              },
+            );
+          }
+        });
+      });
 
-  const [metricsResult, fsResult] = await Promise.all([
-    metricsTask,
-    fileSummariesTask,
-    auditTask,
-  ]);
-  if (timings && metricsResult.timings) {
-    for (const [phaseName, durationMs] of Object.entries(
-      metricsResult.timings,
-    )) {
-      timings[`metrics.${phaseName}`] = durationMs;
-    }
-  }
-  if (timings && fsResult?.timings) {
-    for (const [phaseName, durationMs] of Object.entries(fsResult.timings)) {
-      timings[`fileSummaries.${phaseName}`] = durationMs;
-    }
-  }
-  if (fsResult) {
-    logger.info(
-      `FileSummary materialisation: ${fsResult.updated}/${fsResult.total} files updated`,
+    // Parallelise metrics, fileSummaries, and audit. Each phase acquires its
+    // own writer via `withWriteConn` which serializes through a single write
+    // connection (correct, no wall-time win — but keeps call sites independent).
+    const metricsTask = measureSubphase("metrics", () =>
+      updateMetricsForRepo(repoId, changedFileIds, {
+        includeTimings,
+        changedTestFilePaths,
+        algorithmRefresh: appConfig.indexing?.algorithmRefresh,
+      }),
     );
-  }
+    const fileSummariesTask = measureSubphase("fileSummaries", async () => {
+      const fsConn = await getLadybugConn();
+      return materializeFileSummaries(fsConn, repoId, {
+        changedFileIds,
+        includeTimings,
+        preloadedSymbolFactsByFile,
+      });
+    }).catch((error) => {
+      logger.warn(`FileSummary materialisation skipped: ${String(error)}`);
+      return null;
+    });
+    const auditTask =
+      callResolutionTelemetry.pass2EligibleFileCount > 0
+        ? measureSubphase("audit", async () => {
+            await withWriteConn(async (wConn) => {
+              await ladybugDb.insertAuditEvent(wConn, {
+                eventId: `audit_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`,
+                timestamp: new Date().toISOString(),
+                tool: "index.callResolution",
+                decision: "stats",
+                repoId,
+                symbolId: null,
+                detailsJson: JSON.stringify({
+                  versionId,
+                  ...callResolutionTelemetry,
+                }),
+              });
+            });
+          }).catch((error) => {
+            logger.warn(
+              `Failed to log call-resolution telemetry: ${String(error)}`,
+            );
+            return null;
+          })
+        : Promise.resolve(null);
+
+    const [metricsResult, fsResult] = await Promise.all([
+      metricsTask,
+      fileSummariesTask,
+      auditTask,
+    ]);
+    if (timings && metricsResult.timings) {
+      for (const [phaseName, durationMs] of Object.entries(
+        metricsResult.timings,
+      )) {
+        timings[`metrics.${phaseName}`] = durationMs;
+      }
+    }
+    if (timings && fsResult?.timings) {
+      for (const [phaseName, durationMs] of Object.entries(fsResult.timings)) {
+        timings[`fileSummaries.${phaseName}`] = durationMs;
+      }
+    }
+    if (fsResult) {
+      logger.info(
+        `FileSummary materialisation: ${fsResult.updated}/${fsResult.total} files updated`,
+      );
+    }
+      return metricsResult;
+    },
+    { timeoutMs: postIndexSessionTimeoutMs },
+  );
 
   let summaryStats: SummaryBatchResult | undefined;
   let fileSummaryEmbeddingStats:
@@ -296,6 +313,7 @@ export async function finalizeIndexing({
                 concurrency: semanticConfig.embeddingConcurrency,
                 batchSize: semanticConfig.fileSummaryEmbeddingBatchSize,
                 maxChars: semanticConfig.fileSummaryEmbeddingMaxChars,
+                postIndexSessionTimeoutMs,
               }),
           );
         } catch (error) {
@@ -348,6 +366,7 @@ export async function finalizeIndexing({
               onProgress,
               concurrency: semanticConfig.embeddingConcurrency,
               batchSize: semanticConfig.embeddingBatchSize,
+              postIndexSessionTimeoutMs,
             }),
         );
         logger.info(

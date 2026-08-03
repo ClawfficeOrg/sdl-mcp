@@ -10,7 +10,6 @@ import {
 } from "../config/constants.js";
 import {
   getLadybugConn,
-  runWalCheckpoint,
   withWriteConn,
 } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
@@ -32,6 +31,7 @@ import {
   toFloat16Blob,
   type EmbeddingProvider,
 } from "./embeddings.js";
+import { runHnswRebuildCycle } from "./hnsw-rebuild-cycle.js";
 import { applyDocumentPrefix } from "./model-registry.js";
 
 export interface FileSummaryEmbeddingRefreshResult {
@@ -62,6 +62,8 @@ export async function refreshFileSummaryEmbeddings(params: {
    * immediate rebuilds.
    */
   rebuildMinUncachedRows?: number;
+  /** Preserve the repo-specific timeout for destructive rebuild sessions. */
+  postIndexSessionTimeoutMs?: number;
   /** @internal Allows tests to exercise refresh semantics without ONNX files. */
   embeddingProvider?: EmbeddingProvider;
 }): Promise<FileSummaryEmbeddingRefreshResult> {
@@ -198,112 +200,114 @@ export async function refreshFileSummaryEmbeddings(params: {
     vecProp !== null &&
     indexName !== null &&
     uncached.length >= VECTOR_REBUILD_THRESHOLD;
-  let indexDropped = false;
-  if (useRebuildPath && indexName !== null) {
-    // Bound WAL loss if the native rebuild kills the process (recurring
-    // LadybugDB 0.16.x failure mode: silent access violation between the
-    // index drop and recreate, leaving a torn WAL). Checkpointing committed
-    // state first means a crash here can only tear this rebuild's writes,
-    // not hours of unrelated committed work. Best-effort by design.
-    await runWalCheckpoint("filesummary-vector-rebuild-pre-drop");
-    const dropResult = await withWriteConn((wConn) =>
-      dropVectorIndex(wConn, "FileSummary", indexName),
-    );
-    indexDropped = dropResult.status !== "failed";
-  }
-
-  const batchSize = resolveFileSummaryEmbeddingBatchSize(
-    params.batchSize,
-    DEFAULT_EMBEDDING_BATCH_SIZE,
-  );
-  const maxConcurrency = Math.max(
-    1,
-    Math.min(params.concurrency ?? 1, MAX_EMBEDDING_CONCURRENCY),
-  );
-  const batches: (typeof uncached)[] = [];
-  for (let i = 0; i < uncached.length; i += batchSize) {
-    batches.push(uncached.slice(i, i + batchSize));
-  }
-
-  let embedded = 0;
-  let failed = 0;
-  let degraded = false;
-  const pendingWrites: ladybugDb.FileSummaryEmbeddingBatchItem[] = [];
-  const flush = async (): Promise<void> => {
-    if (pendingWrites.length === 0) return;
-    const rows = pendingWrites.splice(0);
-    await withWriteConn((wConn) =>
-      ladybugDb.setFileSummaryEmbeddingBatch(wConn, storageModel, rows, {
-        hnswIndexDropped: indexDropped,
-      }),
-    );
-  };
-
-  try {
-    batchLoop: for (let i = 0; i < batches.length; i += maxConcurrency) {
-      const chunk = batches.slice(i, i + maxConcurrency);
-      const results = await Promise.allSettled(
-        chunk.map((batch) => embedBatch(provider, batch)),
+  const runPersistenceCycle = async (): Promise<FileSummaryEmbeddingRefreshResult> => {
+    let indexDropped = false;
+    if (useRebuildPath && indexName !== null) {
+      // The outer HNSW lifecycle checkpoints before this session starts.
+      const dropResult = await withWriteConn((wConn) =>
+        dropVectorIndex(wConn, "FileSummary", indexName),
       );
-      for (const result of results) {
-        if (result.status === "rejected") {
-          failed++;
-          logger.warn("FileSummary embedding batch failed", {
-            error:
-              result.reason instanceof Error
-                ? result.reason.message
-                : String(result.reason),
-          });
-          continue;
-        }
-        pendingWrites.push(...result.value);
-        embedded += result.value.length;
-        params.onProgress?.({
-          stage: "embeddings",
-          substage: "fileSummaryEmbeddings",
-          current: embedded,
-          total: uncached.length,
-          model: storageModel,
-        });
-        if (provider.isMockFallback?.()) {
-          degraded = true;
-          break batchLoop;
-        }
-      }
-      await flush();
-      if (failed > 0 && failed / batches.length > 0.5) {
-        throw new IndexError("FileSummary embedding failure rate exceeds 50%");
-      }
+      indexDropped = dropResult.status !== "failed";
     }
-  } finally {
-    await flush();
-    if (indexDropped && vecProp !== null && indexName !== null) {
-      const modelInfo = EMBEDDING_MODELS[storageModel];
-      if (modelInfo) {
-        await withWriteConn((wConn) =>
-          createVectorIndex(
-            wConn,
-            "FileSummary",
-            vecProp,
-            indexName,
-            modelInfo.dimension,
-          ),
-        );
-        // Persist the rebuilt index + embeddings immediately instead of
-        // leaving them WAL-only until the size-based auto checkpoint; a
-        // later crash then cannot roll this rebuild back. Best-effort.
-        await runWalCheckpoint("filesummary-vector-rebuild-post-create");
-      }
-    }
-  }
 
-  return {
-    embedded,
-    skipped,
-    missing: missingPayloads + uncached.length - embedded,
-    degraded: degraded || failed > 0,
+    const batchSize = resolveFileSummaryEmbeddingBatchSize(
+      params.batchSize,
+      DEFAULT_EMBEDDING_BATCH_SIZE,
+    );
+    const maxConcurrency = Math.max(
+      1,
+      Math.min(params.concurrency ?? 1, MAX_EMBEDDING_CONCURRENCY),
+    );
+    const batches: (typeof uncached)[] = [];
+    for (let i = 0; i < uncached.length; i += batchSize) {
+      batches.push(uncached.slice(i, i + batchSize));
+    }
+
+    let embedded = 0;
+    let failed = 0;
+    let degraded = false;
+    const pendingWrites: ladybugDb.FileSummaryEmbeddingBatchItem[] = [];
+    const flush = async (): Promise<void> => {
+      if (pendingWrites.length === 0) return;
+      const rows = pendingWrites.splice(0);
+      await withWriteConn((wConn) =>
+        ladybugDb.setFileSummaryEmbeddingBatch(wConn, storageModel, rows, {
+          hnswIndexDropped: indexDropped,
+        }),
+      );
+    };
+
+    try {
+      batchLoop: for (let i = 0; i < batches.length; i += maxConcurrency) {
+        const chunk = batches.slice(i, i + maxConcurrency);
+        const results = await Promise.allSettled(
+          chunk.map((batch) => embedBatch(provider, batch)),
+        );
+        for (const result of results) {
+          if (result.status === "rejected") {
+            failed++;
+            logger.warn("FileSummary embedding batch failed", {
+              error:
+                result.reason instanceof Error
+                  ? result.reason.message
+                  : String(result.reason),
+            });
+            continue;
+          }
+          pendingWrites.push(...result.value);
+          embedded += result.value.length;
+          params.onProgress?.({
+            stage: "embeddings",
+            substage: "fileSummaryEmbeddings",
+            current: embedded,
+            total: uncached.length,
+            model: storageModel,
+          });
+          if (provider.isMockFallback?.()) {
+            degraded = true;
+            break batchLoop;
+          }
+        }
+        await flush();
+        if (failed > 0 && failed / batches.length > 0.5) {
+          throw new IndexError("FileSummary embedding failure rate exceeds 50%");
+        }
+      }
+    } finally {
+      await flush();
+      if (indexDropped && vecProp !== null && indexName !== null) {
+        const modelInfo = EMBEDDING_MODELS[storageModel];
+        if (modelInfo) {
+          await withWriteConn((wConn) =>
+            createVectorIndex(
+              wConn,
+              "FileSummary",
+              vecProp,
+              indexName,
+              modelInfo.dimension,
+            ),
+          );
+          // The outer HNSW lifecycle checkpoints after this session releases.
+        }
+      }
+    }
+
+    return {
+      embedded,
+      skipped,
+      missing: missingPayloads + uncached.length - embedded,
+      degraded: degraded || failed > 0,
+    };
   };
+  if (!useRebuildPath) return runPersistenceCycle();
+  return runHnswRebuildCycle(
+    "filesummary-vector-rebuild-pre-drop",
+    "filesummary-vector-rebuild-post-create",
+    runPersistenceCycle,
+    params.postIndexSessionTimeoutMs,
+  );
 }
+
 
 export function buildFileSummaryEmbeddingText(
   summary: Pick<ladybugDb.FileSummaryRow, "summary" | "searchText">,

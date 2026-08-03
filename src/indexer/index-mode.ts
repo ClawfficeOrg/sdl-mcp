@@ -1,5 +1,5 @@
 import type { RepoConfig } from "../config/types.js";
-import { getLadybugConn } from "../db/ladybug.js";
+import { withWriteConn } from "../db/ladybug.js";
 import { getFileCount } from "../db/ladybug-queries.js";
 import { logger } from "../util/logger.js";
 
@@ -22,8 +22,10 @@ export async function resolveEffectiveIndexMode(
 ): Promise<"full" | "incremental"> {
   if (requestedMode === "full") return "full";
 
-  const probeConn = await getLadybugConn();
-  if ((await getFileCount(probeConn, repoId)) > 0) return "incremental";
+  // Use the pre-index writer for this one probe so a long-lived verifier read
+  // cannot serialize mode resolution behind an occupied round-robin pool slot.
+  const fileCount = await withWriteConn((conn) => getFileCount(conn, repoId));
+  if (fileCount > 0) return "incremental";
 
   logger.info(
     "indexRepo: upgrading mode 'incremental' → 'full' (repo has no indexed files)",

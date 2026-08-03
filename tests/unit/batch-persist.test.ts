@@ -11,10 +11,11 @@ import {
   withWriteConn,
 } from "../../dist/db/ladybug.js";
 import {
-  execDdl,
+  execCheckpoint,
   queryAll,
   querySingle,
 } from "../../dist/db/ladybug-core.js";
+import { withExclusiveLadybugOperation } from "../../dist/db/ladybug-operation-gate.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import { readSafeRebuildSymbolPointLookupSample } from "../../dist/db/ladybug-safe-rebuild.js";
 import { unresolvedCallSymbolId } from "../../dist/db/symbol-placeholders.js";
@@ -500,7 +501,9 @@ describe("BatchPersistAccumulator", () => {
         );
       });
 
-      await withWriteConn((conn) => execDdl(conn, "CHECKPOINT"));
+      await withExclusiveLadybugOperation(() =>
+        withWriteConn((conn) => execCheckpoint(conn)),
+      );
       await closeLadybugDb();
       await initLadybugDb(activeDbPath);
       await withWriteConn(async (conn) => {
@@ -877,7 +880,9 @@ describe("BatchPersistAccumulator", () => {
         ]);
       });
 
-      await withWriteConn((conn) => execDdl(conn, "CHECKPOINT"));
+      await withExclusiveLadybugOperation(() =>
+        withWriteConn((conn) => execCheckpoint(conn)),
+      );
       await closeLadybugDb();
       await initLadybugDb(graphDbPath);
       await withWriteConn(async (conn) => {

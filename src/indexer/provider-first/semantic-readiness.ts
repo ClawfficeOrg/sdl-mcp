@@ -83,6 +83,7 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
   appConfig: Pick<AppConfig, "semantic">;
   onProgress?: (progress: IndexProgress) => void;
   recordTiming?: (phaseName: string, durationMs: number) => void;
+  postIndexSessionTimeoutMs?: number;
   deps?: ProviderFirstSemanticReadinessRefreshDeps;
 }): Promise<ProviderFirstSemanticReadinessRefreshResult> {
   const semanticConfig = params.appConfig.semantic;
@@ -152,6 +153,7 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
               concurrency: semanticConfig.embeddingConcurrency,
               batchSize: semanticConfig.fileSummaryEmbeddingBatchSize,
               maxChars: semanticConfig.fileSummaryEmbeddingMaxChars,
+              postIndexSessionTimeoutMs: params.postIndexSessionTimeoutMs,
             }),
         );
         fileSummaryEmbeddingStats[embModel] = stats;
@@ -172,6 +174,7 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
           onProgress: params.onProgress,
           concurrency: semanticConfig.embeddingConcurrency,
           batchSize: semanticConfig.embeddingBatchSize,
+          postIndexSessionTimeoutMs: params.postIndexSessionTimeoutMs,
         }),
       );
       if (stats.degraded || (stats.deferred ?? 0) > 0) {

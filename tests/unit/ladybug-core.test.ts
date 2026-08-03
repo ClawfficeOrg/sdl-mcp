@@ -13,6 +13,9 @@ import {
   queryAll,
   querySingle,
   exec,
+  execDdl,
+  execStoredProc,
+  queryStoredProcAll,
   withTransaction,
   getPreparedStatement,
   isConnectionPoisoned,
@@ -131,6 +134,123 @@ describe("query helpers", () => {
       getClosedCount: () => closed,
     };
   }
+
+  type Connection = import("kuzu").Connection;
+  const genericStringHelpers: Array<{
+    name: string;
+    run: (conn: Connection, statement: string) => Promise<unknown>;
+  }> = [
+    { name: "execDdl", run: (conn, statement) => execDdl(conn, statement) },
+    {
+      name: "queryStoredProcAll",
+      run: (conn, statement) => queryStoredProcAll(conn, statement),
+    },
+    {
+      name: "execStoredProc",
+      run: (conn, statement) => execStoredProc(conn, statement),
+    },
+    {
+      name: "getPreparedStatement",
+      run: (conn, statement) => getPreparedStatement(conn, statement),
+    },
+    { name: "queryAll", run: (conn, statement) => queryAll(conn, statement) },
+    {
+      name: "querySingle",
+      run: (conn, statement) => querySingle(conn, statement),
+    },
+    { name: "exec", run: (conn, statement) => exec(conn, statement) },
+  ];
+
+  function makeGenericConnection(onNativeCall: () => void): Connection {
+    const result = makeQueryResult([]).result;
+    return {
+      query: async () => {
+        onNativeCall();
+        return result;
+      },
+      prepare: async () => {
+        onNativeCall();
+        return "prepared";
+      },
+      execute: async () => {
+        onNativeCall();
+        return result;
+      },
+    } as unknown as Connection;
+  }
+
+  it("rejects raw CHECKPOINT at every public generic string entry point", async () => {
+    const rejectedStatements = [
+      "  CHECKPOINT;  ",
+      ";; CHECKPOINT;",
+      "/* leading block comment */ CHECKPOINT;",
+      "; /* block */ // line\n CHECKPOINT; RETURN 1",
+      "MATCH (a)--(b); CHECKPOINT",
+      "CHECKPOINT; MATCH (n) RETURN n",
+      "RETURN 1 AS value; CHECKPOINT",
+      "RETURN 1 AS `a\\`; CHECKPOINT; // scanner-close `",
+      "RETURN 1; /* comment ; CHECKPOINT */ CHECKPOINT",
+      "RETURN 1; // comment ; CHECKPOINT\r\n CHECKPOINT",
+      "// leading line comment\nCHECKPOINT",
+      "// leading line comment\r\nCHECKPOINT",
+      "// leading line comment\rCHECKPOINT",
+      "/* unterminated leading block comment\nCHECKPOINT",
+      "RETURN 1; /* unterminated comment ; CHECKPOINT",
+      "RETURN 'unterminated; CHECKPOINT",
+      'RETURN "unterminated; CHECKPOINT',
+      "RETURN `unterminated; CHECKPOINT",
+    ];
+
+    for (const helper of genericStringHelpers) {
+      for (const statement of rejectedStatements) {
+        let nativeCalls = 0;
+        const conn = makeGenericConnection(() => {
+          nativeCalls += 1;
+        });
+
+        await assert.rejects(
+          helper.run(conn, statement),
+          /CHECKPOINT|unterminated/i,
+          `${helper.name} should reject ${JSON.stringify(statement)}`,
+        );
+        assert.equal(
+          nativeCalls,
+          0,
+          `${helper.name} must reject before calling the native driver`,
+        );
+      }
+    }
+  });
+
+  it("allows quoted and commented CHECKPOINT text at every public entry point", async () => {
+    const allowedStatements = [
+      "RETURN '; CHECKPOINT' AS value",
+      'RETURN "; CHECKPOINT" AS value',
+      "RETURN `; CHECKPOINT`",
+      "RETURN 1 AS `a\\b; CHECKPOINT`",
+      "RETURN 1 AS `a``; CHECKPOINT`",
+      "RETURN 'escaped '' ; CHECKPOINT' AS value",
+      "RETURN '// ; CHECKPOINT' AS value; RETURN 2",
+      "RETURN 1; /* ; CHECKPOINT */ RETURN 2",
+      "RETURN 1; // ; CHECKPOINT\r\n RETURN 2",
+      "// ; CHECKPOINT at EOF",
+    ];
+
+    for (const helper of genericStringHelpers) {
+      for (const statement of allowedStatements) {
+        let nativeCalls = 0;
+        const conn = makeGenericConnection(() => {
+          nativeCalls += 1;
+        });
+
+        await helper.run(conn, statement);
+        assert.ok(
+          nativeCalls > 0,
+          `${helper.name} should admit ${JSON.stringify(statement)}`,
+        );
+      }
+    }
+  });
 
   it("prepare + execute round-trip caches statements and binds params", async () => {
     const calls: Array<{ prepared: string; params: Record<string, unknown> }> =

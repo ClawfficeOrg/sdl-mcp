@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { finished } from "node:stream/promises";
 
-import { execDdl } from "../../db/ladybug-core.js";
+import { withShadowLadybugDatabase } from "../../db/ladybug-database-lifecycle.js";
 import {
   copyProviderFirstArtifact,
   readProviderFirstShadowDbCounts,
@@ -445,9 +445,11 @@ async function loadProviderFirstShadowDb(params: {
   try {
     await rm(params.shadowDbPath, { recursive: true, force: true });
     const kuzu = await import("kuzu");
-    const db = new kuzu.Database(params.shadowDbPath);
-    const conn = new kuzu.Connection(db);
-    try {
+    return await withShadowLadybugDatabase(
+      kuzu.Database,
+      kuzu.Connection,
+      params.shadowDbPath,
+      async (conn) => {
       await createBaseSchema(conn);
       await copyProviderFirstArtifact(conn, "Repo", params.artifacts.repos, CSV_NULL_SENTINEL);
       await copyProviderFirstArtifact(conn, "File", params.artifacts.files, CSV_NULL_SENTINEL);
@@ -460,7 +462,6 @@ async function loadProviderFirstShadowDb(params: {
       const secondaryIndexes = await createSecondaryIndexes(conn);
       const actualCounts = await readProviderFirstShadowDbCounts(conn);
       validateShadowDbCounts(actualCounts, params.expectedCounts);
-      await execDdl(conn, "CHECKPOINT");
       return {
         status: "loaded",
         path: normalizePath(params.shadowDbPath),
@@ -470,10 +471,8 @@ async function loadProviderFirstShadowDb(params: {
         loadedAt: new Date().toISOString(),
         reasons: shadowDbLoadReasons(secondaryIndexes),
       };
-    } finally {
-      await conn.close().catch(() => {});
-      await db.close().catch(() => {});
-    }
+      },
+    );
   } catch (err) {
     await rm(params.shadowDbPath, { recursive: true, force: true }).catch(
       () => {},

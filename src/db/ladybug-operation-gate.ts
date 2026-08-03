@@ -179,6 +179,36 @@ async function withLadybugOperation<T>(
   return runRoot(admission, task);
 }
 
+/**
+ * Capture the active admission for work that another queue invokes later.
+ * The nested lease keeps plain callbacks covered and restores the gate context
+ * for DB helpers called from a dequeued callback.
+ */
+export function bindCurrentLadybugOperation<T>(
+  task: () => Promise<T>,
+): () => Promise<T> {
+  const capturedLease = operationContext.getStore();
+  if (!capturedLease?.active) return task;
+
+  return () => {
+    if (!capturedLease.active) {
+      throw new DatabaseError(
+        "Captured Ladybug operation expired before queued work started",
+      );
+    }
+    return runLease(capturedLease.admission, task);
+  };
+}
+
+export function getCurrentLadybugOperationMode(): OperationMode | undefined {
+  const currentLease = operationContext.getStore();
+  return currentLease?.active ? currentLease.admission.mode : undefined;
+}
+
+export function hasCurrentExclusiveLadybugOperation(): boolean {
+  return getCurrentLadybugOperationMode() === "exclusive";
+}
+
 export function withSharedLadybugOperation<T>(
   task: () => Promise<T>,
   timeoutMs?: number,
@@ -191,4 +221,22 @@ export function withExclusiveLadybugOperation<T>(
   timeoutMs?: number,
 ): Promise<T> {
   return withLadybugOperation("exclusive", task, timeoutMs);
+}
+
+/**
+ * Queue a new exclusive root even when the caller currently owns a shared
+ * admission. The acquisition is created while explicitly outside the current
+ * AsyncLocalStorage store, so writer preference starts synchronously.
+ *
+ * Callers inside shared work must not await this promise until that shared root
+ * has fully unwound, or they would wait on their own admission.
+ */
+export function queueExclusiveLadybugOperation<T>(
+  task: () => Promise<T>,
+  timeoutMs?: number,
+): Promise<T> {
+  return operationContext.exit(() => {
+    const admission = acquire("exclusive", timeoutMs);
+    return admission.then((exclusive) => runRoot(exclusive, task));
+  });
 }

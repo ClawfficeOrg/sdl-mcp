@@ -117,17 +117,19 @@ Each entry configures one repository.
 | `ignore`                    | `string[]`         | See below               | Glob patterns excluded from indexing                                                    |
 | `languages`                 | `string[]`         | Core built-ins          | `ts`, `tsx`, `js`, `jsx`, `py`, `go`, `java`, `cs`, `c`, `cpp`, `php`, `rs`, `kt`, `sh`, `powershell`, `ruby`, `lua`, `dart`, `swift`, `groovy`, `perl`, `r`, `elixir`, `fsharp`, `fortran`, `haskell` |
 | `maxFileBytes`              | `number`           | `2000000`               | Files larger than this are skipped                                                      |
-| `postIndexSessionTimeoutMs` | `number`           | `900000`                | `1000-86400000`. Hard timeout for post-index finalization writes after pass-1/pass-2    |
+| `postIndexSessionTimeoutMs` | `number`           | `900000`                | `1000-86400000`. Soft deadline for post-index finalization after pass-1/pass-2          |
 | `includeNodeModulesTypes`   | `boolean`          | `true`                  | TypeScript-only helper for `@types/*` resolution                                        |
 | `packageJsonPath`           | `string \| null`   | `null`                  | Manual package root override                                                            |
 | `tsconfigPath`              | `string \| null`   | `null`                  | Manual `tsconfig.json` override                                                         |
 | `workspaceGlobs`            | `string[] \| null` | `null`                  | Monorepo workspace package discovery                                                    |
 | `memory`                    | object             | Omitted                 | Per-repo override for the top-level memory settings                                     |
 
-Use `postIndexSessionTimeoutMs` when large repositories spend longer than
-15 minutes in finalization work such as embedding writes or deferred retrieval
-index builds. It is deliberately scoped to the post-index write session, not
-the whole scan/parse/pass-2 runtime.
+Use `postIndexSessionTimeoutMs` to record and log when post-index
+finalization exceeds the configured deadline. The deadline cannot cancel
+ongoing work: the session retains its write slot and LadybugDB operation
+admission, and the caller waits until the body settles. Consequently, this
+value does not bound total finalization time. It applies only after
+scan/parse/pass-2 work.
 
 Default `ignore` patterns:
 

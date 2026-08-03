@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 
 import { DatabaseError } from "../../dist/domain/errors.js";
 import {
+  bindCurrentLadybugOperation,
+  getCurrentLadybugOperationMode,
+  queueExclusiveLadybugOperation,
   withExclusiveLadybugOperation,
   withSharedLadybugOperation,
 } from "../../dist/db/ladybug-operation-gate.js";
@@ -73,6 +76,45 @@ describe("Ladybug operation gate", { timeout: 5_000 }, () => {
     assert.deepStrictEqual(order, ["shared-1", "exclusive", "shared-2"]);
   });
 
+  it("queues a fresh exclusive root from shared work before later shared roots", async () => {
+    const sharedEntered = deferred<void>();
+    const releaseShared = deferred<void>();
+    const exclusiveEntered = deferred<void>();
+    const releaseExclusive = deferred<void>();
+    const exclusiveQueued = deferred<void>();
+    const order: string[] = [];
+    let queuedExclusive!: Promise<void>;
+
+    const shared = withSharedLadybugOperation(async () => {
+      order.push("shared");
+      sharedEntered.resolve();
+      queuedExclusive = queueExclusiveLadybugOperation(async () => {
+        order.push("fresh-exclusive");
+        exclusiveEntered.resolve();
+        await releaseExclusive.promise;
+      });
+      exclusiveQueued.resolve();
+      await releaseShared.promise;
+    });
+
+    await Promise.all([sharedEntered.promise, exclusiveQueued.promise]);
+    const laterShared = withSharedLadybugOperation(async () => {
+      order.push("later-shared");
+    });
+
+    releaseShared.resolve();
+    await exclusiveEntered.promise;
+    assert.deepStrictEqual(order, ["shared", "fresh-exclusive"]);
+
+    releaseExclusive.resolve();
+    await Promise.all([shared, queuedExclusive, laterShared]);
+    assert.deepStrictEqual(order, [
+      "shared",
+      "fresh-exclusive",
+      "later-shared",
+    ]);
+  });
+
   it("serializes exclusive roots", async () => {
     const firstEntered = deferred<void>();
     const releaseFirst = deferred<void>();
@@ -124,6 +166,26 @@ describe("Ladybug operation gate", { timeout: 5_000 }, () => {
     releaseNested.resolve();
     await Promise.all([outer, queuedExclusive]);
     assert.strictEqual(outerSettled, true);
+  });
+
+  it("reports the current root mode through nested leases", async () => {
+    assert.equal(getCurrentLadybugOperationMode(), undefined);
+
+    await withSharedLadybugOperation(async () => {
+      assert.equal(getCurrentLadybugOperationMode(), "shared");
+      await withSharedLadybugOperation(async () => {
+        assert.equal(getCurrentLadybugOperationMode(), "shared");
+      });
+    });
+
+    await withExclusiveLadybugOperation(async () => {
+      assert.equal(getCurrentLadybugOperationMode(), "exclusive");
+      await withSharedLadybugOperation(async () => {
+        assert.equal(getCurrentLadybugOperationMode(), "exclusive");
+      });
+    });
+
+    assert.equal(getCurrentLadybugOperationMode(), undefined);
   });
 
   it("reuses exclusive admission for nested shared work", async () => {
@@ -222,5 +284,39 @@ describe("Ladybug operation gate", { timeout: 5_000 }, () => {
     await exclusive;
     await detached;
     assert.strictEqual(detachedStarted, true);
+  });
+
+  it("re-enters a captured admission for a queued callback", async () => {
+    const callbackCaptured = deferred<void>();
+    const callbackEntered = deferred<void>();
+    const releaseCallback = deferred<void>();
+    let runQueued!: () => Promise<void>;
+
+    const outer = withSharedLadybugOperation(async () => {
+      runQueued = bindCurrentLadybugOperation(async () => {
+        await withSharedLadybugOperation(async () => {
+          callbackEntered.resolve();
+          await releaseCallback.promise;
+        });
+      });
+      callbackCaptured.resolve();
+      await callbackEntered.promise;
+    });
+    await callbackCaptured.promise;
+
+    let exclusiveEntered = false;
+    const exclusive = withExclusiveLadybugOperation(async () => {
+      exclusiveEntered = true;
+    });
+    const queued = new Promise<void>((resolve, reject) => {
+      setImmediate(() => void runQueued().then(resolve, reject));
+    });
+
+    await callbackEntered.promise;
+    await nextTurn();
+    assert.strictEqual(exclusiveEntered, false);
+    releaseCallback.resolve();
+    await Promise.all([outer, queued, exclusive]);
+    assert.strictEqual(exclusiveEntered, true);
   });
 });

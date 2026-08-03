@@ -12,6 +12,10 @@ import { logger } from "../util/logger.js";
 import { DatabaseError } from "../domain/errors.js";
 import { ConcurrencyLimiter } from "../util/concurrency.js";
 import { getObservabilityTap } from "../observability/event-tap.js";
+import {
+  withExclusiveLadybugOperation,
+  withSharedLadybugOperation,
+} from "./ladybug-operation-gate.js";
 
 const MAX_PREPARED_STATEMENT_CACHE_SIZE = 200;
 
@@ -273,22 +277,20 @@ export function runExclusive<T>(
   conn: Connection,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return getConnMutex(conn).run(() =>
-    withConnWatchdog(conn, "runExclusive", fn),
+  return withSharedLadybugOperation(() =>
+    getConnMutex(conn).run(() =>
+      withConnWatchdog(conn, "runExclusive", fn),
+    ),
   );
 }
 
 /**
- * Execute a DDL statement (CREATE/ALTER/DROP TABLE, CREATE INDEX, etc.).
- *
- * DDL cannot be prepared on LadybugDB, so this bypasses the prepared-statement
- * cache and routes through `conn.query()` directly. The call participates in
- * the per-connection mutex (preventing concurrent native execute() races) and
- * the watchdog (so a hung DDL flags the conn stuck for the read pool).
- *
- * The result handle is always closed in a try/finally to avoid handle leaks.
+ * Execute non-prepared DDL while owning the native result through close.
  */
-export async function execDdl(conn: Connection, ddl: string): Promise<void> {
+async function execDdlAdmitted(
+  conn: Connection,
+  ddl: string,
+): Promise<void> {
   const callSite = captureCallSite();
   await getConnMutex(conn).run(() =>
     withConnWatchdog(
@@ -298,12 +300,12 @@ export async function execDdl(conn: Connection, ddl: string): Promise<void> {
         const result = await conn.query(ddl);
         try {
           if (Array.isArray(result)) {
-            for (const r of result) r.close();
+            for (const item of result) item.close();
           } else {
             result.close();
           }
         } catch {
-          // Best-effort close — DDL completed successfully.
+          // Best-effort close; the DDL completed successfully.
         }
       },
       { statement: ddl, callSite },
@@ -311,27 +313,157 @@ export async function execDdl(conn: Connection, ddl: string): Promise<void> {
   );
 }
 
+type QuotedRegion = "'" | '"' | "`";
+
+interface StatementScan {
+  checkpointFound: boolean;
+  unterminated?: "block comment" | "single-quoted string" | "double-quoted string" | "backtick identifier";
+}
+
+function quoteDescription(quote: QuotedRegion): NonNullable<StatementScan["unterminated"]> {
+  if (quote === "'") return "single-quoted string";
+  if (quote === '"') return "double-quoted string";
+  return "backtick identifier";
+}
+
+function isIdentifierStart(char: string): boolean {
+  return /[A-Za-z_]/u.test(char);
+}
+
+function isIdentifierPart(char: string | undefined): boolean {
+  return char !== undefined && /[A-Za-z0-9_]/u.test(char);
+}
+
 /**
- * Execute a `CALL <stored_proc>(...)` that cannot be parameterised
- * (e.g. CREATE_VECTOR_INDEX, DROP_VECTOR_INDEX, CREATE_FTS_INDEX, SHOW_INDEXES).
- *
- * Like `execDdl` it bypasses the prepared-statement cache, holds the per-conn
- * mutex, and runs through the watchdog. Returns the QueryResult so callers
- * that need to read rows (e.g. SHOW_INDEXES) can iterate; the handle MUST be
- * closed by the caller via `.close()` once consumed. Prefer
- * `queryStoredProcAll` for new row-returning call sites so result
- * materialisation and close both stay inside the connection mutex.
+ * Inspect each top-level statement without parsing Cypher. Semicolons only split
+ * statements outside strings, identifiers, and comments, so CHECKPOINT text in
+ * data cannot be mistaken for an executable command.
  */
-export async function execStoredProcRaw(
-  conn: Connection,
-  callQuery: string,
-): Promise<QueryResult> {
-  const callSite = captureCallSite();
-  return getConnMutex(conn).run(() =>
-    withConnWatchdog(conn, "execStoredProc", () => conn.query(callQuery), {
-      statement: callQuery,
-      callSite,
-    }),
+function scanStatementPrefixes(statement: string): StatementScan {
+  let cursor = 0;
+  let awaitingFirstToken = true;
+  let quote: QuotedRegion | undefined;
+  let inBlockComment = false;
+  let inLineComment = false;
+
+  while (cursor < statement.length) {
+    const char = statement[cursor];
+    if (char === undefined) break;
+
+    if (quote !== undefined) {
+      if (char === "\\" && quote !== "`") {
+        cursor += Math.min(2, statement.length - cursor);
+        continue;
+      }
+      if (char === quote) {
+        if (statement[cursor + 1] === quote) {
+          cursor += 2;
+          continue;
+        }
+        quote = undefined;
+      }
+      cursor += 1;
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (statement.startsWith("*/", cursor)) {
+        inBlockComment = false;
+        cursor += 2;
+      } else {
+        cursor += 1;
+      }
+      continue;
+    }
+
+    if (inLineComment) {
+      if (char === "\r" || char === "\n") {
+        inLineComment = false;
+        cursor += char === "\r" && statement[cursor + 1] === "\n" ? 2 : 1;
+      } else {
+        cursor += 1;
+      }
+      continue;
+    }
+
+    if (statement.startsWith("/*", cursor)) {
+      inBlockComment = true;
+      cursor += 2;
+      continue;
+    }
+    if (statement.startsWith("//", cursor)) {
+      inLineComment = true;
+      cursor += 2;
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      awaitingFirstToken = false;
+      cursor += 1;
+      continue;
+    }
+
+    if (char === ";") {
+      awaitingFirstToken = true;
+      cursor += 1;
+      continue;
+    }
+
+    if (char.trim() === "") {
+      cursor += 1;
+      continue;
+    }
+
+    if (awaitingFirstToken && isIdentifierStart(char)) {
+      let tokenEnd = cursor + 1;
+      while (isIdentifierPart(statement[tokenEnd])) tokenEnd += 1;
+      if (statement.slice(cursor, tokenEnd).toUpperCase() === "CHECKPOINT") {
+        return { checkpointFound: true };
+      }
+      awaitingFirstToken = false;
+      cursor = tokenEnd;
+      continue;
+    }
+
+    awaitingFirstToken = false;
+    cursor += 1;
+  }
+
+  if (quote !== undefined) {
+    return {
+      checkpointFound: false,
+      unterminated: quoteDescription(quote),
+    };
+  }
+  if (inBlockComment) {
+    return { checkpointFound: false, unterminated: "block comment" };
+  }
+  return { checkpointFound: false };
+}
+
+function rawCheckpointError(statement: string): DatabaseError | undefined {
+  const scan = scanStatementPrefixes(statement);
+  if (scan.unterminated) {
+    return new DatabaseError(
+      `Raw query rejected due to an unterminated ${scan.unterminated}`,
+    );
+  }
+  if (!scan.checkpointFound) return undefined;
+  return new DatabaseError(
+    "Raw CHECKPOINT execution is not allowed; use the gated checkpoint path",
+  );
+}
+
+export async function execDdl(conn: Connection, ddl: string): Promise<void> {
+  const checkpointError = rawCheckpointError(ddl);
+  if (checkpointError) throw checkpointError;
+  await withSharedLadybugOperation(() => execDdlAdmitted(conn, ddl));
+}
+
+export function execCheckpoint(conn: Connection): Promise<void> {
+  return withExclusiveLadybugOperation(() =>
+    execDdlAdmitted(conn, "CHECKPOINT"),
   );
 }
 
@@ -340,7 +472,7 @@ export async function execStoredProcRaw(
  * releasing the per-connection mutex. Stored procedures cannot always be
  * prepared by LadybugDB, so callers pass a fully validated literal query.
  */
-export async function queryStoredProcAll<T>(
+async function queryStoredProcAllAdmitted<T>(
   conn: Connection,
   callQuery: string,
 ): Promise<T[]> {
@@ -383,12 +515,22 @@ export async function queryStoredProcAll<T>(
     ),
   );
 }
+export function queryStoredProcAll<T>(
+  conn: Connection,
+  callQuery: string,
+): Promise<T[]> {
+  const checkpointError = rawCheckpointError(callQuery);
+  if (checkpointError) return Promise.reject(checkpointError);
+  return withSharedLadybugOperation(() =>
+    queryStoredProcAllAdmitted<T>(conn, callQuery),
+  );
+}
 
 /**
  * Side-effect-only stored procedure variant — closes the handle before
  * releasing the per-connection mutex.
  */
-export async function execStoredProc(
+async function execStoredProcAdmitted(
   conn: Connection,
   callQuery: string,
 ): Promise<void> {
@@ -428,6 +570,16 @@ export async function execStoredProc(
       },
       { statement: callQuery, callSite },
     ),
+  );
+}
+export function execStoredProc(
+  conn: Connection,
+  callQuery: string,
+): Promise<void> {
+  const checkpointError = rawCheckpointError(callQuery);
+  if (checkpointError) return Promise.reject(checkpointError);
+  return withSharedLadybugOperation(() =>
+    execStoredProcAdmitted(conn, callQuery),
   );
 }
 
@@ -528,6 +680,9 @@ export async function getPreparedStatement(
   conn: Connection,
   statement: string,
 ): Promise<PreparedStatement> {
+  const checkpointError = rawCheckpointError(statement);
+  if (checkpointError) throw checkpointError;
+
   let cache = preparedStatementCacheByConn.get(conn);
   if (!cache) {
     cache = new Map<string, PreparedStatement>();
@@ -578,7 +733,7 @@ async function execute(
   }
 }
 
-export async function queryAll<T>(
+async function queryAllAdmitted<T>(
   conn: Connection,
   statement: string,
   params: Record<string, unknown> = {},
@@ -617,17 +772,30 @@ export async function queryAll<T>(
     ),
   );
 }
+export function queryAll<T>(
+  conn: Connection,
+  statement: string,
+  params: Record<string, unknown> = {},
+): Promise<T[]> {
+  const checkpointError = rawCheckpointError(statement);
+  if (checkpointError) return Promise.reject(checkpointError);
+  return withSharedLadybugOperation(() =>
+    queryAllAdmitted<T>(conn, statement, params),
+  );
+}
 
 export async function querySingle<T>(
   conn: Connection,
   statement: string,
   params: Record<string, unknown> = {},
 ): Promise<T | null> {
+  const checkpointError = rawCheckpointError(statement);
+  if (checkpointError) throw checkpointError;
   const rows = await queryAll<T>(conn, statement, params);
   return rows.length > 0 ? rows[0] : null;
 }
 
-export async function exec(
+async function execAdmitted(
   conn: Connection,
   statement: string,
   params: Record<string, unknown> = {},
@@ -658,6 +826,18 @@ export async function exec(
       },
       { statement, callSite },
     ),
+  );
+}
+export function exec(
+  conn: Connection,
+  statement: string,
+  params: Record<string, unknown> = {},
+): Promise<void> {
+  const checkpointError = rawCheckpointError(statement);
+  if (checkpointError) return Promise.reject(checkpointError);
+
+  return withSharedLadybugOperation(() =>
+    execAdmitted(conn, statement, params),
   );
 }
 
@@ -768,7 +948,7 @@ export interface TransactionTimingOptions {
 }
 
 /** Execute a callback against one stable, non-writing database snapshot. */
-export async function withReadOnlyTransaction<T>(
+async function withReadOnlyTransactionAdmitted<T>(
   conn: Connection,
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -790,8 +970,16 @@ export async function withReadOnlyTransaction<T>(
     throw err;
   }
 }
+export function withReadOnlyTransaction<T>(
+  conn: Connection,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withSharedLadybugOperation(() =>
+    withReadOnlyTransactionAdmitted(conn, fn),
+  );
+}
 
-export async function withTransaction<T>(
+async function withTransactionAdmitted<T>(
   conn: Connection,
   fn: (conn: Connection) => Promise<T>,
   options?: TransactionTimingOptions,
@@ -887,4 +1075,13 @@ export async function withTransaction<T>(
       }
     }
   });
+}
+export function withTransaction<T>(
+  conn: Connection,
+  fn: (conn: Connection) => Promise<T>,
+  options?: TransactionTimingOptions,
+): Promise<T> {
+  return withSharedLadybugOperation(() =>
+    withTransactionAdmitted(conn, fn, options),
+  );
 }
