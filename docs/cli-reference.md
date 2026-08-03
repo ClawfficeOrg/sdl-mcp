@@ -167,9 +167,9 @@ operator-authorized cutover:
 npm run qualify:ladybug -- --source /absolute/path/to/offline-source.lbug --config /absolute/path/to/sdlmcp.config.json --expect-version 0.19.0
 ```
 
-The command rejects active/source aliases, verifies the original offline
-family never changes, and retains a failed diagnostic clone. A successful
-qualification deletes its disposable clone.
+The command rejects an active database family and any filesystem alias of that
+family, verifies the original offline family never changes, and retains a failed
+diagnostic clone. A successful qualification deletes its disposable clone.
 
 Use this exact cutover sequence:
 
