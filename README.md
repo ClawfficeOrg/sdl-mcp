@@ -12,7 +12,8 @@
 ![npm version](https://img.shields.io/npm/v/sdl-mcp.svg?style=for-the-badge)
 ![npm downloads](https://img.shields.io/npm/dm/sdl-mcp.svg?style=for-the-badge)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/w/GlitterKill/sdl-mcp?style=for-the-badge)<br/>
-[![RoastMyCode: A](https://roastmycode.ai/badge/GlitterKill/sdl-mcp)](https://roastmycode.ai/roast/latest/GlitterKill/sdl-mcp)
+[![RoastMyCode: A](https://roastmycode.ai/badge/GlitterKill/sdl-mcp)](https://roastmycode.ai/roast/latest/GlitterKill/sdl-mcp) [![CI](https://github.com/GlitterKill/sdl-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/GlitterKill/sdl-mcp/actions/workflows/ci.yml) ![Supported Node.js](https://img.shields.io/badge/node.js-%3E%3D24-green?link=https%3A%2F%2Fnodejs.org%2Fen)
+
 </div>
 
 ## Work from the symbols that matter
@@ -20,6 +21,8 @@
 SDL-MCP indexes a repository into a symbol graph and gives coding agents a controlled path from compact metadata to source code. Instead of starting with full files, an agent can search symbols, inspect cards, build a task-scoped slice, and request a bounded code window only when it needs one.
 
 The result is a smaller, more deliberate context surface for debugging, reviews, implementation work, and repository exploration. SDL-MCP runs locally and supports the Model Context Protocol over stdio or HTTP.
+
+<br />
 
 ## Start in a few minutes
 
@@ -41,9 +44,9 @@ sdl-mcp serve --stdio
 
 Use `sdl-mcp init -y --auto-index` for non-interactive setup. The [Getting Started guide](./docs/getting-started.md) covers the setup wizard, supported clients, HTTP transport, and configuration examples.
 
-## A controlled retrieval loop
+<br />
 
-![Repository indexing and task-shaped retrieval flow](./docs/readme-assets/readme-how-it-works-v3.webp)
+## A controlled retrieval loop
 
 1. Index the repository into symbols, relationships, and compact metadata.
 2. Start with symbol search, task-shaped context, or graph slicing.
@@ -51,7 +54,7 @@ Use `sdl-mcp init -y --auto-index` for non-interactive setup. The [Getting Start
 
 The Iris Gate Ladder makes the escalation explicit. Cards, skeletons, hot paths, and policy-gated source windows let an agent ask for the least code that can answer its question.
 
-![Iris Gate Ladder showing progressive context views](./docs/readme-assets/readme-iris-ladder-v3.webp)
+<br />
 
 ## Choose the tool surface that fits the client
 
@@ -66,21 +69,21 @@ The generated [tool inventory](./docs/generated/tool-inventory.md) is the source
 
 Code Mode provides a compact task-oriented surface. Gateway mode groups the regular actions into `sdl.agent`, `sdl.code`, `sdl.query`, and `sdl.repo`. The [MCP Tools Reference](./docs/mcp-tools-reference.md) explains requests and responses for the installed surface.
 
+<br />
+
 ## Build context from repository structure
 
 ### Symbol cards
 
 Each indexed symbol has a compact card with its identity, signature, summary, relationships, and other retrieval metadata. Cards give an agent a place to begin without opening a full source file.
 
-![Symbol card surrounded by connected repository context](./docs/readme-assets/readme-symbol-card-v3.webp)
-
 ### Graph slicing
 
 Graph slicing follows repository relationships rather than directory boundaries. Give SDL-MCP a task or a starting symbol and it returns a budgeted subgraph that can be refreshed or expanded through spillover.
 
-![Task seed resolving to a selected dependency subgraph and spillover frontier](./docs/readme-assets/readme-graph-slicing-v3.webp)
-
 [Read about graph slicing](./docs/feature-deep-dives/graph-slicing.md) · [Read about task-shaped context](./docs/feature-deep-dives/agent-context.md)
+
+<br />
 
 ## Understand change and work against current code
 
@@ -88,45 +91,43 @@ Graph slicing follows repository relationships rather than directory boundaries.
 
 SDL-MCP can compare indexed versions, identify changed symbols, and trace affected relationships. `sdl.pr.risk.analyze` packages change evidence and test recommendations for pull-request review.
 
-![Changed artifact expanding into semantic facets, impact graph, and validation targets](./docs/readme-assets/readme-delta-packs-v3.webp)
-
 ### Live indexing
 
 Draft-buffer updates can appear in a live overlay before the underlying file is saved. That lets retrieval work from the code an agent is editing instead of only the last durable index.
 
-![Draft change moving through a live overlay into a durable graph and query results](./docs/readme-assets/readme-live-indexing-v3.webp)
-
 [Read about delta packs](./docs/feature-deep-dives/delta-blast-radius.md) · [Read about live indexing](./docs/feature-deep-dives/live-indexing.md)
+
+<br />
 
 ## Use compiler and provider facts when they are available
 
 SDL-MCP uses tree-sitter for repository structure and can ingest SCIP and language-provider facts through provider-first indexing. This adds precise cross-references where a provider covers the file and falls back to the regular path for files it does not cover.
 
-![Source artifacts normalized into provider facts and repository graph relationships](./docs/readme-assets/readme-scip-provider-first-v3.webp)
-
 [Read about SCIP integration](./docs/feature-deep-dives/scip-integration.md) · [Read about provider-first indexing](./docs/feature-deep-dives/provider-first-indexing.md)
+
+<br />
 
 ## Keep useful knowledge with the work
 
 Development memories are opt-in. When enabled, they store decisions and task notes with repository links so later work can retrieve them alongside the relevant context. Memory behavior and storage rules are documented in the [Memory Protocol](./docs/memory-protocol.md).
 
-![Decision artifacts flowing through a protected memory vault, graph context, and query results](./docs/readme-assets/readme-development-memories-v3.webp)
+<br />
 
 ## Keep tool registration compact
 
 Gateway mode reduces the visible regular action surface to four namespace tools while preserving server-side validation and routing. Use it when a client benefits from fewer tool choices; use the flat surface when direct tool names are more useful.
 
-![Many abstract action tiles compressed through a gateway into four namespace panels](./docs/readme-assets/readme-tool-gateway-v3.webp)
-
 [Read about the Tool Gateway](./docs/feature-deep-dives/tool-gateway.md) · [Read about Code Mode](./docs/feature-deep-dives/code-mode.md)
+
+<br />
 
 ## Operate the repository with guardrails
 
 Policy settings govern raw source windows. The runtime execution surface also applies configured executable, working-directory, environment, concurrency, and timeout controls. For HTTP deployments, SDL-MCP includes the graph viewer and observability dashboard.
 
-![SDL-MCP architecture linking clients, policy, indexing, graph storage, and bounded outputs](./docs/readme-assets/readme-system-architecture-v3.webp)
-
 [Governance and policy](./docs/feature-deep-dives/governance-policy.md) · [Runtime execution](./docs/feature-deep-dives/runtime-execution.md) · [Graph viewer](./docs/feature-deep-dives/graph-viewer.md) · [Observability dashboard](./docs/feature-deep-dives/observability-dashboard.md)
+
+<br />
 
 ## Documentation map
 
