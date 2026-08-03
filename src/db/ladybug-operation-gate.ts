@@ -3,6 +3,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseError } from "../domain/errors.js";
 
 type OperationMode = "shared" | "exclusive";
+type OperationKind = "ordinary" | "initialization" | "close";
+
+export const MAX_LADYBUG_OPERATION_WAITERS = 256;
 
 interface Admission {
   mode: OperationMode;
@@ -18,6 +21,7 @@ interface Lease {
 
 interface Waiter {
   mode: OperationMode;
+  kind: OperationKind;
   resolve: (admission: Admission) => void;
   reject: (error: DatabaseError) => void;
   timeout?: NodeJS.Timeout;
@@ -28,6 +32,7 @@ const waiters: Waiter[] = [];
 
 let activeShared = 0;
 let activeExclusive = false;
+let lifecycleState: "open" | "closing" | "closed" = "open";
 
 function createAdmission(mode: OperationMode): Admission {
   let resolveDrained!: () => void;
@@ -57,11 +62,29 @@ function markAdmitted(mode: OperationMode): Admission {
   return createAdmission(mode);
 }
 
-function admit(waiter: Waiter): void {
+function clearWaiterTimer(waiter: Waiter): void {
   if (waiter.timeout !== undefined) {
     clearTimeout(waiter.timeout);
+    waiter.timeout = undefined;
   }
+}
+
+function admit(waiter: Waiter): void {
+  clearWaiterTimer(waiter);
   waiter.resolve(markAdmitted(waiter.mode));
+}
+
+function rejectQueuedOperationsForClose(): void {
+  const error = new DatabaseError(
+    "LadybugDB is closing; queued operation cancelled",
+  );
+  for (let index = waiters.length - 1; index >= 0; index--) {
+    const waiter = waiters[index];
+    if (waiter.kind === "close") continue;
+    waiters.splice(index, 1);
+    clearWaiterTimer(waiter);
+    waiter.reject(error);
+  }
 }
 
 function drainWaiters(): void {
@@ -87,13 +110,30 @@ function drainWaiters(): void {
 function acquire(
   mode: OperationMode,
   timeoutMs?: number,
+  kind: OperationKind = "ordinary",
 ): Promise<Admission> {
+  if (kind !== "close") {
+    if (lifecycleState === "closing") {
+      return Promise.reject(new DatabaseError("LadybugDB is closing"));
+    }
+    if (lifecycleState === "closed" && kind === "ordinary") {
+      return Promise.reject(new DatabaseError("LadybugDB is closed"));
+    }
+  }
+
   if (canAdmit(mode)) {
     return Promise.resolve(markAdmitted(mode));
   }
+  if (waiters.length >= MAX_LADYBUG_OPERATION_WAITERS) {
+    return Promise.reject(
+      new DatabaseError(
+        `LadybugDB operation waiter limit reached (${MAX_LADYBUG_OPERATION_WAITERS})`,
+      ),
+    );
+  }
 
   return new Promise<Admission>((resolve, reject) => {
-    const waiter: Waiter = { mode, resolve, reject };
+    const waiter: Waiter = { mode, kind, resolve, reject };
     waiters.push(waiter);
 
     if (timeoutMs !== undefined) {
@@ -161,6 +201,7 @@ async function withLadybugOperation<T>(
   mode: OperationMode,
   task: () => Promise<T>,
   timeoutMs?: number,
+  kind: OperationKind = "ordinary",
 ): Promise<T> {
   const currentLease = operationContext.getStore();
   if (currentLease?.active) {
@@ -175,7 +216,7 @@ async function withLadybugOperation<T>(
     return runLease(currentLease.admission, task);
   }
 
-  const admission = await acquire(mode, timeoutMs);
+  const admission = await acquire(mode, timeoutMs, kind);
   return runRoot(admission, task);
 }
 
@@ -207,6 +248,41 @@ export function getCurrentLadybugOperationMode(): OperationMode | undefined {
 
 export function hasCurrentExclusiveLadybugOperation(): boolean {
   return getCurrentLadybugOperationMode() === "exclusive";
+}
+
+/**
+ * Fence new root work immediately, then close after active nested leases drain.
+ * A retained native handle keeps the gate in the closing state for close retry.
+ */
+export function withLadybugCloseOperation<T>(
+  task: () => Promise<T>,
+  isFullyClosed: () => boolean,
+): Promise<T> {
+  lifecycleState = "closing";
+  rejectQueuedOperationsForClose();
+  return withLadybugOperation("exclusive", task, undefined, "close").finally(
+    () => {
+      if (isFullyClosed()) lifecycleState = "closed";
+    },
+  );
+}
+
+/**
+ * Explicit initialization is the only root operation admitted after close.
+ * Nested DB helpers reuse this exclusive admission until initialization ends.
+ */
+export function withLadybugInitialization<T>(
+  task: () => Promise<T>,
+): Promise<T> {
+  return withLadybugOperation(
+    "exclusive",
+    task,
+    undefined,
+    "initialization",
+  ).then((result) => {
+    if (lifecycleState !== "closing") lifecycleState = "open";
+    return result;
+  });
 }
 
 export function withSharedLadybugOperation<T>(

@@ -32,6 +32,7 @@ import {
   QUALIFICATION_AUTHORITY_NONCE_ENV,
   QUALIFICATION_AUTHORITY_PATH_ENV,
   QUALIFICATION_AUTHORITY_VERSION,
+  QUALIFICATION_PHASE_NAMES,
 } from "../dist/db/ladybug-authority.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { resolveGraphDbPath } from "../dist/db/graph-db-path.js";
@@ -126,6 +127,14 @@ const QUALIFICATION_PHASES = [
     nodeStringScan: true,
   },
 ];
+if (
+  QUALIFICATION_PHASES.length !== QUALIFICATION_PHASE_NAMES.length ||
+  QUALIFICATION_PHASES.some(
+    ({ phase }, index) => phase !== QUALIFICATION_PHASE_NAMES[index],
+  )
+) {
+  throw new Error("Qualification phase plan is out of sync with authority allowlist");
+}
 const CHILD_RESULT_PREFIX = "LADYBUG_QUALIFICATION_RESULT ";
 const NO_QUALIFICATION_PHASE_FAILURE = Symbol("no phase failure");
 const require = createRequire(import.meta.url);

@@ -5,6 +5,8 @@ import { join } from "path";
 import { tmpdir } from "node:os";
 import type { Connection } from "kuzu";
 
+import { withLadybugInitialization } from "../../dist/db/ladybug-operation-gate.js";
+
 const testDbBase = join(tmpdir(), ".test-kuzu-db");
 
 let getLadybugDb: (dbPath?: string) => Promise<unknown>;
@@ -205,6 +207,69 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       }
     });
 
+    it("fences later opens while close waits for lazy initialization", async (t) => {
+      const testPath = getTestDbPath("lazy-init-close-fence");
+      const competingPath = getTestDbPath("lazy-init-close-fence-competing");
+      cleanupTestDb("lazy-init-close-fence");
+      cleanupTestDb("lazy-init-close-fence-competing");
+
+      const kuzu = await import("kuzu");
+      const initEntered = deferred();
+      const releaseInit = deferred();
+      t.mock.method(kuzu.Database.prototype, "init", async () => {
+        initEntered.resolve();
+        await releaseInit.promise;
+      });
+      t.mock.method(kuzu.Database.prototype, "close", async () => {});
+
+      const opening = getLadybugDb(testPath);
+      await initEntered.promise;
+      let closeSettled = false;
+      const close = closeLadybugDb().then(() => {
+        closeSettled = true;
+      });
+
+      const competingOpen = getLadybugDb(competingPath);
+      const competingInit = initLadybugDb(competingPath);
+      const observe = (operation: Promise<unknown>): Promise<string> =>
+        Promise.race([
+          operation.then(
+            () => "fulfilled",
+            (error: unknown) =>
+              error instanceof Error && /LadybugDB is closing/.test(error.message)
+                ? "rejected-closing"
+                : "rejected-other",
+          ),
+          new Promise<string>((resolve) =>
+            setImmediate(() => resolve("pending")),
+          ),
+        ]);
+
+      try {
+        assert.deepStrictEqual(
+          await Promise.all([observe(competingOpen), observe(competingInit)]),
+          ["rejected-closing", "rejected-closing"],
+        );
+        assert.strictEqual(closeSettled, false);
+
+        releaseInit.resolve();
+        await Promise.all([opening, close]);
+        assert.strictEqual(closeSettled, true);
+        await assert.rejects(getLadybugDb(), /LadybugDB is closed/);
+      } finally {
+        releaseInit.resolve();
+        await Promise.allSettled([
+          opening,
+          close,
+          competingOpen,
+          competingInit,
+        ]);
+        await closeLadybugDb();
+        cleanupTestDb("lazy-init-close-fence");
+        cleanupTestDb("lazy-init-close-fence-competing");
+      }
+    });
+
     it("fails closed without an open log when lazy native initialization rejects", async (t) => {
       const testPath = getTestDbPath("lazy-init-failure");
       cleanupTestDb("lazy-init-failure");
@@ -265,7 +330,7 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
         });
         await assert.rejects(
           getLadybugDb(competingPath),
-          /native ownership|close retry|family lease/iu,
+          /LadybugDB is closing|native ownership|close retry|family lease/iu,
         );
         assert.strictEqual(closeCalls, 1);
 
@@ -399,6 +464,50 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
         }
         await closeLadybugDb();
         cleanupTestDb("conn-no-thread-setter");
+      }
+    });
+
+    it("retains unpublished pool handles when initialization cleanup fails", async (t) => {
+      const testPath = getTestDbPath("pool-init-close-retry");
+      cleanupTestDb("pool-init-close-retry");
+      await getLadybugDb(testPath);
+
+      const kuzu = await import("kuzu");
+      const prototype = kuzu.Connection.prototype;
+      const originalSetThreads = prototype.setMaxNumThreadForExec;
+      const originalClose = prototype.close;
+      const constructed: Connection[] = [];
+      const closeAttempts = new Map<Connection, number>();
+      const setupFailure = new Error("pool-setup-failure-sentinel");
+
+      t.mock.method(
+        prototype,
+        "setMaxNumThreadForExec",
+        async function (this: Connection, threads: number) {
+          constructed.push(this);
+          if (constructed.length === 3) throw setupFailure;
+          await originalSetThreads.call(this, threads);
+        },
+      );
+      t.mock.method(prototype, "close", async function (this: Connection) {
+        const attempts = (closeAttempts.get(this) ?? 0) + 1;
+        closeAttempts.set(this, attempts);
+        if (this === constructed[0] && attempts === 1) {
+          throw new Error("pool-cleanup-close-failure-sentinel");
+        }
+        await originalClose.call(this);
+      });
+
+      try {
+        await assert.rejects(getLadybugConn(), /pool-setup-failure-sentinel/);
+        assert.strictEqual(closeAttempts.get(constructed[0]), 1);
+
+        await closeLadybugDb({ strict: true });
+        assert.strictEqual(closeAttempts.get(constructed[0]), 2);
+        assert.strictEqual(getLadybugDbPath(), null);
+      } finally {
+        await closeLadybugDb().catch(() => {});
+        cleanupTestDb("pool-init-close-retry");
       }
     });
   });
@@ -729,7 +838,7 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
         assert.strictEqual(getLadybugDbPath(), ownedPath);
         await assert.rejects(
           getLadybugDb(competingPath),
-          /native ownership|close retry|family lease/iu,
+          /LadybugDB is closing|native ownership|close retry|family lease/iu,
         );
         assert.strictEqual(closeCalls, 1);
 
@@ -743,32 +852,26 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       }
     });
 
-    it("strict-closes the source before a path switch can create the target", async (t) => {
+    it("requires callers to await close before switching database paths", async () => {
       const sourcePath = getTestDbPath("path-switch-source");
       const targetPath = getTestDbPath("path-switch-target");
       cleanupTestDb("path-switch-source");
       cleanupTestDb("path-switch-target");
       await initLadybugDb(sourcePath);
-
-      const kuzu = await import("kuzu");
-      const originalClose = kuzu.Database.prototype.close;
-      const closeFailure = new Error("path-switch-close-failure");
-      let closeCalls = 0;
-      t.mock.method(kuzu.Database.prototype, "close", async function () {
-        closeCalls += 1;
-        if (closeCalls === 1) throw closeFailure;
-        return originalClose.call(this);
-      });
+      const sourceOwnedPath = getLadybugDbPath();
 
       try {
         await assert.rejects(
           getLadybugDb(targetPath),
-          /path-switch-close-failure|native ownership|family lease/iu,
+          /await closeLadybugDb/u,
         );
+        assert.strictEqual(getLadybugDbPath(), sourceOwnedPath);
         assert.equal(existsSync(targetPath), false);
         assert.equal(existsSync(targetPath + ".sdl-family.lock"), false);
+
         await closeLadybugDb({ strict: true });
-        assert.equal(closeCalls, 2);
+        await getLadybugDb(targetPath);
+        assert.notStrictEqual(getLadybugDbPath(), sourceOwnedPath);
       } finally {
         await closeLadybugDb().catch(() => {});
         cleanupTestDb("path-switch-source");
@@ -970,6 +1073,10 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
 });
 
 describe("withReadOnlyTransaction", () => {
+  beforeEach(async () => {
+    await withLadybugInitialization(async () => {});
+  });
+
   it("begins read-only and commits only after the callback completes", async () => {
     const events: string[] = [];
     const { conn, statements } = recordingConnection({ events });

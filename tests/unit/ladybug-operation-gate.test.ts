@@ -5,7 +5,10 @@ import { DatabaseError } from "../../dist/domain/errors.js";
 import {
   bindCurrentLadybugOperation,
   getCurrentLadybugOperationMode,
+  MAX_LADYBUG_OPERATION_WAITERS,
   queueExclusiveLadybugOperation,
+  withLadybugCloseOperation,
+  withLadybugInitialization,
   withExclusiveLadybugOperation,
   withSharedLadybugOperation,
 } from "../../dist/db/ladybug-operation-gate.js";
@@ -318,5 +321,122 @@ describe("Ladybug operation gate", { timeout: 5_000 }, () => {
     releaseCallback.resolve();
     await Promise.all([outer, queued, exclusive]);
     assert.strictEqual(exclusiveEntered, true);
+  });
+
+  it("fences queued and later roots while active nested work finishes", async () => {
+    const sharedEntered = deferred<void>();
+    const nestedEntered = deferred<void>();
+    const releaseNested = deferred<void>();
+    const releaseShared = deferred<void>();
+    const closeEntered = deferred<void>();
+
+    const active = withSharedLadybugOperation(async () => {
+      sharedEntered.resolve();
+      void withSharedLadybugOperation(async () => {
+        nestedEntered.resolve();
+        await releaseNested.promise;
+      });
+      await releaseShared.promise;
+    });
+    await Promise.all([sharedEntered.promise, nestedEntered.promise]);
+
+    const overtakenExclusive = withExclusiveLadybugOperation(async () => {});
+    const overtakenShared = withSharedLadybugOperation(async () => {});
+    const close = withLadybugCloseOperation(
+      async () => {
+        closeEntered.resolve();
+      },
+      () => true,
+    );
+
+    await Promise.all([
+      assert.rejects(overtakenExclusive, /LadybugDB is closing/),
+      assert.rejects(overtakenShared, /LadybugDB is closing/),
+      assert.rejects(
+        withSharedLadybugOperation(async () => {}),
+        /LadybugDB is closing/,
+      ),
+      assert.rejects(
+        withExclusiveLadybugOperation(async () => {}),
+        /LadybugDB is closing/,
+      ),
+      assert.rejects(
+        withLadybugInitialization(async () => {}),
+        /LadybugDB is closing/,
+      ),
+    ]);
+
+    releaseShared.resolve();
+    await nextTurn();
+    assert.strictEqual(
+      await Promise.race([
+        closeEntered.promise.then(() => true),
+        nextTurn().then(() => false),
+      ]),
+      false,
+    );
+
+    releaseNested.resolve();
+    await Promise.all([active, close, closeEntered.promise]);
+    await assert.rejects(
+      withSharedLadybugOperation(async () => {}),
+      /LadybugDB is closed/,
+    );
+
+    await withLadybugInitialization(async () => {});
+    await withSharedLadybugOperation(async () => {});
+  });
+
+  it("caps queued roots and drains the accepted queue", async () => {
+    const exclusiveEntered = deferred<void>();
+    const releaseExclusive = deferred<void>();
+    const exclusive = withExclusiveLadybugOperation(async () => {
+      exclusiveEntered.resolve();
+      await releaseExclusive.promise;
+    });
+    await exclusiveEntered.promise;
+
+    let ran = 0;
+    const accepted = Array.from(
+      { length: MAX_LADYBUG_OPERATION_WAITERS },
+      () =>
+        withSharedLadybugOperation(async () => {
+          ran++;
+        }),
+    );
+    await assert.rejects(
+      withSharedLadybugOperation(async () => {}),
+      /waiter limit/u,
+    );
+
+    releaseExclusive.resolve();
+    await Promise.all([exclusive, ...accepted]);
+    assert.strictEqual(ran, MAX_LADYBUG_OPERATION_WAITERS);
+  });
+
+  it("clears waiter timers when close overtakes the queue", async (t) => {
+    const sharedEntered = deferred<void>();
+    const releaseShared = deferred<void>();
+    const active = withSharedLadybugOperation(async () => {
+      sharedEntered.resolve();
+      await releaseShared.promise;
+    });
+    await sharedEntered.promise;
+
+    const originalClearTimeout = globalThis.clearTimeout;
+    let cleared = 0;
+    t.mock.method(globalThis, "clearTimeout", (timer) => {
+      cleared++;
+      return originalClearTimeout(timer);
+    });
+
+    const overtaken = withExclusiveLadybugOperation(async () => {}, 60_000);
+    const close = withLadybugCloseOperation(async () => {}, () => true);
+    await assert.rejects(overtaken, /LadybugDB is closing/);
+    assert.strictEqual(cleared, 1);
+
+    releaseShared.resolve();
+    await Promise.all([active, close]);
+    await withLadybugInitialization(async () => {});
   });
 });

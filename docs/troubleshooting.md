@@ -250,6 +250,13 @@ safe rebuild. The command also fails if the reserved target appears or changes
 between validation gates, retains a partial or invalid candidate for diagnosis,
 and never changes the active database or configuration.
 
+Within one process, switching database paths requires
+`await closeLadybugDb({ strict: true })` before opening the new path. Once close
+starts, queued and later root database operations fail while active nested work
+drains. If native close fails, SDL-MCP keeps the lifecycle fence and family lease
+in place; retry strict close rather than opening another family. The admission
+queue accepts at most 256 waiters and does not add a universal operation timeout.
+
 All configured repositories are rebuilt because `Symbol.symbolId` is a global
 primary key inside one shared database. For example, SCIP-IO can be the first
 repository and LSP-IO can be the later repository whose write exposes a global

@@ -177,9 +177,6 @@ export function readBoundedLadybugControlFile(
       if (count === 0) break;
       total += count;
     }
-    if (total > maxBytes) {
-      throw new Error(label + " exceeds " + maxBytes + " bytes");
-    }
     return buffer.subarray(0, total);
   });
 }

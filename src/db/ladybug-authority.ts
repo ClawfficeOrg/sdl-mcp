@@ -24,7 +24,7 @@ export const QUALIFICATION_AUTHORITY_PATH_ENV =
   "SDL_LADYBUG_QUALIFICATION_AUTHORITY_PATH";
 export const QUALIFICATION_AUTHORITY_VERSION = 1;
 const QUALIFICATION_ROOT_PREFIX = "sdl-ladybug-qualification-";
-const QUALIFICATION_PHASES = new Set([
+export const QUALIFICATION_PHASE_NAMES = [
   "seed-first-batch",
   "seed-remaining-batches",
   "create-hnsw",
@@ -40,7 +40,8 @@ const QUALIFICATION_PHASES = new Set([
   "validate-upstream-projection",
   "seed-node-string-segments",
   "validate-node-string-segment-scan",
-]);
+] as const;
+const QUALIFICATION_PHASES = new Set<string>(QUALIFICATION_PHASE_NAMES);
 
 export interface QualificationFamilyMemberAuthority {
   readonly path: string;
