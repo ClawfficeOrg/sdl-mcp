@@ -22,6 +22,11 @@ import {
 } from "../dist/benchmark/external-runner.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { resolveGraphDbPath } from "../dist/db/graph-db-path.js";
+import {
+  isWindowsFtsRuntimeUnavailable,
+  withWindowsFtsRuntime,
+} from "../dist/db/ladybug-windows-fts-runtime.js";
+import { isNativeAddonGloballyEnabled } from "../dist/native/addon-loader.js";
 import { normalizePath } from "../dist/util/paths.js";
 
 const TOTAL_ROWS = 24_500;
@@ -490,6 +495,12 @@ export async function qualifyLadybugDriver(options) {
   if (actualVersion !== options.expectVersion) {
     throw new Error(
       `Expected Ladybug driver version ${options.expectVersion}, found ${actualVersion}`,
+    );
+  }
+  if (process.platform === "win32" && !isNativeAddonGloballyEnabled()) {
+    throw new Error(
+      "Ladybug qualification requires SDL's verified OpenSSL preloader on Windows. " +
+        "The caller must intentionally unset SDL_MCP_DISABLE_NATIVE_ADDON before running qualification.",
     );
   }
 
@@ -1408,10 +1419,21 @@ async function runChildMode(options) {
 
     const conn = await getLadybugConn();
     if (["create-hnsw", "verify-hnsw-reopen"].includes(options.mode)) {
-      await execDdl(conn, "LOAD EXTENSION vector");
+      // Both explicit extension loads need the verified Windows OpenSSL scope.
+      const loadResult = await withWindowsFtsRuntime(() =>
+        execDdl(conn, "LOAD EXTENSION vector"),
+      );
+      if (isWindowsFtsRuntimeUnavailable(loadResult)) {
+        throw new Error(loadResult.recovery);
+      }
     }
     if (["create-fts", "verify-fts-reopen"].includes(options.mode)) {
-      await execDdl(conn, "LOAD EXTENSION fts");
+      const loadResult = await withWindowsFtsRuntime(() =>
+        execDdl(conn, "LOAD EXTENSION fts"),
+      );
+      if (isWindowsFtsRuntimeUnavailable(loadResult)) {
+        throw new Error(loadResult.recovery);
+      }
     }
     const before = await validateOriginalGraph(conn, config);
     let phaseResult;

@@ -46,6 +46,8 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     SDL_GRAPH_DB_DIR: process.env.SDL_GRAPH_DB_DIR,
     SDL_GRAPH_DB_PATH: process.env.SDL_GRAPH_DB_PATH,
     SDL_DB_PATH: process.env.SDL_DB_PATH,
+    SDL_MCP_DISABLE_NATIVE_ADDON:
+      process.env.SDL_MCP_DISABLE_NATIVE_ADDON,
   };
   const cleanupRoots: string[] = [];
 
@@ -90,6 +92,50 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
 
     assert.deepEqual(readFileSync(sourcePath), sourceBytes);
   });
+
+  for (const disabledValue of ["1", "true", "TRUE", "True"]) {
+    it(
+      `rejects SDL_MCP_DISABLE_NATIVE_ADDON=${disabledValue} on Windows before cloning`,
+      async () => {
+        if (process.platform !== "win32") return;
+
+        const { installedLadybugVersion, qualifyLadybugDriver } = await import(
+          "../../scripts/qualify-ladybug-driver.mjs"
+        );
+        const root = mkdtempSync(join(tmpdir(), "sdl-ladybug-native-gate-"));
+        cleanupRoots.push(root);
+        const sourcePath = join(root, "offline.lbug");
+        const configPath = join(root, "config.json");
+        writeFileSync(sourcePath, "offline-source-bytes");
+        writeFileSync(configPath, JSON.stringify({ repos: [], policy: {} }));
+        process.env.SDL_MCP_DISABLE_NATIVE_ADDON = disabledValue;
+
+        await assert.rejects(
+          qualifyLadybugDriver({
+            sourcePath,
+            configPath,
+            expectVersion: installedLadybugVersion(),
+            projectRoot: process.cwd(),
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof Error);
+            const qualificationError = error as Error & {
+              cloneRootPath?: string;
+            };
+            if (qualificationError.cloneRootPath) {
+              cleanupRoots.push(qualificationError.cloneRootPath);
+            }
+            assert.match(
+              error.message,
+              /requires SDL's verified OpenSSL preloader[\s\S]*intentionally unset SDL_MCP_DISABLE_NATIVE_ADDON/i,
+            );
+            assert.equal("cloneRootPath" in qualificationError, false);
+            return true;
+          },
+        );
+      },
+    );
+  }
 
   it("rejects canonical aliases and hardlinks to active database families", async () => {
     const { assertOfflineSourceDistinct } = await import(
@@ -256,6 +302,7 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
         SDL_GRAPH_DB_PATH: "active",
         SDL_GRAPH_DB_DIR: "active-dir",
         SDL_DB_PATH: "legacy-active",
+        SDL_MCP_DISABLE_NATIVE_ADDON: "1",
       },
       join(process.cwd(), "clone.lbug"),
       childConfigPath,
@@ -266,6 +313,7 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     assert.equal(env.SDL_GRAPH_DB_PATH, join(process.cwd(), "clone.lbug"));
     assert.equal("SDL_GRAPH_DB_DIR" in env, false);
     assert.equal("SDL_DB_PATH" in env, false);
+    assert.equal(env.SDL_MCP_DISABLE_NATIVE_ADDON, "1");
 
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;
@@ -347,6 +395,7 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
         expectVersion: installedVersion,
         projectRoot: process.cwd(),
       };
+      delete process.env.SDL_MCP_DISABLE_NATIVE_ADDON;
 
       if (installedVersion === TARGET_LADYBUG_VERSION) {
         const receipt = await qualifyLadybugDriver(qualificationOptions);
