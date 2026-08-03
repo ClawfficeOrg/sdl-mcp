@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +49,10 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     SDL_GRAPH_DB_DIR: process.env.SDL_GRAPH_DB_DIR,
     SDL_GRAPH_DB_PATH: process.env.SDL_GRAPH_DB_PATH,
     SDL_DB_PATH: process.env.SDL_DB_PATH,
+    SDL_LADYBUG_QUALIFICATION_AUTHORITY_NONCE:
+      process.env.SDL_LADYBUG_QUALIFICATION_AUTHORITY_NONCE,
+    SDL_LADYBUG_QUALIFICATION_AUTHORITY_PATH:
+      process.env.SDL_LADYBUG_QUALIFICATION_AUTHORITY_PATH,
     SDL_MCP_DISABLE_NATIVE_ADDON:
       process.env.SDL_MCP_DISABLE_NATIVE_ADDON,
   };
@@ -244,8 +251,10 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     cleanupRoots.push(root);
     const clonePath = join(root, "candidate.lbug");
     writeFileSync(clonePath, "database");
-    writeFileSync(`${clonePath}.unexpected`, "unexpected-sidecar");
+    writeFileSync(`${clonePath}.sdl-lineage.json`, "{}");
+    assert.doesNotThrow(() => assertNoCloneSidecars(clonePath));
 
+    writeFileSync(`${clonePath}.unexpected`, "unexpected-sidecar");
     assert.throws(() => assertNoCloneSidecars(clonePath), /close cleanly/i);
   });
 
@@ -322,6 +331,193 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
       pkg.scripts?.["qualify:ladybug"],
       "npm run build && node scripts/qualify-ladybug-driver.mjs",
     );
+  });
+
+  it("rejects direct, forged, replayed, and config-mismatched child authority before opening the clone", async () => {
+    const {
+      buildQualificationChildEnv,
+      consumeQualificationChildAuthority,
+      createQualificationChildAuthority,
+    } = await import("../../scripts/qualify-ladybug-driver.mjs");
+    const sourceRoot = mkdtempSync(
+      join(tmpdir(), "sdl-ladybug-authority-source-"),
+    );
+    cleanupRoots.push(sourceRoot);
+    const sourcePath = join(sourceRoot, "offline.lbug");
+    const activePath = join(sourceRoot, "active.lbug");
+    writeFileSync(sourcePath, "offline-source");
+    writeFileSync(activePath, "active-database");
+
+    const makeFixture = () => {
+      const cloneRootPath = mkdtempSync(
+        join(tmpdir(), "sdl-ladybug-qualification-"),
+      );
+      cleanupRoots.push(cloneRootPath);
+      const clonePath = join(cloneRootPath, "candidate.lbug");
+      const configPath = join(cloneRootPath, "config.json");
+      writeFileSync(clonePath, "arbitrary-database-sentinel");
+      writeFileSync(configPath, JSON.stringify({ repos: [], policy: {} }));
+      return { clonePath, configPath };
+    };
+    const spawnChild = (
+      clonePath: string,
+      configPath: string,
+      env: NodeJS.ProcessEnv,
+    ) =>
+      spawnSync(
+        process.execPath,
+        [
+          "scripts/qualify-ladybug-driver.mjs",
+          "--child",
+          "seed-first-batch",
+          "--clone",
+          clonePath,
+          "--config",
+          configPath,
+        ],
+        { cwd: process.cwd(), env, encoding: "utf8", timeout: 30_000 },
+      );
+
+    const direct = makeFixture();
+    const directBytes = readFileSync(direct.clonePath);
+    const directResult = spawnChild(
+      direct.clonePath,
+      direct.configPath,
+      buildQualificationChildEnv(
+        process.env,
+        direct.clonePath,
+        direct.configPath,
+      ),
+    );
+    assert.notEqual(directResult.status, 0);
+    assert.match(directResult.stderr, /qualification authority/i);
+    assert.deepEqual(readFileSync(direct.clonePath), directBytes);
+
+    const forged = makeFixture();
+    const forgedBytes = readFileSync(forged.clonePath);
+    const forgedAuthority = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath: forged.clonePath,
+      configPath: forged.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    if (process.platform !== "win32") {
+      assert.equal(statSync(forgedAuthority.authorityPath).mode & 0o777, 0o600);
+    }
+    const forgedEnv = buildQualificationChildEnv(
+      process.env,
+      forged.clonePath,
+      forged.configPath,
+      forgedAuthority,
+    );
+    forgedEnv.SDL_LADYBUG_QUALIFICATION_AUTHORITY_NONCE = "00".repeat(32);
+    const forgedResult = spawnChild(
+      forged.clonePath,
+      forged.configPath,
+      forgedEnv,
+    );
+    assert.notEqual(forgedResult.status, 0);
+    assert.match(forgedResult.stderr, /authority nonce/i);
+    assert.deepEqual(readFileSync(forged.clonePath), forgedBytes);
+    assert.equal(existsSync(forgedAuthority.authorityPath), true);
+
+    const replayed = makeFixture();
+    const replayedBytes = readFileSync(replayed.clonePath);
+    const replayedAuthority = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath: replayed.clonePath,
+      configPath: replayed.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    const replayedEnv = buildQualificationChildEnv(
+      process.env,
+      replayed.clonePath,
+      replayed.configPath,
+      replayedAuthority,
+    );
+    consumeQualificationChildAuthority(
+      {
+        mode: "seed-first-batch",
+        clonePath: replayed.clonePath,
+        configPath: replayed.configPath,
+      },
+      replayedEnv,
+    );
+    assert.equal(existsSync(replayedAuthority.authorityPath), false);
+    const replayedResult = spawnChild(
+      replayed.clonePath,
+      replayed.configPath,
+      replayedEnv,
+    );
+    assert.notEqual(replayedResult.status, 0);
+    assert.match(replayedResult.stderr, /qualification authority/i);
+    assert.deepEqual(readFileSync(replayed.clonePath), replayedBytes);
+
+    const mismatched = makeFixture();
+    const mismatchedBytes = readFileSync(mismatched.clonePath);
+    const mismatchedAuthority = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath: mismatched.clonePath,
+      configPath: mismatched.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    const mismatchedEnv = buildQualificationChildEnv(
+      process.env,
+      mismatched.clonePath,
+      mismatched.configPath,
+      mismatchedAuthority,
+    );
+    writeFileSync(
+      mismatched.configPath,
+      JSON.stringify({ repos: [], policy: {}, changed: true }),
+    );
+    const mismatchedResult = spawnChild(
+      mismatched.clonePath,
+      mismatched.configPath,
+      mismatchedEnv,
+    );
+    assert.notEqual(mismatchedResult.status, 0);
+    assert.match(mismatchedResult.stderr, /config digest/i);
+    assert.deepEqual(readFileSync(mismatched.clonePath), mismatchedBytes);
+  });
+
+  it("does not return a phase when strict close fails and preserves both failures", async () => {
+    const { closeQualificationPhaseStrictly } = await import(
+      "../../scripts/qualify-ladybug-driver.mjs"
+    );
+    const phaseError = new Error("phase failed");
+    const closeError = new Error("close failed");
+
+    await assert.rejects(
+      closeQualificationPhaseStrictly(async () => {
+        throw closeError;
+      }, phaseError),
+      (error: unknown) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [phaseError, closeError]);
+        return true;
+      },
+    );
+
+    let receipt: { phase: string } | undefined;
+    await assert.rejects(
+      (async () => {
+        try {
+          return { phase: "seed-first-batch" };
+        } finally {
+          await closeQualificationPhaseStrictly(async () => {
+            throw closeError;
+          });
+        }
+      })().then((result) => {
+        receipt = result;
+      }),
+      closeError,
+    );
+    assert.equal(receipt, undefined);
   });
 
   it(
@@ -472,6 +668,12 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
             assert.equal(typeof qualificationError.cloneRootPath, "string");
             assert.equal(existsSync(qualificationError.clonePath!), true);
             assert.equal(existsSync(qualificationError.cloneRootPath!), true);
+            assert.equal(
+              readdirSync(qualificationError.cloneRootPath!).some((name) =>
+                name.includes("qualification-authority"),
+              ),
+              false,
+            );
             retainedCloneRoot = qualificationError.cloneRootPath;
             return true;
           },
@@ -509,6 +711,12 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
           assert.equal(typeof qualificationError.clonePath, "string");
           assert.equal(typeof qualificationError.cloneRootPath, "string");
           assert.equal(existsSync(qualificationError.cloneRootPath!), true);
+          assert.equal(
+            readdirSync(qualificationError.cloneRootPath!).some((name) =>
+              name.includes("qualification-authority"),
+            ),
+            false,
+          );
           mismatchCloneRoot = qualificationError.cloneRootPath;
           return true;
         },
