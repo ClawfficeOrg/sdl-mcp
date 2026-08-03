@@ -17,8 +17,10 @@ import {
 } from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import { indexRepo } from "../../dist/indexer/indexer.js";
+import { clearAllCaches } from "../../dist/graph/cache.js";
 import { ReconcileQueue } from "../../dist/live-index/reconcile-queue.js";
 import { ReconcileWorker } from "../../dist/live-index/reconcile-worker.js";
+import { buildCardForSymbol } from "../../dist/services/card-builder.js";
 
 describe("background reconcile worker", () => {
   const repoId = "background-reconcile-repo";
@@ -105,6 +107,7 @@ describe("background reconcile worker", () => {
   });
 
   it("patches queued dependent files from disk in the background", async () => {
+    clearAllCaches();
     const conn = await getLadybugConn();
     const beforeFile = await ladybugDb.getFileByRepoPath(
       conn,
@@ -112,6 +115,15 @@ describe("background reconcile worker", () => {
       "src/consumer.ts",
     );
     assert.ok(beforeFile);
+    const beforeSymbols = await ladybugDb.getSymbolsByFile(conn, beforeFile.fileId);
+    const helper = beforeSymbols.find((symbol) => symbol.name === "helper");
+    assert.ok(helper);
+    const beforeCard = await buildCardForSymbol(
+      repoId,
+      helper.symbolId,
+      undefined,
+    );
+    assert.ok(!("notModified" in beforeCard));
 
     writeFileSync(
       join(repoDir, "src", "consumer.ts"),
@@ -121,7 +133,8 @@ describe("background reconcile worker", () => {
         "}",
         "",
         "export function helper() {",
-        "  return 2;",
+        "  const value = 2;",
+        "  return value;",
         "}",
       ].join("\n"),
       "utf8",
@@ -149,5 +162,16 @@ describe("background reconcile worker", () => {
     );
     assert.ok(afterFile);
     assert.notStrictEqual(afterFile?.contentHash, beforeFile?.contentHash);
+    const afterCard = await buildCardForSymbol(
+      repoId,
+      helper.symbolId,
+      beforeCard.etag,
+    );
+    assert.ok(!("notModified" in afterCard));
+    assert.notStrictEqual(
+      afterCard.version.astFingerprint,
+      beforeCard.version.astFingerprint,
+    );
+    assert.notStrictEqual(afterCard.range.endLine, beforeCard.range.endLine);
   });
 });

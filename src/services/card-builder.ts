@@ -326,6 +326,7 @@ export async function buildCardForSymbol(
   options: BuildCardOptions = {},
 ): Promise<CardWithETag | NotModifiedResponse> {
   const repoEpoch = captureActiveRepoEpoch(repoId);
+  const cacheGeneration = symbolCardCache.captureRepoGeneration(repoId);
   const config = loadConfig();
   const cacheEnabled = config.cache?.enabled ?? true;
   const effectiveMinCallConfidence = getEffectiveMinCallConfidence(
@@ -693,6 +694,7 @@ export async function buildCardForSymbol(
       latestVersion.versionId,
       cacheCard,
       repoEpoch,
+      cacheGeneration,
     );
   }
 

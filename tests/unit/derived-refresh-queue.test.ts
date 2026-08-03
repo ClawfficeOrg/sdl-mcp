@@ -33,6 +33,7 @@ import {
   getDerivedState,
   markDerivedStateDirty,
 } from "../../dist/db/ladybug-derived-state.js";
+import { symbolCardCache } from "../../dist/graph/cache.js";
 
 const REPO = "derived-refresh-queue-test";
 const ORIGINAL_DERIVED_REFRESH_TIMEOUT =
@@ -370,6 +371,7 @@ describe("derived refresh computed flags", () => {
     await initLadybugDb(graphDbPath);
     const repoId = "repo-semantic-dirty";
     const versionId = "v-semantic-dirty";
+    const cacheGeneration = symbolCardCache.captureRepoGeneration(repoId);
     await markDerivedStateDirty(repoId, versionId, {
       clusters: true,
       processes: true,
@@ -398,6 +400,36 @@ describe("derived refresh computed flags", () => {
     assert.strictEqual(state.algorithmsDirty, false);
     assert.strictEqual(state.summariesDirty, true);
     assert.strictEqual(state.embeddingsDirty, true);
+    assert.notStrictEqual(
+      symbolCardCache.captureRepoGeneration(repoId),
+      cacheGeneration,
+    );
+  });
+
+  it("invalidates card cache when a started refresh fails", async () => {
+    graphDbPath = mkdtempSync(join(tmpdir(), "sdl-derived-refresh-failure-"));
+    await initLadybugDb(graphDbPath);
+    const repoId = "repo-derived-refresh-failure";
+    const versionId = "v-derived-refresh-failure";
+    const cacheGeneration = symbolCardCache.captureRepoGeneration(repoId);
+    await markDerivedStateDirty(repoId, versionId, {
+      clusters: true,
+      processes: true,
+      algorithms: true,
+    });
+    _setDerivedRefreshHooksForTesting({
+      refresh: async () => {
+        throw new Error("partial derived refresh failure");
+      },
+    });
+
+    enqueueDerivedRefresh(repoId, versionId);
+    await waitForDerivedRefreshIdle(repoId, 5_000, 10);
+
+    assert.notStrictEqual(
+      symbolCardCache.captureRepoGeneration(repoId),
+      cacheGeneration,
+    );
   });
 
   it("does not let an older refresh clear a newer target version", async () => {

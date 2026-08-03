@@ -36,6 +36,7 @@ export async function loadSymbolCards(
   sliceDepsBySymbol: Map<SymbolId, SliceSymbolDeps>;
 }> {
   const repoEpoch = captureActiveRepoEpoch(repoId);
+  const cacheGeneration = symbolCardCache.captureRepoGeneration(repoId);
   if (symbolIds.length === 0) {
     return {
       cards: [],
@@ -326,6 +327,7 @@ export async function loadSymbolCards(
         versionId,
         toFullCard(baseCard),
         repoEpoch,
+        cacheGeneration,
       );
     }
   }

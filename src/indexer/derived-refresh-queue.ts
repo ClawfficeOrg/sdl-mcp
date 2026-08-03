@@ -15,6 +15,7 @@ import {
   recordDerivedStateError,
 } from "../db/ladybug-derived-state.js";
 import { loadConfig } from "../config/loadConfig.js";
+import { symbolCardCache } from "../graph/cache.js";
 import { runToolDispatch } from "../mcp/dispatch-limiter.js";
 import { logger } from "../util/logger.js";
 import {
@@ -364,18 +365,23 @@ async function runOne(
               writeLockHeld = true;
               try {
                 if (refreshSignal.aborted) return;
-                algorithmRefresh = await hooks.refresh({
-                  repoId,
-                  versionId: targetVersionId,
-                  signal: refreshSignal,
-                  onProgress: (progress) => {
-                    setDerivedRefreshProgress(
-                      repoId,
-                      targetVersionId,
-                      progressForIndexEvent(progress),
-                    );
-                  },
-                });
+                try {
+                  algorithmRefresh = await hooks.refresh({
+                    repoId,
+                    versionId: targetVersionId,
+                    signal: refreshSignal,
+                    onProgress: (progress) => {
+                      setDerivedRefreshProgress(
+                        repoId,
+                        targetVersionId,
+                        progressForIndexEvent(progress),
+                      );
+                    },
+                  });
+                } finally {
+                  // Refresh stages commit independently, so fence partial updates too.
+                  symbolCardCache.invalidateRepo(repoId);
+                }
               } finally {
                 writeLockHeld = false;
               }

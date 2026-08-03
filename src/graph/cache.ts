@@ -65,6 +65,7 @@ class LRUCache<T> {
     entryCount: 0,
   };
   private config: CacheConfig;
+  private repoGenerations: Map<RepoId, number> = new Map();
   private lock: Promise<void> = Promise.resolve();
 
   constructor(config: Partial<CacheConfig> = {}) {
@@ -157,6 +158,15 @@ class LRUCache<T> {
     }
   }
 
+  /** Capture the repository generation used to fence a later cache publication. */
+  captureRepoGeneration(repoId: RepoId): number {
+    return this.repoGenerations.get(repoId) ?? 0;
+  }
+
+  private advanceRepoGeneration(repoId: RepoId): void {
+    this.repoGenerations.set(repoId, this.captureRepoGeneration(repoId) + 1);
+  }
+
   invalidateVersion(versionId: VersionId): void {
     const keysToDelete: string[] = [];
     for (const [key, entry] of this.cache.entries()) {
@@ -175,6 +185,7 @@ class LRUCache<T> {
   }
 
   invalidateRepo(repoId: RepoId): void {
+    this.advanceRepoGeneration(repoId);
     for (const [key, entry] of Array.from(this.cache.entries())) {
       if (entry.repoId !== repoId) continue;
       if (entry) {
@@ -221,6 +232,7 @@ class LRUCache<T> {
     versionId: VersionId,
     value: T,
     expectedEpoch = captureActiveRepoEpoch(repoId),
+    expectedGeneration = this.captureRepoGeneration(repoId),
   ): Promise<void> {
     let releaseLock: (() => void) | undefined;
     const nextLock = new Promise<void>((resolve) => {
@@ -234,7 +246,8 @@ class LRUCache<T> {
     try {
       if (
         expectedEpoch === undefined ||
-        !isRepoEpochCurrent(repoId, expectedEpoch)
+        !isRepoEpochCurrent(repoId, expectedEpoch) ||
+        expectedGeneration !== this.captureRepoGeneration(repoId)
       ) {
         return;
       }

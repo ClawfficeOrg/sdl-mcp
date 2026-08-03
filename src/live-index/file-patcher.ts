@@ -16,6 +16,7 @@ import {
   type GraphIntegrityFileStateRecord,
   type GraphIntegrityFilelessStateRecord,
 } from "../db/ladybug-graph-integrity.js";
+import { symbolCardCache } from "../graph/cache.js";
 import { notifyGraphIntegrityVerifier } from "../indexer/provider-first/background-graph-integrity-verifier.js";
 import {
   capturePersistedGraphIntegrity,
@@ -521,6 +522,9 @@ async function patchSavedFileUnlocked(
     if (error instanceof SavedFilePatchRetry) return RETRY_SAVED_FILE_PATCH;
     throw error;
   }
+
+  // Saved-file patches retain the ledger version used by the card cache key.
+  symbolCardCache.invalidateRepo(request.repoId);
 
   if (committedRevision !== undefined) {
     try {

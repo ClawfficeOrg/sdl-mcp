@@ -11,6 +11,7 @@ import {
   resetAllCacheStats,
   makeSymbolCardCacheKey,
 } from "../dist/graph/cache.js";
+import { captureActiveRepoEpoch } from "../dist/services/repo-lifecycle.js";
 
 describe("LRU Cache", () => {
   describe("Basic cache operations", () => {
@@ -157,6 +158,18 @@ describe("LRU Cache", () => {
       assert.strictEqual(cache.has("repo1", "key1", "v1"), false);
       assert.strictEqual(cache.has("repo1", "key2", "v1"), false);
       assert.strictEqual(cache.getStats().entryCount, 0);
+    });
+
+    it("should reject writes captured before repository invalidation", async () => {
+      const cache = new LRUCache<string>();
+      const generation = cache.captureRepoGeneration("repo1");
+      const repoEpoch = captureActiveRepoEpoch("repo1");
+      assert.notStrictEqual(repoEpoch, undefined);
+
+      cache.invalidateRepo("repo1");
+      await cache.set("repo1", "key1", "v1", "stale", repoEpoch, generation);
+
+      assert.strictEqual(cache.get("repo1", "key1", "v1"), undefined);
     });
   });
 });
