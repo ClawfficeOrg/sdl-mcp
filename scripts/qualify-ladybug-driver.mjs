@@ -373,7 +373,6 @@ function assertPhaseReceipt(result, expected) {
   if (
     result.phase !== expected.phase ||
     result.rowCount !== expected.rowCount ||
-    result.expectedDigest !== expectedDigestForPhase(expected.phase) ||
     typeof result.manifestIdentity !== "string" ||
     typeof result.catalogIdentity !== "string" ||
     result.projectionRowCount !==
@@ -385,7 +384,10 @@ function assertPhaseReceipt(result, expected) {
       `Qualification child ${expected.phase} returned an invalid receipt`,
     );
   }
-  if (expected.scan && result.scanDigest !== result.expectedDigest) {
+  if (
+    expected.scan &&
+    result.scanDigest !== expectedDigestForPhase(expected.phase)
+  ) {
     throw new Error(
       `Qualification child ${expected.phase} returned a scan digest mismatch`,
     );
@@ -613,15 +615,19 @@ async function graphSnapshots(conn, config) {
   return snapshots;
 }
 
-function probeEmbedding(index, seed = 1) {
+function* probeEmbeddingValues(index, seed = 1) {
   let state = Math.imul(index + seed, 0x9e3779b1) >>> 0;
-  return Array.from({ length: VECTOR_DIMENSIONS }, () => {
+  for (let dimension = 0; dimension < VECTOR_DIMENSIONS; dimension += 1) {
     state ^= state << 13;
     state ^= state >>> 17;
     state ^= state << 5;
     state >>>= 0;
-    return ((state & 0xffff) + 1) / 65_536;
-  });
+    yield ((state & 0xffff) + 1) / 65_536;
+  }
+}
+
+function probeEmbedding(index, seed = 1) {
+  return Array.from(probeEmbeddingValues(index, seed));
 }
 
 function probeId(index) {
@@ -641,7 +647,7 @@ const UPSTREAM_NAMES = [
   "Ã‰lise Boucher",
 ];
 
-function probeRow(index) {
+function projectedProbeRow(index) {
   const ordinal = String(index).padStart(6, "0");
   return {
     id: probeId(index),
@@ -655,6 +661,12 @@ function probeRow(index) {
     optionalText:
       index % 31 === 0 ? null : `HAIFA_INFERRED-${index % 97}`,
     sortKey: index,
+  };
+}
+
+function probeInsertRow(index) {
+  return {
+    ...projectedProbeRow(index),
     embedding: probeEmbedding(index),
   };
 }
@@ -722,7 +734,7 @@ function expectedDigestForPhase(phase) {
   const digest = createHash("sha256");
   for (let index = TOTAL_ROWS - 1; index >= 0; index -= 1) {
     if (phaseIncludesIndex(phase, index)) {
-      digest.update(serializedProbeRow(probeRow(index)));
+      digest.update(serializedProbeRow(projectedProbeRow(index)));
       digest.update("\n");
     }
   }
@@ -762,7 +774,7 @@ async function insertProbeRange(conn, start, end) {
     const batchEnd = Math.min(end, batchStart + INSERT_BATCH_ROWS);
     const rows = Array.from(
       { length: batchEnd - batchStart },
-      (_, offset) => probeRow(batchStart + offset),
+      (_, offset) => probeInsertRow(batchStart + offset),
     );
     await exec(
       conn,
@@ -825,13 +837,7 @@ function mismatchValue(value) {
   return JSON.stringify(value);
 }
 
-function assertProjectedRow(
-  actualValue,
-  expected,
-  ordinal,
-  context,
-  includeEmbedding,
-) {
+function assertProjectedRow(actualValue, expected, ordinal, context) {
   const actual = normalizeProjectedRow(actualValue);
   for (const field of [
     "id",
@@ -847,25 +853,24 @@ function assertProjectedRow(
       );
     }
   }
-  if (includeEmbedding) {
-    if (actual.embedding.length !== expected.embedding.length) {
+  return actual;
+}
+
+function assertProbeEmbedding(actual, index, context) {
+  if (actual.length !== VECTOR_DIMENSIONS) {
+    throw new Error(
+      `Qualification probe ${context} mismatch at ordered row ${index} field embedding: expected length ${VECTOR_DIMENSIONS}, received ${actual.length}`,
+    );
+  }
+  let dimension = 0;
+  for (const expected of probeEmbeddingValues(index)) {
+    if (actual[dimension] !== expected) {
       throw new Error(
-        `Qualification probe ${context} mismatch at ordered row ${ordinal} field embedding: expected length ${expected.embedding.length}, received ${actual.embedding.length}`,
+        `Qualification probe ${context} mismatch at ordered row ${index} field embedding[${dimension}]: expected ${expected}, received ${actual[dimension]}`,
       );
     }
-    for (
-      let dimension = 0;
-      dimension < expected.embedding.length;
-      dimension += 1
-    ) {
-      if (actual.embedding[dimension] !== expected.embedding[dimension]) {
-        throw new Error(
-          `Qualification probe ${context} mismatch at ordered row ${ordinal} field embedding[${dimension}]: expected ${expected.embedding[dimension]}, received ${actual.embedding[dimension]}`,
-        );
-      }
-    }
+    dimension += 1;
   }
-  return actual;
 }
 
 async function validatePointLookups(conn, phase) {
@@ -876,7 +881,7 @@ async function validatePointLookups(conn, phase) {
       : [0, HNSW_PROBE_INDEX, 8_191, 10_240, 16_384, TOTAL_ROWS - 1];
   let validated = 0;
   for (const index of sampleIndexes) {
-    const expected = probeRow(index);
+    const expected = projectedProbeRow(index);
     const rows = await queryAll(
       conn,
       `MATCH (p:DriverQualificationProbe {id: $id})
@@ -904,11 +909,12 @@ async function validatePointLookups(conn, phase) {
         `Qualification probe point lookup mismatch for ${expected.id}: expected one row, received ${rows.length}`,
       );
     }
-    assertProjectedRow(rows[0], expected, index, "point lookup", true);
+    const actual = assertProjectedRow(rows[0], expected, index, "point lookup");
+    assertProbeEmbedding(actual.embedding, index, "point lookup");
     validated += 1;
   }
   if (phase === "validate-deleted-reinsert-range") {
-    const deleted = probeRow(DELETE_START + 7);
+    const deleted = projectedProbeRow(DELETE_START + 7);
     const rows = await queryAll(
       conn,
       "MATCH (p:DriverQualificationProbe {id: $id}) RETURN p.id AS id",
@@ -972,10 +978,9 @@ async function validateProjectedScan(conn, phase) {
       }
       const actual = assertProjectedRow(
         scanRows[ordinal],
-        probeRow(expectedIndex),
+        projectedProbeRow(expectedIndex),
         ordinal,
         materialization === 0 ? "scan" : "scan replay",
-        false,
       );
       if (materialization === 0) {
         digest.update(serializedProbeRow(actual));
@@ -1330,15 +1335,15 @@ function hnswNodeId(row) {
 
 async function queryQualificationHnsw(conn) {
   const { queryStoredProcAll } = await import("../dist/db/ladybug-core.js");
-  const probe = probeRow(HNSW_PROBE_INDEX);
+  const probeEmbeddingVector = probeEmbedding(HNSW_PROBE_INDEX);
   const rows = await queryStoredProcAll(
     conn,
-    `CALL QUERY_VECTOR_INDEX('DriverQualificationProbe', '${HNSW_INDEX_NAME}', [${probe.embedding.join(",")}], 16) RETURN node, distance`,
+    `CALL QUERY_VECTOR_INDEX('DriverQualificationProbe', '${HNSW_INDEX_NAME}', [${probeEmbeddingVector.join(",")}], 16) RETURN node, distance`,
   );
   const ids = rows.map(hnswNodeId);
   return {
     resultCount: rows.length,
-    matchedProbeId: ids.includes(probe.id),
+    matchedProbeId: ids.includes(probeId(HNSW_PROBE_INDEX)),
     firstId: ids[0] ?? "",
   };
 }
@@ -1461,7 +1466,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
       };
     } else if (options.mode === "seed-remaining-batches") {
       await insertProbeRange(conn, FIRST_BATCH_ROWS, TOTAL_ROWS);
@@ -1469,7 +1473,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
       };
     } else if (options.mode === "create-hnsw") {
       const created = await createVectorIndex(
@@ -1500,7 +1503,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         hnsw: {
           created,
           ...hnsw,
@@ -1539,7 +1541,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         hnsw: {
           ...hnsw,
           catalogPresent: true,
@@ -1556,7 +1557,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         hnsw: { catalogAbsent: true },
       };
     } else if (options.mode === "create-fts") {
@@ -1584,7 +1584,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         fts: { created, catalogPresent: true, catalogEntry },
       };
     } else if (options.mode === "verify-fts-reopen") {
@@ -1618,7 +1617,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         fts: {
           ...fts,
           catalogPresent: true,
@@ -1635,7 +1633,6 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         fts: { catalogAbsent: true },
       };
     } else if (options.mode === "validate-full-delete-range") {
@@ -1652,7 +1649,6 @@ async function runChildMode(options) {
         phase: options.mode,
         ...scan,
         afterRowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         pointLookups,
       };
     } else if (options.mode === "validate-deleted-reinsert-range") {
@@ -1663,7 +1659,6 @@ async function runChildMode(options) {
         phase: options.mode,
         ...scan,
         afterRowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         pointLookups,
       };
     } else if (options.mode === "validate-restored-delete-all") {
@@ -1674,7 +1669,6 @@ async function runChildMode(options) {
         phase: options.mode,
         ...scan,
         afterRowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         pointLookups,
       };
     } else if (options.mode === "validate-empty") {
@@ -1683,14 +1677,12 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         ...scan,
-        expectedDigest: expectedDigestForPhase(options.mode),
         pointLookups,
       };
     } else if (options.mode === "validate-upstream-projection") {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         ...(await validateUpstreamProjection(conn)),
       };
     } else if (options.mode === "seed-node-string-segments") {
@@ -1737,14 +1729,12 @@ async function runChildMode(options) {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         nodeStringRowCount: await countNodeStringRows(conn),
       };
     } else if (options.mode === "validate-node-string-segment-scan") {
       phaseResult = {
         phase: options.mode,
         rowCount: await countProbeRows(conn),
-        expectedDigest: expectedDigestForPhase(options.mode),
         nodeStringRowCount: await countNodeStringRows(conn),
         ...(await validateNodeStringSegmentScan(conn)),
       };

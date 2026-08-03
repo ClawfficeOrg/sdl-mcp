@@ -9,6 +9,8 @@ const repoRoot = resolve(".");
 const contractRoot = join(repoRoot, "ladybug-openssl");
 const packageRoot = join(contractRoot, "npm", "win32-x64");
 const source = JSON.parse(readFileSync(join(contractRoot, "source.json"), "utf8"));
+// This fixture records the binary used to derive the generic OpenSSL import contract.
+// Current-driver loading is covered by live-index-symbol-fts-crash.test.ts.
 const fts = JSON.parse(
   readFileSync(join(contractRoot, "ladybug-fts-0.18.1.json"), "utf8"),
 );

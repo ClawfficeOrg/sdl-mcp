@@ -131,12 +131,12 @@ async function assertFixtureRows(
 }
 
 describe("Ladybug storage upgrade", () => {
-  it("opens a checksum-pinned v40 fixture with 0.18.1 storage v42 and preserves non-derived rows", async () => {
+  it("opens a checksum-pinned v40 fixture with 0.19.0 storage v43 and preserves non-derived rows", async () => {
     const kuzu = await import("kuzu");
     assert.equal(
       String(kuzu.STORAGE_VERSION),
-      "42",
-      "this test is the 0.18.1 storage-upgrade gate; 0.16.1 reports storage v40",
+      "43",
+      "this test is the 0.19.0 storage-upgrade gate; 0.16.1 reports storage v40",
     );
 
     const manifest = JSON.parse(

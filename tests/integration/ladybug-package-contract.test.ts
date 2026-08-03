@@ -21,7 +21,7 @@ describe("Ladybug package contract", () => {
   let conn: unknown = null;
 
   it("declares the Ladybug core as a required dependency", () => {
-    assert.equal(packageJson.dependencies?.kuzu, "npm:@ladybugdb/core@0.18.1");
+    assert.equal(packageJson.dependencies?.kuzu, "npm:@ladybugdb/core@0.19.0");
     assert.equal(packageJson.optionalDependencies?.kuzu, undefined);
   });
 

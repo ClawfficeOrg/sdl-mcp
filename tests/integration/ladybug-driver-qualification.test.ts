@@ -357,6 +357,7 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
           EXPECTED_QUALIFICATION_PHASES,
         );
         for (const phase of receipt.phases) {
+          assert.equal("expectedDigest" in phase, false);
           assert.equal(
             phase.manifestIdentity,
             receipt.graphIdentity.manifestIdentity,

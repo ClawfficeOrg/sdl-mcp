@@ -155,13 +155,13 @@ function dumpbinImports(extensionPath) {
 }
 
 async function missingRuntimeBaseline() {
-  requireVersion("kuzu", "0.18.1");
+  requireVersion("kuzu", "0.19.0");
   const kuzu = await import("kuzu");
   const db = new kuzu.Database(join(home, "missing-runtime.lbug"));
   const conn = new kuzu.Connection(db);
   try {
     await execute(conn, "INSTALL fts");
-    const extensionRoot = join(home, ".lbdb", "extension", "0.18.1");
+    const extensionRoot = join(home, ".lbdb", "extension", "0.19.0");
     const extensionPath = findExtension(extensionRoot);
     assert.ok(extensionPath, "official FTS extension not found under " + extensionRoot);
     const imports = dumpbinImports(extensionPath);
@@ -284,7 +284,7 @@ async function runRealPatch() {
 
 async function fixedRegression() {
   const missing = [];
-  if (packageVersion("kuzu") !== "0.18.1") missing.push("kuzu@0.18.1");
+  if (packageVersion("kuzu") !== "0.19.0") missing.push("kuzu@0.19.0");
   let addon;
   if (!disableOpenSslProvisioning) {
     if (
@@ -330,7 +330,7 @@ async function fixedRegression() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("lbugjs.node") || message.includes("lbug_native")) {
-      dependencyUnavailable(["kuzu@0.18.1 native lbugjs.node"]);
+      dependencyUnavailable(["kuzu@0.19.0 native lbugjs.node"]);
     }
     throw error;
   }
