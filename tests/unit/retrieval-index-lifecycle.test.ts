@@ -527,7 +527,7 @@ describe("initLadybugDb bootstrap wiring", () => {
   });
 
   it("calls ensureIndexes during initLadybugDb", () => {
-    const fnStart = ladybugSrc.indexOf("export async function initLadybugDb");
+    const fnStart = ladybugSrc.indexOf("async function initLadybugDbInternal");
     assert.ok(fnStart !== -1, "initLadybugDb must exist");
     const fnBody = ladybugSrc.slice(fnStart, fnStart + 8000);
     assert.ok(
@@ -537,7 +537,7 @@ describe("initLadybugDb bootstrap wiring", () => {
   });
 
   it("calls ensureEntityIndexes during initLadybugDb", () => {
-    const fnStart = ladybugSrc.indexOf("export async function initLadybugDb");
+    const fnStart = ladybugSrc.indexOf("async function initLadybugDbInternal");
     const fnBody = ladybugSrc.slice(fnStart, fnStart + 8000);
     assert.ok(
       fnBody.includes("ensureEntityIndexes("),
@@ -661,7 +661,7 @@ describe("initLadybugDb bootstrap wiring", () => {
   });
 
   it("index bootstrap failure does not block DB init", () => {
-    const fnStart = ladybugSrc.indexOf("export async function initLadybugDb");
+    const fnStart = ladybugSrc.indexOf("async function initLadybugDbInternal");
     const fnBody = ladybugSrc.slice(fnStart, fnStart + 8000);
     assert.ok(
       fnBody.includes("non-fatal"),

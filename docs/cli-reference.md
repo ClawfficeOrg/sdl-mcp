@@ -143,16 +143,22 @@ Key options:
 SDL-MCP refuses an in-place full refresh when a populated repository already
 exists in the active graph. Use `--safe-rebuild` with a new absolute path
 instead. The command requires a stopped SDL-MCP owner, rejects `--watch` and
-`--repo-id`, retains a failed candidate, and never opens or changes the active
-database.
+`--repo-id`, and requires the candidate primary and every family member to stay
+absent until SDL-MCP reserves them. Appearance or replacement at any later gate
+fails closed; the partial candidate is retained for diagnosis and the active
+database is never opened or changed.
 
 A successful safe rebuild waits for graph-integrity verification, checkpoints
 and closes the candidate, reopens it, and validates repository membership,
 physical Symbol identity, canonical string columns, dependency endpoints, and
-enabled Symbol FTS. It leaves the candidate closed and does not update your
-configuration. Keep SDL-MCP stopped while you switch `graphDatabase.path` or
-`SDL_GRAPH_DB_PATH`, retain the old database family for rollback, and restart
-only after both path sources agree.
+enabled Symbol FTS. After the final close it rechecks the complete family and
+atomically publishes the exact driver/storage, identity, and SHA-256 receipt
+while retaining the family lease. It leaves the candidate closed and does not
+update your configuration. Keep SDL-MCP stopped while you switch
+`graphDatabase.path` or `SDL_GRAPH_DB_PATH`, retain the old database family for
+rollback, and restart only after both path sources agree. Do not manually copy,
+move, rename, or replace a database family: the receipt is a family member and
+is bound to its canonical primary identity and contents.
 
 #### LadybugDB 0.19 production cutover
 

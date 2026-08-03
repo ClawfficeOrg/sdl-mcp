@@ -220,8 +220,11 @@ Use this recovery sequence:
 2. Resolve the effective config and graph paths with `sdl-mcp info`. Check
    `SDL_GRAPH_DB_DIR`, `SDL_GRAPH_DB_PATH`, and `SDL_DB_PATH` as well as
    `graphDatabase.path`.
-3. Copy the active `.lbug` file and every discovered WAL or checkpoint sidecar
-   into a separate quarantine directory. Record hashes before recovery.
+3. Leave the stopped active family in place and record its complete member list
+   and hashes before recovery. Do not manually copy, move, rename, or replace a
+   family; its receipt is a family member bound to the canonical primary identity
+   and exact primary/WAL bytes. Use separate backup tooling only for a forensic
+   artifact that will never be configured as an SDL-MCP database.
 4. Choose an absolute candidate path that does not exist, then run:
 
    ```bash
@@ -240,10 +243,12 @@ Use this recovery sequence:
 7. Restart SDL-MCP and check `sdl.repo.status`, Symbol lookup, graph retrieval,
    and enabled FTS for every configured repository.
 
-The pidfile check detects supported SDL-MCP owners. It cannot detect an
-unrelated program that opened LadybugDB directly, so you must stop that owner
-before the safe rebuild. The command retains a partial or invalid candidate for
-diagnosis and never changes the active database or configuration.
+The per-family lock detects cooperating SDL-MCP owners and is held through the
+entire native database lifetime and strict close. It cannot detect an unrelated
+program that opened LadybugDB directly, so you must stop that owner before the
+safe rebuild. The command also fails if the reserved target appears or changes
+between validation gates, retains a partial or invalid candidate for diagnosis,
+and never changes the active database or configuration.
 
 All configured repositories are rebuilt because `Symbol.symbolId` is a global
 primary key inside one shared database. For example, SCIP-IO can be the first
@@ -398,14 +403,15 @@ live outside those defaults.
   - a successful qualification removes its disposable clone. A failed qualification retains and prints its diagnostic clone path; preserve that clone for investigation
   - complete the separate safe-rebuild/cutover procedure in the [CLI reference](./cli-reference.md#sdl-mcp-index) before using a qualified driver in production. This code change does not perform a production cutover
 
-#### Lock file prevents startup
+#### Lineage receipt or lock prevents startup
 
-- Symptom: error about database lock or "directory in use" on startup
-- Cause: a previous SDL-MCP process crashed without releasing the lock, or another process has the DB open
+- Symptom: startup reports an old-format, missing, or stale lineage receipt, a database-family mismatch, or an active family lock.
+- Cause: the previous process crashed before strict close, the family was copied, moved, renamed, replaced, or changed after its receipt, or another cooperating SDL-MCP process still owns it. A crash deliberately leaves the prior receipt stale.
 - Resolution:
-  - ensure no other `sdl-mcp serve` or `sdl-mcp index` process is running
-  - confirm the recorded owner process is no longer alive before removing a stale lock
-  - if storage integrity is uncertain, quarantine the database family and use `index --force --safe-rebuild` instead of deleting or reindexing it in place
+  - ensure no other `sdl-mcp serve` or `sdl-mcp index` process is running; SDL-MCP reclaims its own stale lock only after the recorded PID is dead
+  - do not manufacture, copy, or edit the receipt and do not remove a lock while ownership is ambiguous
+  - keep the rejected family stopped and intact, then use `index --force --safe-rebuild` with a new absolute target path
+  - remember that the lock is cooperative: direct LadybugDB users do not participate and must be stopped separately
 
 #### Concurrent access errors
 

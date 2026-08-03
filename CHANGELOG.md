@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Ladybug safety gates**: Added `qa:isolated` for runner-owned mutating QA on a fresh stdio server/database and `qualify:ladybug` for version-pinned, bytes-only source cloning with two fresh-process write/checkpoint/reopen validation cycles. Both gates preserve active and quarantined database families, remove successful disposable storage, and retain failed fixtures for diagnosis.
+- **Ladybug family lineage guard**: SDL-managed opens now use a cooperative per-family lifetime lease and an atomic closed-family receipt bound to the exact driver/storage versions, canonical primary identity, and streamed SHA-256 inventory of the primary plus known WAL. Old, unmarked, stale, copied, moved, replaced, crashed, or concurrently owned families fail before native open; safe rebuild and verified clone flows use purpose-specific capabilities and recheck the complete family before publication.
 
 ### Changed
 

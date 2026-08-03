@@ -18,10 +18,20 @@ import {
 } from "./extension-caps.js";
 import { normalizeGraphDbPath } from "./graph-db-path.js";
 import {
-  reserveFreshLadybugPrimary,
-  verifyLadybugLineageBeforeOpen,
-  writeLadybugLineageMarker,
+  abandonLadybugFamily,
+  acquireNormalLadybugFamily,
+  acquireQualificationLadybugCloneFamily,
+  acquireValidatedLadybugCloneFamily,
+  finalizeNormalLadybugFamilyClose,
+  finalizeSafeRebuildLadybugFamily,
+  finalizeValidatedLadybugCloneFamily,
+  reserveSafeRebuildLadybugFamily,
+  sealSafeRebuildFamilyForReopen,
+  verifySafeRebuildFamilyBeforeReopen,
+  type LadybugFamilyLease,
   type LadybugLineageDriver,
+  type QualificationLadybugCloneAuthority,
+  type ValidatedLadybugCloneAuthority,
 } from "./ladybug-lineage.js";
 import {
   isWindowsFtsRuntimeUnavailable,
@@ -164,6 +174,15 @@ const require = createRequire(import.meta.url);
 let ladybugModule: LadybugModule | null = null;
 let dbInstance: LadybugDatabase | null = null;
 let currentDbPath: string | null = null;
+let activeFamilyLease: LadybugFamilyLease | null = null;
+
+const SAFE_REBUILD_SESSION = Symbol("SafeRebuildLadybugSession");
+
+export interface SafeRebuildLadybugSession {
+  readonly [SAFE_REBUILD_SESSION]: true;
+  readonly dbPath: string;
+  readonly lease: LadybugFamilyLease;
+}
 
 const ONE_GB = 1024 * 1024 * 1024;
 const FOUR_GB = 4 * ONE_GB;
@@ -175,17 +194,9 @@ const MIN_CHECKPOINT_THRESHOLD_BYTES = 16 * 1024 * 1024;
 const MAX_CHECKPOINT_THRESHOLD_BYTES = 8 * ONE_GB;
 const CHECKPOINT_THRESHOLD_ENV = "SDL_MCP_LADYBUG_CHECKPOINT_THRESHOLD_BYTES";
 
-export type LadybugLineagePurpose =
-  | "normal"
-  | "safeRebuildCandidate"
-  | "qualificationClone"
-  | "validatedClone";
-
 export interface LadybugDbInitOptions {
   bufferPoolBytes?: number | null;
   checkpointThresholdBytes?: number | null;
-  /** @internal Explicit non-production opens that must never issue a ready marker. */
-  lineagePurpose?: LadybugLineagePurpose;
 }
 
 /** @internal exported for focused config/env tests. */
@@ -268,6 +279,7 @@ let pendingWriteConnectionRecovery: Promise<void> | null = null;
 let dbClosePromise: Promise<void> | null = null;
 let preserveCloseHooksForCurrentClose = false;
 let strictCloseForCurrentClose = false;
+let preserveFamilyLeaseForCurrentClose = false;
 const activeExclusiveReadLeases = new Set<Promise<void>>();
 const exclusiveReadCloseFailures: unknown[] = [];
 const sessionWriteBodyLimiters = new WeakMap<
@@ -366,12 +378,6 @@ async function loadLadybug(): Promise<LadybugModule> {
   }
 }
 
-export async function writeLadybugReadyLineageMarker(
-  dbPath: string,
-): Promise<void> {
-  writeLadybugLineageMarker(dbPath, lineageDriver(await loadLadybug()));
-}
-
 export function resolveLadybugBufferManagerSizeBytes(
   totalMemoryBytes = totalmem(),
   envValue = process.env.SDL_LADYBUG_BUFFER_POOL_BYTES ??
@@ -452,9 +458,15 @@ export function quarantineDanglingWalCheckpointSidecar(
   }
 }
 
-export async function getLadybugDb(
-  dbPath?: string,
-  options?: LadybugDbInitOptions,
+type LadybugFamilyLeaseAcquirer = (
+  dbPath: string,
+  driver: LadybugLineageDriver,
+) => LadybugFamilyLease;
+
+async function getLadybugDbInternal(
+  dbPath: string | undefined,
+  options: LadybugDbInitOptions | undefined,
+  acquireLease: LadybugFamilyLeaseAcquirer,
 ): Promise<LadybugDatabase> {
   const resolvedPath = dbPath
     ? normalizePath(normalizeGraphDbPath(dbPath))
@@ -466,13 +478,10 @@ export async function getLadybugDb(
     );
   }
 
-  // Fast path: already initialized for this path.
   if (dbInstance && currentDbPath === resolvedPath) {
     return dbInstance;
   }
 
-  // Serialize initialization: if another caller is already opening the DB
-  // for this path, await its result instead of double-initializing.
   if (dbInitPromise) {
     const existing = await dbInitPromise;
     if (dbInstance && currentDbPath === resolvedPath) {
@@ -483,13 +492,6 @@ export async function getLadybugDb(
   const initFn = async (): Promise<LadybugDatabase> => {
     const modules = await loadLadybug();
     const normalizedPath = normalizePath(resolvedPath);
-    const lineageState =
-      (options?.lineagePurpose ?? "normal") === "normal"
-        ? verifyLadybugLineageBeforeOpen(
-            normalizedPath,
-            lineageDriver(modules),
-          )
-        : null;
 
     if (dbInstance) {
       logger.warn("LadybugDB path changed, closing existing connection");
@@ -504,29 +506,26 @@ export async function getLadybugDb(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new DatabaseError(
-          `Failed to create LadybugDB parent directory at ${parentDir}: ${msg}`,
+          "Failed to create LadybugDB parent directory at " +
+            parentDir +
+            ": " +
+            msg,
         );
       }
     }
-    if (lineageState === "fresh") {
-      reserveFreshLadybugPrimary(normalizedPath);
-    }
 
-    const walCheckpointSidecar =
-      quarantineDanglingWalCheckpointSidecar(normalizedPath);
-    if (walCheckpointSidecar.status === "quarantined") {
-      logger.warn(
-        "Quarantined dangling LadybugDB WAL checkpoint sidecar before open",
-        {
-          sidecarPath: walCheckpointSidecar.sidecarPath,
-          quarantinePath: walCheckpointSidecar.quarantinePath,
-        },
-      );
-    } else if (walCheckpointSidecar.status === "failed") {
+    const openingLease = acquireLease(normalizedPath, lineageDriver(modules));
+    if (activeFamilyLease && activeFamilyLease !== openingLease) {
+      try {
+        abandonLadybugFamily(openingLease);
+      } catch {
+        // Preserve the process-global ownership violation.
+      }
       throw new DatabaseError(
-        `Failed to quarantine dangling LadybugDB WAL checkpoint sidecar at ${walCheckpointSidecar.sidecarPath}: ${walCheckpointSidecar.error}`,
+        "Another LadybugDB family lease is already active in this process",
       );
     }
+    activeFamilyLease = openingLease;
 
     let openingDb: LadybugDatabase | null = null;
     try {
@@ -539,6 +538,9 @@ export async function getLadybugDb(
         process.env,
         options?.checkpointThresholdBytes,
       );
+      // The cooperative family lease is already held and the closed-family
+      // receipt or purpose-specific clone authority was rechecked immediately
+      // before native construction.
       openingDb = createManagedLadybugDatabase(
         modules.Database,
         normalizedPath,
@@ -547,10 +549,6 @@ export async function getLadybugDb(
           checkpointThresholdBytes,
         },
       );
-      // LadybugDB constructs lazily: WAL replay and storage validation happen
-      // during init/first use, so do not publish an open database before this
-      // boundary completes.
-      // WAL replay can auto-load FTS before SDL reaches its explicit LOAD.
       const initResult = await withWindowsFtsRuntime(() => openingDb!.init());
       if (isWindowsFtsRuntimeUnavailable(initResult)) {
         await openingDb.init();
@@ -578,6 +576,19 @@ export async function getLadybugDb(
         dbInstance = null;
         currentDbPath = null;
       }
+      if (activeFamilyLease === openingLease) {
+        try {
+          abandonLadybugFamily(openingLease);
+        } catch (leaseError) {
+          logger.warn("Error releasing LadybugDB family lease after open failure", {
+            error:
+              leaseError instanceof Error
+                ? leaseError.message
+                : String(leaseError),
+          });
+        }
+        activeFamilyLease = null;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       throw new DatabaseError(formatReindexGuidanceError(normalizedPath, msg));
     }
@@ -589,6 +600,13 @@ export async function getLadybugDb(
   } finally {
     dbInitPromise = null;
   }
+}
+
+export function getLadybugDb(
+  dbPath?: string,
+  options?: LadybugDbInitOptions,
+): Promise<LadybugDatabase> {
+  return getLadybugDbInternal(dbPath, options, acquireNormalLadybugFamily);
 }
 
 async function isConnectionHealthy(conn: LadybugConnection): Promise<boolean> {
@@ -1301,14 +1319,12 @@ export async function withWriteConn<T>(
 // runs lazily on first invocation.
 configureWriteConnAcquirer(withWriteConn);
 
-export async function initLadybugDb(
+async function initLadybugDbInternal(
   dbPath: string,
-  options?: LadybugDbInitOptions,
+  options: LadybugDbInitOptions | undefined,
+  acquireLease: LadybugFamilyLeaseAcquirer,
 ): Promise<void> {
   const normalizedPath = normalizePath(normalizeGraphDbPath(dbPath));
-  const shouldWriteLineageMarker =
-    (options?.lineagePurpose ?? "normal") === "normal" &&
-    !existsSync(normalizedPath);
 
   logger.info("Initializing LadybugDB", { path: normalizedPath });
 
@@ -1329,7 +1345,7 @@ export async function initLadybugDb(
 
   try {
     // Step 1: Open database and initialize connection pool
-    await getLadybugDb(normalizedPath, options);
+    await getLadybugDbInternal(normalizedPath, options, acquireLease);
     await getLadybugConn(); // triggers pool init
 
     // Step 2: Read current schema version (may throw if table doesn't exist)
@@ -1438,12 +1454,6 @@ export async function initLadybugDb(
       path: normalizedPath,
       schemaVersion: finalVersion,
     });
-    if (shouldWriteLineageMarker) {
-      writeLadybugLineageMarker(
-        normalizedPath,
-        lineageDriver(await loadLadybug()),
-      );
-    }
   } catch (err) {
     if (err instanceof DatabaseError) {
       throw err;
@@ -1451,6 +1461,94 @@ export async function initLadybugDb(
     const msg = err instanceof Error ? err.message : String(err);
     throw new DatabaseError(formatReindexGuidanceError(normalizedPath, msg));
   }
+}
+
+
+function requireSafeRebuildSession(
+  session: SafeRebuildLadybugSession,
+): LadybugFamilyLease {
+  if (
+    !session ||
+    session[SAFE_REBUILD_SESSION] !== true ||
+    activeFamilyLease !== session.lease ||
+    session.dbPath !== session.lease.dbPath
+  ) {
+    throw new DatabaseError("Invalid or inactive safe-rebuild LadybugDB session");
+  }
+  return session.lease;
+}
+
+export function initLadybugDb(
+  dbPath: string,
+  options?: LadybugDbInitOptions,
+): Promise<void> {
+  return initLadybugDbInternal(
+    dbPath,
+    options,
+    acquireNormalLadybugFamily,
+  );
+}
+
+export async function initSafeRebuildLadybugDb(
+  dbPath: string,
+  options?: LadybugDbInitOptions,
+): Promise<SafeRebuildLadybugSession> {
+  if (activeFamilyLease || dbInstance) {
+    throw new DatabaseError(
+      "Safe rebuild requires a fresh process-global LadybugDB owner",
+    );
+  }
+  const leaseHolder: { lease?: LadybugFamilyLease } = {};
+  await initLadybugDbInternal(dbPath, options, (path, driver) => {
+    const lease = reserveSafeRebuildLadybugFamily(path, driver);
+    leaseHolder.lease = lease;
+    return lease;
+  });
+  const lease = leaseHolder.lease;
+  if (!lease) {
+    throw new DatabaseError("Safe rebuild did not acquire its family lease");
+  }
+  return {
+    [SAFE_REBUILD_SESSION]: true,
+    dbPath: lease.dbPath,
+    lease,
+  };
+}
+
+export function reopenSafeRebuildLadybugDb(
+  session: SafeRebuildLadybugSession,
+  options?: LadybugDbInitOptions,
+): Promise<void> {
+  const lease = requireSafeRebuildSession(session);
+  if (dbInstance) {
+    throw new DatabaseError(
+      "Safe rebuild reopen requires the first database instance to be closed",
+    );
+  }
+  return initLadybugDbInternal(session.dbPath, options, () => {
+    verifySafeRebuildFamilyBeforeReopen(lease);
+    return lease;
+  });
+}
+
+export function initQualificationLadybugClone(
+  dbPath: string,
+  authority: QualificationLadybugCloneAuthority,
+  options?: LadybugDbInitOptions,
+): Promise<void> {
+  return initLadybugDbInternal(dbPath, options, (path, driver) =>
+    acquireQualificationLadybugCloneFamily(path, authority, driver),
+  );
+}
+
+export function initValidatedLadybugClone(
+  dbPath: string,
+  authority: ValidatedLadybugCloneAuthority,
+  options?: LadybugDbInitOptions,
+): Promise<void> {
+  return initLadybugDbInternal(dbPath, options, (path, driver) =>
+    acquireValidatedLadybugCloneFamily(path, authority, driver),
+  );
 }
 
 /**
@@ -1703,16 +1801,19 @@ export async function buildDeferredIndexes(
   logger.info("Deferred indexes built", { durationMs: Date.now() - startMs });
 }
 
-export function closeLadybugDb(
-  options: CloseLadybugDbOptions = {},
+function requestLadybugDbClose(
+  options: CloseLadybugDbOptions,
+  preserveFamilyLease: boolean,
 ): Promise<void> {
   if (!dbClosePromise) {
     preserveCloseHooksForCurrentClose = options.preserveCloseHooks === true;
     strictCloseForCurrentClose = options.strict === true;
+    preserveFamilyLeaseForCurrentClose = preserveFamilyLease;
     dbClosePromise = withExclusiveLadybugOperation(closeLadybugDbImpl).finally(() => {
       dbClosePromise = null;
       preserveCloseHooksForCurrentClose = false;
       strictCloseForCurrentClose = false;
+      preserveFamilyLeaseForCurrentClose = false;
     });
   } else {
     if (!options.preserveCloseHooks) {
@@ -1720,11 +1821,68 @@ export function closeLadybugDb(
       // cannot accidentally retain hooks requested for disposal by another.
       preserveCloseHooksForCurrentClose = false;
     }
+    if (!preserveFamilyLease) {
+      // A normal or failure-path close must not leave a capability-owned lease.
+      preserveFamilyLeaseForCurrentClose = false;
+    }
     // Strict propagation wins for a shared close so validation cannot report
     // success when any part of the shared cleanup failed.
     if (options.strict) strictCloseForCurrentClose = true;
   }
   return dbClosePromise;
+}
+
+export function closeLadybugDb(
+  options: CloseLadybugDbOptions = {},
+): Promise<void> {
+  return requestLadybugDbClose(options, false);
+}
+
+function abandonActiveFamilyLease(): void {
+  const lease = activeFamilyLease;
+  activeFamilyLease = null;
+  if (lease) abandonLadybugFamily(lease);
+}
+
+export async function closeSafeRebuildBeforeReopen(
+  session: SafeRebuildLadybugSession,
+): Promise<void> {
+  const lease = requireSafeRebuildSession(session);
+  try {
+    await requestLadybugDbClose(
+      { preserveCloseHooks: true, strict: true },
+      true,
+    );
+    sealSafeRebuildFamilyForReopen(lease);
+  } catch (error) {
+    try {
+      abandonActiveFamilyLease();
+    } catch {
+      // Preserve the strict-close or closed-family sealing failure.
+    }
+    throw error;
+  }
+}
+
+export async function closeAndPublishSafeRebuildLadybugDb(
+  session: SafeRebuildLadybugSession,
+  beforePublication?: () => void,
+): Promise<void> {
+  const lease = requireSafeRebuildSession(session);
+  try {
+    await requestLadybugDbClose({ strict: true }, true);
+    finalizeSafeRebuildLadybugFamily(lease, beforePublication);
+    activeFamilyLease = null;
+  } catch (error) {
+    if (activeFamilyLease === lease) {
+      try {
+        abandonActiveFamilyLease();
+      } catch {
+        // Preserve the strict-close or publication failure.
+      }
+    }
+    throw error;
+  }
 }
 
 async function closeLadybugDbImpl(): Promise<void> {
@@ -1920,6 +2078,31 @@ async function closeLadybugDbImpl(): Promise<void> {
   if (!preserveCloseHooksForCurrentClose) {
     closeHooks.length = 0;
   }
+
+  if (!preserveFamilyLeaseForCurrentClose && activeFamilyLease) {
+    const lease = activeFamilyLease;
+    activeFamilyLease = null;
+    try {
+      if (closeFailures.length === 0 && lease.mode === "normal") {
+        // Only a fully successful checkpoint/close may refresh the active
+        // closed-family receipt. Any earlier failure leaves it stale.
+        finalizeNormalLadybugFamilyClose(lease);
+      } else if (
+        closeFailures.length === 0 &&
+        lease.mode === "validated-clone"
+      ) {
+        finalizeValidatedLadybugCloneFamily(lease);
+      } else {
+        abandonLadybugFamily(lease);
+      }
+    } catch (error) {
+      closeFailures.push(error);
+      logger.warn("Error finalizing LadybugDB family lineage", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   logger.debug("LadybugDB closed");
   if (strictCloseForCurrentClose && closeFailures.length > 0) {
     throw new AggregateError(

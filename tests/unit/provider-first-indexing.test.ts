@@ -11353,7 +11353,7 @@ describe("provider-first indexing foundation", () => {
     }
   });
 
-  it("restores the active DB when post-handoff validation fails", async () => {
+  it("restores the active DB when lineage rejects a shadow handoff", async () => {
     const root = mkdtempSync(
       join(tmpdir(), "sdl-provider-first-handoff-validation-"),
     );
@@ -11396,10 +11396,14 @@ describe("provider-first indexing foundation", () => {
       });
 
       assert.equal(activation.status, "failed");
-      assert.equal(activation.rollback, "restored");
+      assert.equal(
+        activation.rollback,
+        "restored",
+        activation.reasons.join("\n"),
+      );
       assert.match(
         activation.reasons.join(" "),
-        /critical Symbol FTS validation failed.*previous active DB was restored/,
+        /primary file identity mismatch.*previous active DB was restored/,
       );
       assert.equal(reopenCalls, 2);
       assert.deepEqual(

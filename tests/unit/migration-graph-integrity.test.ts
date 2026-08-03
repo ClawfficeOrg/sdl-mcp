@@ -4,11 +4,11 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clone.ts";
+
 import {
   closeLadybugDb,
   getLadybugConn,
-  initLadybugDb,
-  writeLadybugReadyLineageMarker,
 } from "../../dist/db/ladybug.js";
 import {
   exec,
@@ -127,8 +127,6 @@ async function createVersion22Database(
   }
   await conn.close();
   await db.close();
-  // This fixture represents an older SDL schema created by the pinned driver.
-  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 describe("migration: graph integrity revisions and manifest", () => {
@@ -201,7 +199,7 @@ describe("migration: graph integrity revisions and manifest", () => {
     const dbPath = join(root, "v22.lbug");
     await createVersion22Database(dbPath);
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const rows = await Promise.all([
       getDerivedState("repo"),
@@ -272,7 +270,7 @@ describe("migration: graph integrity revisions and manifest", () => {
     const dbPath = join(root, "partial.lbug");
     await createVersion22Database(dbPath, true);
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     await exec(
       conn,
@@ -323,7 +321,7 @@ describe("migration: graph integrity revisions and manifest", () => {
     const dbPath = join(root, "indexes.lbug");
     await createVersion22Database(dbPath);
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const indexes = await queryAll<Record<string, unknown>>(
       conn,

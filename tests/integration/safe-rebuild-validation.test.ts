@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,7 +26,6 @@ import {
 } from "../../dist/db/ladybug.js";
 import { exec, querySingle } from "../../dist/db/ladybug-core.js";
 import { getLadybugLineageMarkerPath } from "../../dist/db/ladybug-lineage.js";
-import { initGraphDb } from "../../dist/db/initGraphDb.js";
 import {
   runSafeRebuild,
   validateSafeRebuildCandidate,
@@ -168,9 +168,14 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     );
     assert.equal(events.at(-1), "candidate:closed-after-validation");
     assert.equal(
-      markerStates.every((markerPresent) => !markerPresent),
+      markerStates.slice(0, -1).every((markerPresent) => !markerPresent),
       true,
-      "the candidate must remain unmarked through validation and strict close",
+      "the candidate must remain unmarked through validation and final strict close",
+    );
+    assert.equal(
+      markerStates.at(-1),
+      true,
+      "the closed-family receipt is published before completion is reported",
     );
     assert.equal(
       existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
@@ -419,9 +424,10 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         configPath: fixture.configPath,
         activeGraphDbPath: fixture.activePath,
         onLifecycleEvent: (event) => events.push(event),
-        _initGraphDbForTesting: async (config, configPath, options) => {
-          await initGraphDb(config, configPath, options);
-          throw new Error("injected initial candidate initialization failure");
+        _afterCandidateOpenForTesting: async (phase) => {
+          if (phase === "initial") {
+            throw new Error("injected initial candidate initialization failure");
+          }
         },
       }),
       /injected initial candidate initialization failure/,
@@ -454,13 +460,11 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         configPath: fixture.configPath,
         activeGraphDbPath: fixture.activePath,
         onLifecycleEvent: (event) => events.push(event),
-        _initGraphDbForTesting: async (config, configPath, options) => {
+        _afterCandidateOpenForTesting: async (phase) => {
           initCalls += 1;
-          await initGraphDb(config, configPath, options);
-          if (initCalls === 2) {
+          if (phase === "reopen") {
             throw new Error("injected candidate reopen initialization failure");
           }
-          return fixture.candidatePath;
         },
       }),
       /injected candidate reopen initialization failure/,
@@ -502,6 +506,67 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(existsSync(fixture.candidatePath), true);
     assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
     assert.equal(process.env.SDL_GRAPH_DB_PATH, fixture.activePath);
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
+  });
+
+  it("rejects a safe-rebuild target that appears after preflight", async () => {
+    const fixture = createFixture();
+
+    await assert.rejects(
+      runSafeRebuild({
+        options: {
+          config: fixture.configPath,
+          force: true,
+          safeRebuildPath: fixture.candidatePath,
+        },
+        config: loadConfig(fixture.configPath),
+        configPath: fixture.configPath,
+        activeGraphDbPath: fixture.activePath,
+        _beforeCandidateInitForTesting: () => {
+          writeFileSync(fixture.candidatePath, "appeared-after-preflight", "utf8");
+        },
+      }),
+      /database family is not fresh[\s\S]*--safe-rebuild/iu,
+    );
+
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
+  });
+
+  it("refuses publication when the validated target is replaced", async () => {
+    const fixture = createFixture();
+
+    await assert.rejects(
+      runSafeRebuild({
+        options: {
+          config: fixture.configPath,
+          force: true,
+          safeRebuildPath: fixture.candidatePath,
+        },
+        config: loadConfig(fixture.configPath),
+        configPath: fixture.configPath,
+        activeGraphDbPath: fixture.activePath,
+        _beforeLineagePublicationForTesting: () => {
+          renameSync(
+            fixture.candidatePath,
+            fixture.candidatePath + ".validated",
+          );
+          writeFileSync(
+            fixture.candidatePath,
+            "replacement-after-validation",
+            "utf8",
+          );
+        },
+      }),
+      /changed after validation/iu,
+    );
+
+    assert.equal(getLadybugDbPath(), null);
     assert.equal(
       existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
       false,

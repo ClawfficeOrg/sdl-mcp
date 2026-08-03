@@ -177,6 +177,7 @@ interface PublishVerifiedDbFamilyCacheOptions<TValidation> {
   readyMarkerPath: string;
   validateCopiedFamily: (
     copiedPrimaryPath: string,
+    verifiedCopyFingerprint: DbFamilyFingerprint,
   ) => Promise<TValidation> | TValidation;
 }
 
@@ -194,12 +195,13 @@ export async function publishVerifiedDbFamilyCache<TValidation>(
   }
 
   const sourceBefore = fingerprintDbFamily(options.sourcePrimaryPath);
-  copyDbFamilyVerified(
+  const verifiedCopyFingerprint = copyDbFamilyVerified(
     options.sourcePrimaryPath,
     options.destinationPrimaryPath,
   );
   const validation = await options.validateCopiedFamily(
     options.destinationPrimaryPath,
+    verifiedCopyFingerprint,
   );
   assertFingerprintsEqual(
     fingerprintDbFamily(options.sourcePrimaryPath),
@@ -241,6 +243,7 @@ interface RestoreVerifiedDbFamilyCacheOptions<TValidation> {
   workingPrimaryPath: string;
   validateCopiedFamily: (
     copiedPrimaryPath: string,
+    verifiedCopyFingerprint: DbFamilyFingerprint,
   ) => Promise<TValidation> | TValidation;
 }
 
@@ -283,9 +286,13 @@ export async function restoreVerifiedDbFamilyCache<TValidation>(
     "Cached database family does not match its ready marker",
   );
 
-  copyDbFamilyVerified(options.cachedPrimaryPath, options.workingPrimaryPath);
+  const verifiedCopyFingerprint = copyDbFamilyVerified(
+    options.cachedPrimaryPath,
+    options.workingPrimaryPath,
+  );
   const validation = await options.validateCopiedFamily(
     options.workingPrimaryPath,
+    verifiedCopyFingerprint,
   );
   if (JSON.stringify(validation) !== JSON.stringify(marker.validation)) {
     throw new Error("Restored database family validation identity mismatch");

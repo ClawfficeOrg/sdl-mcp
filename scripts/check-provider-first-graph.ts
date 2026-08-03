@@ -11,6 +11,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  closeLadybugDb,
+  getLadybugConn,
+  getLadybugDb,
+} from "../dist/db/ladybug.js";
+
 interface Args {
   db: string;
   repoRoot: string;
@@ -162,9 +168,10 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   mkdirSync(args.outDir, { recursive: true });
 
-  const kuzu = await import("kuzu");
-  const db = new kuzu.Database(args.db);
-  const conn = new kuzu.Connection(db);
+  // Even this read-only checker must prove the exact closed DB family before
+  // native open and hold the cooperative family lease through strict close.
+  await getLadybugDb(args.db);
+  const conn = await getLadybugConn();
   try {
     const files = await queryAll<FileRow>(
       conn,
@@ -273,8 +280,7 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
   } finally {
-    await conn.close().catch(() => undefined);
-    await db.close().catch(() => undefined);
+    await closeLadybugDb({ strict: true });
   }
 }
 

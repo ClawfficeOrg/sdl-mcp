@@ -61,9 +61,17 @@ async function seedFtsDatabase() {
 }
 
 async function openWithProductionDatabase() {
-  const { closeLadybugDb, getLadybugConn, getLadybugDb } =
+  const { closeLadybugDb, getLadybugConn, initValidatedLadybugClone } =
     await import("../../../dist/db/ladybug.js");
-  await getLadybugDb(dbPath, { lineagePurpose: "validatedClone" });
+  const { fingerprintDbFamily } =
+    await import("../../../dist/benchmark/external-runner.js");
+  const { bindVerifiedLadybugClone } =
+    await import("../../../dist/db/ladybug-lineage.js");
+  const authority = bindVerifiedLadybugClone(
+    dbPath,
+    fingerprintDbFamily(dbPath),
+  );
+  await initValidatedLadybugClone(dbPath, authority);
   try {
     const conn = await getLadybugConn();
     const rows = await execute(conn, "RETURN 1 AS value", true);

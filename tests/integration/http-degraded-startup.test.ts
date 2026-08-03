@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
+import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clone.ts";
+
 async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
   if (child.exitCode !== null) return;
   if (process.platform === "win32" && child.pid !== undefined) {
@@ -45,18 +47,18 @@ describe("HTTP degraded startup", () => {
 
         const db = new kuzu.Database(dbPath);
         const conn = new kuzu.Connection(db);
-        await conn.query(
+        const createResult = await conn.query(
           "CREATE NODE TABLE Symbol(wrongId STRING PRIMARY KEY)",
         );
+        (Array.isArray(createResult) ? createResult[0] : createResult).close();
         await conn.close();
         await db.close();
 
-        // Keep this fixture past the lineage gate so the test still isolates
-        // the intentionally incompatible schema preflight.
-        const { writeLadybugReadyLineageMarker } = await import(
-          "../../dist/db/ladybug.js"
-        );
-        await writeLadybugReadyLineageMarker(dbPath);
+        // Move the raw fixture through the explicit clone capability and a
+        // strict close so the child reaches the incompatible-schema preflight.
+        const { closeLadybugDb } = await import("../../dist/db/ladybug.js");
+        await initValidatedTestLadybugClone(dbPath);
+        await closeLadybugDb({ strict: true });
 
         await writeFile(
           configPath,

@@ -3,13 +3,18 @@ import { isAbsolute, resolve } from "node:path";
 import type { Connection } from "kuzu";
 import type { AppConfig } from "../../config/types.js";
 import {
+  closeAndPublishSafeRebuildLadybugDb,
   closeLadybugDb,
+  closeSafeRebuildBeforeReopen,
   getLadybugConn,
   getLadybugDbPath,
   withWriteConn,
-  writeLadybugReadyLineageMarker,
+  type SafeRebuildLadybugSession,
 } from "../../db/ladybug.js";
-import { initGraphDb } from "../../db/initGraphDb.js";
+import {
+  initSafeRebuildGraphDb,
+  reopenSafeRebuildGraphDb,
+} from "../../db/initGraphDb.js";
 import { getLadybugLineageMarkerPath } from "../../db/ladybug-lineage.js";
 import { execCheckpoint, queryStoredProcAll } from "../../db/ladybug-core.js";
 import { withExclusiveLadybugOperation } from "../../db/ladybug-operation-gate.js";
@@ -108,8 +113,14 @@ export interface RunSafeRebuildParams {
   onLifecycleEvent?: (event: SafeRebuildLifecycleEvent) => void;
   /** @internal deterministic failure seam for disk-backed lifecycle tests. */
   _indexRepoForTesting?: typeof indexRepo;
-  /** @internal deterministic partial-initialization seam. */
-  _initGraphDbForTesting?: typeof initGraphDb;
+  /** @internal deterministic target-appearance seam after preflight. */
+  _beforeCandidateInitForTesting?: () => void;
+  /** @internal deterministic failure seam after a purpose-specific open. */
+  _afterCandidateOpenForTesting?: (
+    phase: "initial" | "reopen",
+  ) => void | Promise<void>;
+  /** @internal deterministic replacement seam before receipt publication. */
+  _beforeLineagePublicationForTesting?: () => void;
   /** @internal deterministic post-reopen failure seam. */
   _validateCandidateForTesting?: typeof validateSafeRebuildCandidate;
   /** @internal deterministic per-repository storage failure seam. */
@@ -457,9 +468,9 @@ export async function runSafeRebuild(
     );
   }
 
+  params._beforeCandidateInitForTesting?.();
   const savedEnvironment = setCandidateGraphPath(request.targetGraphDbPath);
   const indexRepoImpl = params._indexRepoForTesting ?? indexRepo;
-  const initCandidate = params._initGraphDbForTesting ?? initGraphDb;
   const validateCandidate =
     params._validateCandidateForTesting ?? validateSafeRebuildCandidate;
   const validateStorageAfterRepo =
@@ -467,6 +478,7 @@ export async function runSafeRebuild(
     validateSafeRebuildStorageAfterRepo;
   const repoResults: SafeRebuildResult["repoResults"] = [];
   let candidateOpen = false;
+  let safeRebuildSession: SafeRebuildLadybugSession | null = null;
   let completed = false;
   let primaryFailure: unknown;
   disableDerivedRefreshQueue();
@@ -474,9 +486,12 @@ export async function runSafeRebuild(
     // Own cleanup before initialization starts: LadybugDB can expose a pool
     // before later schema/extension work rejects.
     candidateOpen = true;
-    await initCandidate(params.config, params.configPath, {
-      lineagePurpose: "safeRebuildCandidate",
-    });
+    const safeRebuildHandle = await initSafeRebuildGraphDb(
+      params.config,
+      params.configPath,
+    );
+    safeRebuildSession = safeRebuildHandle.session;
+    await params._afterCandidateOpenForTesting?.("initial");
     params.onLifecycleEvent?.("candidate:opened");
     await loadConfiguredAdapterPlugins(
       params.config,
@@ -520,21 +535,32 @@ export async function runSafeRebuild(
     await shutdownDerivedRefreshQueue();
     await checkpointSafeRebuild();
     params.onLifecycleEvent?.("candidate:checkpointed");
-    await closeLadybugDb({ preserveCloseHooks: true, strict: true });
+    if (!safeRebuildSession) {
+      throw new Error("Safe rebuild family lease is unavailable before reopen");
+    }
+    await closeSafeRebuildBeforeReopen(safeRebuildSession);
     candidateOpen = false;
     params.onLifecycleEvent?.("candidate:closed-before-reopen");
 
     candidateOpen = true;
-    await initCandidate(params.config, params.configPath, {
-      lineagePurpose: "safeRebuildCandidate",
-    });
+    await reopenSafeRebuildGraphDb(
+      params.config,
+      params.configPath,
+      safeRebuildSession,
+    );
+    await params._afterCandidateOpenForTesting?.("reopen");
     params.onLifecycleEvent?.("candidate:reopened");
     const validation = await validateCandidate(params.config);
     params.onLifecycleEvent?.("candidate:validated");
-    await closeLadybugDb({ strict: true });
+    if (!safeRebuildSession) {
+      throw new Error("Safe rebuild family lease is unavailable after validation");
+    }
+    await closeAndPublishSafeRebuildLadybugDb(
+      safeRebuildSession,
+      params._beforeLineagePublicationForTesting,
+    );
     candidateOpen = false;
     params.onLifecycleEvent?.("candidate:closed-after-validation");
-    await writeLadybugReadyLineageMarker(request.targetGraphDbPath);
     completed = true;
     return {
       targetGraphDbPath: request.targetGraphDbPath,
@@ -546,7 +572,7 @@ export async function runSafeRebuild(
     throw error;
   } finally {
     let teardownFailure: unknown;
-    if (candidateOpen) {
+    if (!completed && (candidateOpen || safeRebuildSession)) {
       try {
         await closeLadybugDb({ strict: true });
         if (!completed) {

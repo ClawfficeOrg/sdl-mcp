@@ -645,7 +645,7 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
       await closeLadybugDb();
     });
 
-    it("strict mode reports close-hook failures after resetting database state", async () => {
+    it("strict close-hook failure resets state and leaves the family stale", async () => {
       const testPath = getTestDbPath("strict-close-hook-failure");
       cleanupTestDb("strict-close-hook-failure");
       await initLadybugDb(testPath);
@@ -663,8 +663,10 @@ describe("LadybugDB Connection Manager", { skip: !ladybugAvailable }, () => {
         );
         assert.strictEqual(getLadybugDbPath(), null);
 
-        await initLadybugDb(testPath);
-        await closeLadybugDb();
+        await assert.rejects(
+          initLadybugDb(testPath),
+          /lineage marker is missing[\s\S]*--safe-rebuild/iu,
+        );
       } finally {
         await closeLadybugDb();
         cleanupTestDb("strict-close-hook-failure");

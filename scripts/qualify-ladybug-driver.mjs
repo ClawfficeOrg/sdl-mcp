@@ -4,9 +4,15 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import {
+  closeSync,
+  constants,
   existsSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -122,6 +128,7 @@ const QUALIFICATION_AUTHORITY_NONCE_ENV =
 const QUALIFICATION_AUTHORITY_PATH_ENV =
   "SDL_LADYBUG_QUALIFICATION_AUTHORITY_PATH";
 const QUALIFICATION_AUTHORITY_VERSION = 1;
+const MAX_QUALIFICATION_AUTHORITY_BYTES = 16 * 1024;
 const QUALIFICATION_ROOT_PREFIX = "sdl-ladybug-qualification-";
 const NO_QUALIFICATION_PHASE_FAILURE = Symbol("no phase failure");
 const require = createRequire(import.meta.url);
@@ -168,6 +175,83 @@ function fileSha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function readBoundedQualificationAuthority(path) {
+  const pathStat = lstatSync(path, { bigint: true });
+  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
+    invalidQualificationAuthority("marker must be a regular non-symlink file");
+  }
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const openedStat = fstatSync(descriptor, { bigint: true });
+    if (
+      !openedStat.isFile() ||
+      openedStat.dev !== pathStat.dev ||
+      openedStat.ino !== pathStat.ino
+    ) {
+      invalidQualificationAuthority("marker changed while being opened");
+    }
+    if (openedStat.size > BigInt(MAX_QUALIFICATION_AUTHORITY_BYTES)) {
+      invalidQualificationAuthority(
+        "marker exceeds " + MAX_QUALIFICATION_AUTHORITY_BYTES + " bytes",
+      );
+    }
+    const bytes = Buffer.allocUnsafe(MAX_QUALIFICATION_AUTHORITY_BYTES + 1);
+    let total = 0;
+    while (total < bytes.length) {
+      const count = readSync(
+        descriptor,
+        bytes,
+        total,
+        bytes.length - total,
+        null,
+      );
+      if (count === 0) break;
+      total += count;
+    }
+    if (total > MAX_QUALIFICATION_AUTHORITY_BYTES) {
+      invalidQualificationAuthority(
+        "marker exceeds " + MAX_QUALIFICATION_AUTHORITY_BYTES + " bytes",
+      );
+    }
+    const finalStat = fstatSync(descriptor, { bigint: true });
+    const finalPathStat = lstatSync(path, { bigint: true });
+    if (
+      finalStat.dev !== openedStat.dev ||
+      finalStat.ino !== openedStat.ino ||
+      finalStat.size !== openedStat.size ||
+      finalPathStat.dev !== openedStat.dev ||
+      finalPathStat.ino !== openedStat.ino
+    ) {
+      invalidQualificationAuthority("marker changed while being read");
+    }
+    return bytes.subarray(0, total);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function writeVerifiedQualificationConfigCopy(configPath, bytes) {
+  const copyPath = join(
+    dirname(resolve(configPath)),
+    "." +
+      basename(configPath) +
+      ".qualification-" +
+      randomBytes(16).toString("hex") +
+      ".json",
+  );
+  const descriptor = openSync(copyPath, "wx", 0o600);
+  try {
+    writeFileSync(descriptor, bytes);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  return copyPath;
+}
+
 function databaseFamilyAuthority(role, primaryPath) {
   return {
     role,
@@ -182,6 +266,7 @@ function databaseFamilyAuthority(role, primaryPath) {
         };
       })
       .sort((left, right) => left.path.localeCompare(right.path)),
+    fingerprint: fingerprintDbFamily(primaryPath),
   };
 }
 
@@ -207,6 +292,7 @@ export function createQualificationChildAuthority({
       clonePath: canonicalizePath(clonePath),
       configPath: canonicalizePath(configPath),
       configSha256: fileSha256(configPath),
+      cloneFamily: databaseFamilyAuthority("clone", clonePath),
       forbiddenFamilies: [
         databaseFamilyAuthority("source", sourcePath),
         ...activePaths.map((path) =>
@@ -254,7 +340,9 @@ export function consumeQualificationChildAuthority(
 
   let authority;
   try {
-    authority = JSON.parse(readFileSync(authorityPath, "utf8"));
+    authority = JSON.parse(
+      readBoundedQualificationAuthority(authorityPath).toString("utf8"),
+    );
   } catch (cause) {
     invalidQualificationAuthority(
       `marker is not valid JSON: ${
@@ -284,7 +372,11 @@ export function consumeQualificationChildAuthority(
   ) {
     invalidQualificationAuthority("phase or canonical paths do not match");
   }
-  if (authority.configSha256 !== fileSha256(options.configPath)) {
+  const verifiedConfigBytes = readFileSync(options.configPath);
+  if (
+    authority.configSha256 !==
+    createHash("sha256").update(verifiedConfigBytes).digest("hex")
+  ) {
     invalidQualificationAuthority("config digest does not match");
   }
   if (
@@ -328,6 +420,7 @@ export function consumeQualificationChildAuthority(
   }
   const cloneFamily = databaseFamilyAuthority("clone", options.clonePath);
   if (
+    JSON.stringify(cloneFamily) !== JSON.stringify(authority.cloneFamily) ||
     cloneFamily.members.length < 1 ||
     forbiddenPaths.has(cloneFamily.primaryPath) ||
     cloneFamily.members.some(
@@ -343,6 +436,14 @@ export function consumeQualificationChildAuthority(
 
   // Consume the capability before any LadybugDB module is imported or opened.
   rmSync(authorityPath);
+  return {
+    version: QUALIFICATION_AUTHORITY_VERSION,
+    phase: authority.phase,
+    clonePath,
+    cloneFamily,
+    forbiddenFamilies: authority.forbiddenFamilies,
+    verifiedConfigBytes,
+  };
 }
 
 export function assertOfflineSourceDistinct(sourcePath, activePaths) {
@@ -1633,12 +1734,19 @@ export async function closeQualificationPhaseStrictly(
 }
 
 async function runChildMode(options) {
-  consumeQualificationChildAuthority(options);
+  const qualificationAuthority = consumeQualificationChildAuthority(options);
+  const verifiedConfigPath = writeVerifiedQualificationConfigCopy(
+    options.configPath,
+    qualificationAuthority.verifiedConfigBytes,
+  );
+  const previousConfigPath = process.env.SDL_CONFIG;
+  process.env.SDL_CONFIG = verifiedConfigPath;
+  try {
   const {
     closeLadybugDb,
     getLadybugConn,
     getLadybugDbPath,
-    initLadybugDb,
+    initQualificationLadybugClone,
   } = await import("../dist/db/ladybug.js");
   const { exec, execCheckpoint, execDdl } = await import(
     "../dist/db/ladybug-core.js"
@@ -1649,15 +1757,17 @@ async function runChildMode(options) {
     dropFtsIndex,
     dropVectorIndex,
   } = await import("../dist/retrieval/index-lifecycle.js");
-  const config = loadConfig(options.configPath);
-  let opened = false;
+  const config = loadConfig(verifiedConfigPath);
+  // Cleanup ownership precedes init so a partial native/schema open is always
+  // subjected to the strict close path.
+  let opened = true;
   let phaseFailure = NO_QUALIFICATION_PHASE_FAILURE;
 
   try {
-    await initLadybugDb(options.clonePath, {
-      lineagePurpose: "qualificationClone",
-    });
-    opened = true;
+    await initQualificationLadybugClone(
+      options.clonePath,
+      qualificationAuthority,
+    );
     if (
       canonicalizePath(getLadybugDbPath()) !==
       canonicalizePath(options.clonePath)
@@ -2035,6 +2145,24 @@ async function runChildMode(options) {
       );
     }
   }
+  } finally {
+    if (previousConfigPath === undefined) delete process.env.SDL_CONFIG;
+    else process.env.SDL_CONFIG = previousConfigPath;
+    rmSync(verifiedConfigPath, { force: true });
+  }
+}
+
+function formatQualificationFailure(error) {
+  const primary = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof AggregateError)) return primary;
+  const components = error.errors.map(
+    (component, index) =>
+      "[component " +
+      (index + 1) +
+      "] " +
+      (component instanceof Error ? component.message : String(component)),
+  );
+  return [primary, ...components].join("\n");
 }
 
 function parseArgs(argv) {
@@ -2069,7 +2197,7 @@ if (isMain) {
       })
       .catch((error) => {
         process.stderr.write(
-          `[sdl-mcp] Ladybug qualification child failed: ${error instanceof Error ? error.message : String(error)}\n`,
+          `[sdl-mcp] Ladybug qualification child failed: ${formatQualificationFailure(error)}\n`,
         );
         process.exitCode = 1;
       });

@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-let initLadybugDb: (dbPath: string) => Promise<void>;
-let writeLadybugReadyLineageMarker: (dbPath: string) => Promise<void>;
+import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clone.ts";
+
 let closeLadybugDb: () => Promise<void>;
 let getLadybugConn: () => Promise<import("kuzu").Connection>;
 let getSchemaVersion: (
@@ -20,8 +20,6 @@ try {
   const schemaMod = await import("../../dist/db/ladybug-schema.js");
   const migMod = await import("../../dist/db/migrations/index.js");
   ladybugQueries = await import("../../dist/db/ladybug-queries.js");
-  initLadybugDb = ladybugMod.initLadybugDb;
-  writeLadybugReadyLineageMarker = ladybugMod.writeLadybugReadyLineageMarker;
   closeLadybugDb = ladybugMod.closeLadybugDb;
   getLadybugConn = ladybugMod.getLadybugConn;
   getSchemaVersion = schemaMod.getSchemaVersion;
@@ -80,7 +78,6 @@ async function createV4Database(dbPath: string): Promise<void> {
 
   await conn.close();
   await db.close();
-  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 async function createV8DatabaseWithoutSummaryMetadata(
@@ -155,7 +152,6 @@ async function createV8DatabaseWithoutSummaryMetadata(
 
   await conn.close();
   await db.close();
-  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 async function createV15DatabaseWithLegacyScipExternal(
@@ -198,7 +194,6 @@ async function createV15DatabaseWithLegacyScipExternal(
 
   await conn.close();
   await db.close();
-  await writeLadybugReadyLineageMarker(dbPath);
 }
 
 describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
@@ -222,7 +217,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     await createV4Database(dbPath);
 
     // Now init (should apply migrations)
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
 
     const conn = await getLadybugConn();
     const version = await getSchemaVersion(conn);
@@ -236,7 +231,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     const dbPath = join(testRoot, "v4-memory.lbug");
 
     await createV4Database(dbPath);
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
 
     const conn = await getLadybugConn();
 
@@ -255,11 +250,11 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     const dbPath = join(testRoot, "v4-idempotent.lbug");
 
     await createV4Database(dbPath);
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     await closeLadybugDb();
 
     // Re-init on same DB — should not throw, should stay at same version
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const version = await getSchemaVersion(conn);
     assert.strictEqual(version, LADYBUG_SCHEMA_VERSION);
@@ -270,7 +265,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     const dbPath = join(testRoot, "v8-summary-metadata.lbug");
 
     await createV8DatabaseWithoutSummaryMetadata(dbPath);
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
 
     const conn = await getLadybugConn();
     const result = await conn.query(
@@ -298,7 +293,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     const dbPath = join(testRoot, "v8-placeholder-status.lbug");
 
     await createV8DatabaseWithoutSummaryMetadata(dbPath);
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
 
     const conn = await getLadybugConn();
     const result = await conn.query(
@@ -365,7 +360,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     const dbPath = join(testRoot, "v15-placeholder-and-scip-status.lbug");
 
     await createV15DatabaseWithLegacyScipExternal(dbPath);
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
 
     const conn = await getLadybugConn();
     const result = await conn.query(
@@ -534,9 +529,8 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     }
     await seedConn.close();
     await db.close();
-    await writeLadybugReadyLineageMarker(dbPath);
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const result = await conn.query(
       `MATCH (s:Symbol {repoId: 'repo-1'})
@@ -596,9 +590,8 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     }
     await seedConn.close();
     await db.close();
-    await writeLadybugReadyLineageMarker(dbPath);
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const version = await getSchemaVersion(conn);
     assert.strictEqual(version, LADYBUG_SCHEMA_VERSION);
@@ -659,9 +652,8 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     }
     await seedConn.close();
     await db.close();
-    await writeLadybugReadyLineageMarker(dbPath);
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const version = await getSchemaVersion(conn);
     assert.strictEqual(version, LADYBUG_SCHEMA_VERSION);
@@ -748,7 +740,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
       await db.close();
     }
 
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
     const version = await getSchemaVersion(conn);
     assert.strictEqual(version, LADYBUG_SCHEMA_VERSION);
@@ -775,7 +767,7 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     const dbPath = join(testRoot, "v8-m011-shadow.lbug");
 
     await createV8DatabaseWithoutSummaryMetadata(dbPath);
-    await initLadybugDb(dbPath);
+    await initValidatedTestLadybugClone(dbPath);
     const conn = await getLadybugConn();
 
     // ShadowCluster node table should exist and accept inserts.
@@ -824,11 +816,10 @@ describe("migration: upgrade existing DB", { skip: !ladybugAvailable }, () => {
     );
     await conn.close();
     await db.close();
-    await writeLadybugReadyLineageMarker(dbPath);
 
     // Should NOT throw — best-effort mode
     await assert.doesNotReject(async () => {
-      await initLadybugDb(dbPath);
+      await initValidatedTestLadybugClone(dbPath);
     });
   });
 });

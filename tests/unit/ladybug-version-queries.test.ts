@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
+import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clone.ts";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const TEST_DB_PATH = join(tmpdir(), ".lbug-version-test-db.lbug");
@@ -299,9 +301,7 @@ describe("LadybugDB Version & Snapshot Queries", () => {
 
       const ladybug = await import("../../dist/db/ladybug.js");
       try {
-        await ladybug.initLadybugDb(TEST_DB_PATH, {
-          lineagePurpose: "validatedClone",
-        });
+        await initValidatedTestLadybugClone(TEST_DB_PATH);
         const snapshotConn = await ladybug.getLadybugConn();
         const { createVersionAndSnapshot } = await import(
           "../../dist/indexer/indexer-version.js"

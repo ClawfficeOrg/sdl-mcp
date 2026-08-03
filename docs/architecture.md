@@ -221,13 +221,17 @@ After pass 1 + 2:
 
 ### LadybugDB (Embedded Graph Database)
 
-SDL-MCP uses LadybugDB (Kuzu engine, npm alias `kuzu`) as the sole persistence layer. The database is a single file on disk (`.lbug` extension).
+SDL-MCP uses LadybugDB (Kuzu engine, npm alias `kuzu`) as the sole persistence layer. A database family consists of the primary `.lbug` file, its known persistent `.wal` member when present, and SDL-MCP's `.sdl-lineage.json` closed-family receipt. The cooperative `.sdl-family.lock` is lifecycle metadata, not durable database content; unexpected primary-prefixed members fail closed.
 
 **Path resolution** (`src/db/initGraphDb.ts`):
 
 1. `SDL_GRAPH_DB_PATH` env var (or legacy `SDL_DB_PATH`)
 2. `graphDatabase.path` in config
 3. Default: `<configDir>/sdl-mcp-graph.lbug`
+
+**Family ownership and lineage** (`src/db/ladybug-lineage.ts`): every SDL-managed open first acquires an exclusive, per-family `wx` lease and holds it through native close, checkpoint, and receipt publication. A dead recorded PID can be reclaimed, but this is a cooperative-process guarantee: a program that opens LadybugDB directly does not participate and cannot be detected reliably.
+
+An existing normal family opens only when its receipt matches the exact Ladybug driver and storage versions, canonical primary identity, and streaming SHA-256 inventory of the primary plus known persistent WAL. Old-format, missing, stale, copied, moved, or replaced families fail before native construction. Fresh normal creation, safe rebuild, qualification clones, and externally fingerprint-validated clones use separate capabilities; callers cannot select a generic lineage purpose or write receipts directly. Safe rebuild reserves the primary name, rechecks the whole family before reopen and after final close, then publishes the receipt atomically while the lease remains held.
 
 **Schema** (`src/db/ladybug-schema.ts`) — idempotent DDL and versioned migrations run on startup. Schema version 24 adds semantic test-case metadata to symbol and version records, but the nullable migration cannot backfill synthetic symbols from already indexed source. Stop SDL-MCP and build a fresh graph with `sdl-mcp index --force --safe-rebuild <absolute-new-path>` after upgrading; use a new absolute candidate path rather than rebuilding the active graph in place.
 

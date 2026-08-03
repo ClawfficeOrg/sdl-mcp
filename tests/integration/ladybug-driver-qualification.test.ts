@@ -482,6 +482,98 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
     assert.notEqual(mismatchedResult.status, 0);
     assert.match(mismatchedResult.stderr, /config digest/i);
     assert.deepEqual(readFileSync(mismatched.clonePath), mismatchedBytes);
+
+    const phaseMismatch = makeFixture();
+    const phaseAuthority = createQualificationChildAuthority({
+      mode: "validate-empty",
+      clonePath: phaseMismatch.clonePath,
+      configPath: phaseMismatch.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    const phaseResult = spawnChild(
+      phaseMismatch.clonePath,
+      phaseMismatch.configPath,
+      buildQualificationChildEnv(
+        process.env,
+        phaseMismatch.clonePath,
+        phaseMismatch.configPath,
+        phaseAuthority,
+      ),
+    );
+    assert.notEqual(phaseResult.status, 0);
+    assert.match(phaseResult.stderr, /phase or canonical paths/i);
+
+    const envMismatch = makeFixture();
+    const envAuthority = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath: envMismatch.clonePath,
+      configPath: envMismatch.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    const badEnv = buildQualificationChildEnv(
+      process.env,
+      envMismatch.clonePath,
+      envMismatch.configPath,
+      envAuthority,
+    );
+    badEnv.SDL_GRAPH_DB_DIR = sourceRoot;
+    const envResult = spawnChild(
+      envMismatch.clonePath,
+      envMismatch.configPath,
+      badEnv,
+    );
+    assert.notEqual(envResult.status, 0);
+    assert.match(envResult.stderr, /pinned SDL environment/i);
+
+    const oversized = makeFixture();
+    const oversizedAuthority = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath: oversized.clonePath,
+      configPath: oversized.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    writeFileSync(oversizedAuthority.authorityPath, "x".repeat(16 * 1024 + 1));
+    const oversizedResult = spawnChild(
+      oversized.clonePath,
+      oversized.configPath,
+      buildQualificationChildEnv(
+        process.env,
+        oversized.clonePath,
+        oversized.configPath,
+        oversizedAuthority,
+      ),
+    );
+    assert.notEqual(oversizedResult.status, 0);
+    assert.match(oversizedResult.stderr, /exceeds 16384 bytes/i);
+
+    const hardlinked = makeFixture();
+    const hardlinkAuthority = createQualificationChildAuthority({
+      mode: "seed-first-batch",
+      clonePath: hardlinked.clonePath,
+      configPath: hardlinked.configPath,
+      sourcePath,
+      activePaths: [activePath],
+    });
+    rmSync(hardlinked.clonePath);
+    linkSync(sourcePath, hardlinked.clonePath);
+    const hardlinkResult = spawnChild(
+      hardlinked.clonePath,
+      hardlinked.configPath,
+      buildQualificationChildEnv(
+        process.env,
+        hardlinked.clonePath,
+        hardlinked.configPath,
+        hardlinkAuthority,
+      ),
+    );
+    assert.notEqual(hardlinkResult.status, 0);
+    assert.match(
+      hardlinkResult.stderr,
+      /family identity changed|aliases a forbidden database family/i,
+    );
   });
 
   it("does not return a phase when strict close fails and preserves both failures", async () => {

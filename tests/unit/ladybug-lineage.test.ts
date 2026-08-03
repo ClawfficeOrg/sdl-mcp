@@ -6,206 +6,301 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, before, describe, it } from "node:test";
 
+type Lease = object;
+
 interface LineageModule {
   getLadybugLineageMarkerPath(dbPath: string): string;
-  verifyLadybugLineageBeforeOpen(
+  getLadybugFamilyLockPath(dbPath: string): string;
+  acquireNormalLadybugFamily(
     dbPath: string,
     driver: { version: string; storageVersion: string },
-  ): "fresh" | "ready";
-  reserveFreshLadybugPrimary(dbPath: string): void;
-  writeLadybugLineageMarker(
+  ): Lease;
+  reserveSafeRebuildLadybugFamily(
     dbPath: string,
     driver: { version: string; storageVersion: string },
+  ): Lease;
+  finalizeNormalLadybugFamilyClose(lease: Lease): void;
+  sealSafeRebuildFamilyForReopen(lease: Lease): void;
+  verifySafeRebuildFamilyBeforeReopen(lease: Lease): void;
+  finalizeSafeRebuildLadybugFamily(
+    lease: Lease,
+    beforePublication?: () => void,
   ): void;
+  abandonLadybugFamily(lease: Lease): void;
+  writeLadybugLineageMarker?: unknown;
+  verifyLadybugLineageBeforeOpen?: unknown;
+  reserveFreshLadybugPrimary?: unknown;
 }
 
 const DRIVER = { version: "0.19.0-test", storageVersion: "43" };
 let lineage: LineageModule | undefined;
 let testRoot = "";
+const openLeases = new Set<Lease>();
 
 before(async () => {
-  try {
-    lineage = (await import(
-      "../../dist/db/ladybug-lineage.js"
-    )) as LineageModule;
-  } catch {
-    lineage = undefined;
-  }
+  lineage = (await import(
+    "../../dist/db/ladybug-lineage.js"
+  )) as unknown as LineageModule;
 });
 
 afterEach(() => {
+  if (lineage) {
+    for (const lease of openLeases) {
+      try {
+        lineage.abandonLadybugFamily(lease);
+      } catch {
+        // The test may already have finalized and released the lease.
+      }
+    }
+  }
+  openLeases.clear();
   if (testRoot && existsSync(testRoot)) {
     rmSync(testRoot, { recursive: true, force: true });
   }
   testRoot = "";
 });
 
-function requireLineage(): LineageModule {
+function api(): LineageModule {
   assert.ok(lineage, "Ladybug lineage module must exist");
   return lineage;
 }
 
-function createPrimary(name = "graph.lbug"): string {
+function freshPath(name = "graph.lbug"): string {
   testRoot = mkdtempSync(join(tmpdir(), "sdl-ladybug-lineage-"));
-  const dbPath = join(testRoot, name);
-  writeFileSync(dbPath, "primary", "utf8");
+  return join(testRoot, name);
+}
+
+function track(lease: Lease): Lease {
+  openLeases.add(lease);
+  return lease;
+}
+
+function createReadyFamily(options: { wal?: string } = {}): string {
+  const dbPath = freshPath();
+  const lease = track(api().acquireNormalLadybugFamily(dbPath, DRIVER));
+  writeFileSync(dbPath, "primary-v1", "utf8");
+  if (options.wal !== undefined) {
+    writeFileSync(dbPath + ".wal", options.wal, "utf8");
+  }
+  api().finalizeNormalLadybugFamilyClose(lease);
+  openLeases.delete(lease);
   return dbPath;
 }
 
-describe("Ladybug ready lineage marker", () => {
-  it("allows a nonexistent database path", () => {
-    const api = requireLineage();
-    testRoot = mkdtempSync(join(tmpdir(), "sdl-ladybug-lineage-"));
-    const dbPath = join(testRoot, "fresh.lbug");
+describe("Ladybug closed-family lineage receipt", () => {
+  it("reserves the whole fresh family under a cooperative lifetime lock", () => {
+    const dbPath = freshPath();
+    const lease = track(api().acquireNormalLadybugFamily(dbPath, DRIVER));
 
-    assert.equal(api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER), "fresh");
-  });
-
-  it("atomically writes a sibling receipt bound to path, file identity, and driver", () => {
-    const api = requireLineage();
-    const dbPath = createPrimary();
-    const markerPath = api.getLadybugLineageMarkerPath(dbPath);
-
-    api.writeLadybugLineageMarker(dbPath, DRIVER);
-
-    const receipt = JSON.parse(readFileSync(markerPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    assert.deepEqual(receipt, {
-      receiptKind: "sdl-mcp-ladybug-ready",
-      receiptVersion: 1,
-      canonicalDbPath: receipt.canonicalDbPath,
-      primaryFile: receipt.primaryFile,
-      driverVersion: DRIVER.version,
-      storageVersion: DRIVER.storageVersion,
-    });
-    assert.equal(typeof receipt.canonicalDbPath, "string");
-    assert.match(String(receipt.canonicalDbPath), /graph\.lbug$/iu);
-    assert.match(JSON.stringify(receipt.primaryFile), /"dev":"\d+","ino":"\d+"/u);
-    assert.equal(api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER), "ready");
-    assert.deepEqual(
-      readdirSync(testRoot).filter((name) => name.includes(".tmp-")),
-      [],
-      "atomic write must not leave a temporary receipt",
-    );
-  });
-
-  it("rejects a missing or malformed receipt with safe-rebuild guidance", () => {
-    const api = requireLineage();
-    const dbPath = createPrimary();
-    const markerPath = api.getLadybugLineageMarkerPath(dbPath);
-
+    assert.equal(existsSync(dbPath), true);
+    assert.equal(existsSync(api().getLadybugFamilyLockPath(dbPath)), true);
     assert.throws(
-      () => api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER),
-      /lineage marker is missing[\s\S]*--safe-rebuild/iu,
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /family lock[\s\S]*(?:active|owned|process)/iu,
     );
 
-    writeFileSync(markerPath, "{not-json", "utf8");
-    assert.throws(
-      () => api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER),
-      /lineage marker is malformed[\s\S]*--safe-rebuild/iu,
-    );
+    writeFileSync(dbPath, "primary", "utf8");
+    api().finalizeNormalLadybugFamilyClose(lease);
+    openLeases.delete(lease);
+    assert.equal(existsSync(api().getLadybugFamilyLockPath(dbPath)), false);
   });
 
-  for (const mismatch of [
-    {
-      name: "receipt kind",
-      mutate: (receipt: Record<string, unknown>) => {
-        receipt.receiptKind = "other";
-      },
-    },
-    {
-      name: "receipt version",
-      mutate: (receipt: Record<string, unknown>) => {
-        receipt.receiptVersion = 2;
-      },
-    },
-    {
-      name: "canonical path",
-      mutate: (receipt: Record<string, unknown>) => {
-        receipt.canonicalDbPath = "C:/other/graph.lbug";
-      },
-    },
-    {
-      name: "primary file identity",
-      mutate: (receipt: Record<string, unknown>) => {
-        receipt.primaryFile = { dev: "0", ino: "0" };
-      },
-    },
-    {
-      name: "driver version",
-      mutate: (receipt: Record<string, unknown>) => {
-        receipt.driverVersion = "0.18.1";
-      },
-    },
-    {
-      name: "storage version",
-      mutate: (receipt: Record<string, unknown>) => {
-        receipt.storageVersion = "40";
-      },
-    },
+  for (const suffix of [
+    ".sdl-lineage.json",
+    ".wal",
+    ".wal.checkpoint",
+    ".shadow",
+    ".tmp-crash",
+    ".recovery",
+    ".unknown",
   ]) {
-    it("rejects a mismatched " + mismatch.name, () => {
-      const api = requireLineage();
-      const dbPath = createPrimary();
-      const markerPath = api.getLadybugLineageMarkerPath(dbPath);
-      api.writeLadybugLineageMarker(dbPath, DRIVER);
-      const receipt = JSON.parse(readFileSync(markerPath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      mismatch.mutate(receipt);
-      writeFileSync(markerPath, JSON.stringify(receipt) + "\n", "utf8");
+    it("rejects an orphan " + suffix + " member before reserving a fresh primary", () => {
+      const dbPath = freshPath();
+      writeFileSync(dbPath + suffix, "orphan", "utf8");
 
       assert.throws(
-        () => api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER),
-        new RegExp(mismatch.name + " mismatch[\\s\\S]*--safe-rebuild", "iu"),
+        () => api().reserveSafeRebuildLadybugFamily(dbPath, DRIVER),
+        /database family is not fresh[\s\S]*--safe-rebuild/iu,
       );
+      assert.equal(existsSync(dbPath), false);
     });
   }
 
-  it("rejects a stale marker whose primary file is absent", () => {
-    const api = requireLineage();
-    const dbPath = createPrimary();
-    api.writeLadybugLineageMarker(dbPath, DRIVER);
-    renameSync(dbPath, dbPath + ".old");
+  it("publishes an atomic receipt for the complete durable closed family", () => {
+    const dbPath = createReadyFamily({ wal: "wal-v1" });
+    const markerPath = api().getLadybugLineageMarkerPath(dbPath);
+    const receipt = JSON.parse(readFileSync(markerPath, "utf8")) as {
+      receiptKind: string;
+      receiptVersion: number;
+      canonicalDbPath: string;
+      primaryFile: { dev: string; ino: string };
+      driverVersion: string;
+      storageVersion: string;
+      family: {
+        files: Array<{ path: string; size: number; sha256: string }>;
+        sha256: string;
+      };
+    };
 
+    assert.equal(receipt.receiptKind, "sdl-mcp-ladybug-ready");
+    assert.equal(receipt.receiptVersion, 2);
+    assert.match(receipt.canonicalDbPath, /graph\.lbug$/iu);
+    assert.match(JSON.stringify(receipt.primaryFile), /"dev":"\d+","ino":"\d+"/u);
+    assert.equal(receipt.driverVersion, DRIVER.version);
+    assert.equal(receipt.storageVersion, DRIVER.storageVersion);
+    assert.deepEqual(
+      receipt.family.files.map((file) => file.path),
+      ["graph.lbug", "graph.lbug.wal"],
+    );
+    assert.ok(
+      receipt.family.files.every((file) => /^[0-9a-f]{64}$/u.test(file.sha256)),
+    );
+    assert.match(receipt.family.sha256, /^[0-9a-f]{64}$/u);
+    assert.deepEqual(
+      readdirSync(testRoot).filter((name) => name.includes(".tmp-")),
+      [],
+    );
+
+    const reopened = track(api().acquireNormalLadybugFamily(dbPath, DRIVER));
+    api().abandonLadybugFamily(reopened);
+    openLeases.delete(reopened);
+  });
+
+  it("rejects an in-place primary overwrite even when dev and ino are unchanged", () => {
+    const dbPath = createReadyFamily();
+    writeFileSync(dbPath, "primary-v2-with-different-bytes", "utf8");
     assert.throws(
-      () => api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER),
-      /lineage marker exists without its primary[\s\S]*--safe-rebuild/iu,
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /closed family digest mismatch[\s\S]*--safe-rebuild/iu,
     );
   });
 
-  it("atomically rejects a primary that appears after the fresh check", () => {
-    const api = requireLineage();
-    testRoot = mkdtempSync(join(tmpdir(), "sdl-ladybug-lineage-"));
-    const dbPath = join(testRoot, "fresh.lbug");
-    assert.equal(api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER), "fresh");
-    writeFileSync(dbPath, "appeared-after-check", "utf8");
-
+  it("rejects a changed durable WAL", () => {
+    const dbPath = createReadyFamily({ wal: "wal-v1" });
+    writeFileSync(dbPath + ".wal", "wal-v2", "utf8");
     assert.throws(
-      () => api.reserveFreshLadybugPrimary(dbPath),
-      /primary database appeared during fresh initialization[\s\S]*--safe-rebuild/iu,
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /closed family digest mismatch[\s\S]*--safe-rebuild/iu,
     );
   });
 
-  it("rejects a replaced primary file", () => {
-    const api = requireLineage();
-    const dbPath = createPrimary();
-    api.writeLadybugLineageMarker(dbPath, DRIVER);
+  it("rejects a replaced primary before native open", () => {
+    const dbPath = createReadyFamily();
     renameSync(dbPath, dbPath + ".original");
     writeFileSync(dbPath, "replacement", "utf8");
-
     assert.throws(
-      () => api.verifyLadybugLineageBeforeOpen(dbPath, DRIVER),
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
       /primary file identity mismatch[\s\S]*--safe-rebuild/iu,
     );
+  });
+
+  it("leaves a stale receipt after an abandoned or crashed active lifetime", () => {
+    const dbPath = createReadyFamily();
+    const lease = track(api().acquireNormalLadybugFamily(dbPath, DRIVER));
+    writeFileSync(dbPath, "mutated-before-crash", "utf8");
+    api().abandonLadybugFamily(lease);
+    openLeases.delete(lease);
+
+    assert.throws(
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /closed family digest mismatch[\s\S]*--safe-rebuild/iu,
+    );
+  });
+
+  it("reclaims a well-formed lock whose owner process is stale", () => {
+    const dbPath = freshPath();
+    const lockPath = api().getLadybugFamilyLockPath(dbPath);
+    writeFileSync(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        pid: 2_147_483_647,
+        nonce: "a".repeat(64),
+      }) + "\n",
+      "utf8",
+    );
+
+    const lease = track(api().acquireNormalLadybugFamily(dbPath, DRIVER));
+    assert.equal(existsSync(lockPath), true);
+    api().abandonLadybugFamily(lease);
+    openLeases.delete(lease);
+    assert.equal(existsSync(lockPath), false);
+  });
+
+  it("rejects oversized, malformed, and symlink lineage markers", (t) => {
+    const dbPath = createReadyFamily();
+    const markerPath = api().getLadybugLineageMarkerPath(dbPath);
+
+    writeFileSync(markerPath, "x".repeat(16 * 1024 + 1), "utf8");
+    assert.throws(
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /lineage marker exceeds 16384 bytes/iu,
+    );
+    writeFileSync(markerPath, "{not-json", "utf8");
+    assert.throws(
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /lineage marker is malformed/iu,
+    );
+
+    rmSync(markerPath, { force: true });
+    const target = join(testRoot, "marker-target.json");
+    writeFileSync(target, "{}", "utf8");
+    try {
+      symlinkSync(target, markerPath, "file");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        t.skip("symlink creation is unavailable on this Windows host");
+        return;
+      }
+      throw error;
+    }
+    assert.throws(
+      () => api().acquireNormalLadybugFamily(dbPath, DRIVER),
+      /lineage marker must be a regular non-symlink file/iu,
+    );
+  });
+
+  it("binds a safe rebuild reopen to the same closed identity and digest", () => {
+    const dbPath = freshPath();
+    const lease = track(api().reserveSafeRebuildLadybugFamily(dbPath, DRIVER));
+    writeFileSync(dbPath, "validated-candidate", "utf8");
+    api().sealSafeRebuildFamilyForReopen(lease);
+    api().verifySafeRebuildFamilyBeforeReopen(lease);
+
+    api().finalizeSafeRebuildLadybugFamily(lease);
+    openLeases.delete(lease);
+    assert.equal(existsSync(api().getLadybugLineageMarkerPath(dbPath)), true);
+  });
+
+  it("refuses safe-rebuild publication when the target changes after validation", () => {
+    const dbPath = freshPath();
+    const lease = track(api().reserveSafeRebuildLadybugFamily(dbPath, DRIVER));
+    writeFileSync(dbPath, "validated-candidate", "utf8");
+    api().sealSafeRebuildFamilyForReopen(lease);
+    api().verifySafeRebuildFamilyBeforeReopen(lease);
+
+    assert.throws(
+      () =>
+        api().finalizeSafeRebuildLadybugFamily(lease, () => {
+          renameSync(dbPath, dbPath + ".validated");
+          writeFileSync(dbPath, "replacement-after-validation", "utf8");
+        }),
+      /changed after validation/iu,
+    );
+    openLeases.delete(lease);
+    assert.equal(existsSync(api().getLadybugLineageMarkerPath(dbPath)), false);
+  });
+
+  it("does not expose the old generic bypass and marker writer", () => {
+    assert.equal(api().writeLadybugLineageMarker, undefined);
+    assert.equal(api().verifyLadybugLineageBeforeOpen, undefined);
+    assert.equal(api().reserveFreshLadybugPrimary, undefined);
   });
 });

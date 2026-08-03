@@ -2,7 +2,6 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import {
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -22,8 +21,14 @@ import {
   closeLadybugDb,
   getLadybugConn,
   initLadybugDb,
+  initValidatedLadybugClone,
   withWriteConn,
 } from "../dist/db/ladybug.js";
+import { bindVerifiedLadybugClone } from "../dist/db/ladybug-lineage.js";
+import {
+  copyDbFamilyVerified,
+  type DbFamilyFingerprint,
+} from "../dist/benchmark/external-runner.js";
 import {
   getDerivedState,
   markGraphIntegrityVerifiedIfVerifying,
@@ -1460,13 +1465,6 @@ async function seedBaseDatabase(
   }
 }
 
-function copyDatabase(source: string, destination: string): void {
-  cpSync(source, destination, {
-    recursive: statSync(source).isDirectory(),
-    errorOnExist: true,
-  });
-}
-
 function hashPath(root: string): string {
   const hash = createHash("sha256");
   const visit = (path: string): void => {
@@ -1484,9 +1482,13 @@ function hashPath(root: string): string {
   return hash.digest("hex");
 }
 
-async function openDatabase(path: string): Promise<void> {
+async function openDatabase(
+  path: string,
+  verifiedCopyFingerprint: DbFamilyFingerprint,
+): Promise<void> {
   process.env.SDL_GRAPH_DB_PATH = path;
-  await initLadybugDb(path, { lineagePurpose: "validatedClone" });
+  const authority = bindVerifiedLadybugClone(path, verifiedCopyFingerprint);
+  await initValidatedLadybugClone(path, authority);
 }
 
 function parseOutPath(argv: readonly string[]): string {
@@ -1664,8 +1666,8 @@ async function runBenchmarkWorker(workRoot: string): Promise<BenchmarkArtifact> 
       fixture,
       repoId,
     );
-    copyDatabase(baseDb, candidateDb);
-    copyDatabase(baseDb, controlDb);
+    const candidateFingerprint = copyDbFamilyVerified(baseDb, candidateDb);
+    const controlFingerprint = copyDbFamilyVerified(baseDb, controlDb);
     const candidateStartHash = hashPath(candidateDb);
     const controlStartHash = hashPath(controlDb);
     if (candidateStartHash !== controlStartHash) {
@@ -1677,7 +1679,7 @@ async function runBenchmarkWorker(workRoot: string): Promise<BenchmarkArtifact> 
       startingDatabaseHash: candidateStartHash,
     });
 
-    await openDatabase(candidateDb);
+    await openDatabase(candidateDb, candidateFingerprint);
     const candidate = await runCandidateLane(
       repoId,
       lanes.candidate.edits,
@@ -1686,7 +1688,7 @@ async function runBenchmarkWorker(workRoot: string): Promise<BenchmarkArtifact> 
     );
     await closeLadybugDb();
 
-    await openDatabase(controlDb);
+    await openDatabase(controlDb, controlFingerprint);
     const control = await runControlLane(repoId, lanes.control.edits, reporter);
     await closeLadybugDb();
 

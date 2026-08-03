@@ -334,10 +334,11 @@ async function prepareVerifiedGraphCache() {
     symbolEmbeddingModels: modelPlan.symbolEmbeddingModels,
     fileSummaryEmbeddingModels: modelPlan.fileSummaryEmbeddingModels,
   };
-  const validateCopiedFamily = (primaryPath) =>
+  const validateCopiedFamily = (primaryPath, verifiedCopyFingerprint) =>
     validateContextQualityCacheFamily(primaryPath, {
       expectation,
       semanticConfig: config.semantic,
+      verifiedCopyFingerprint,
       bufferPoolBytes: config.graphDatabase?.bufferPoolBytes,
     });
 

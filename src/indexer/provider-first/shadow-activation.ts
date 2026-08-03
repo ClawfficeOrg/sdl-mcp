@@ -330,7 +330,8 @@ async function rollbackAfterReopenFailure(params: {
   reopenReason: string;
 }): Promise<ProviderFirstShadowActivationSummary> {
   const previousDbPath = params.activation.previousDbPath;
-  if (!previousDbPath) {
+  const shadowDbPath = params.activation.shadowDbPath;
+  if (!previousDbPath || !shadowDbPath) {
     return {
       ...params.activation,
       status: "failed",
@@ -342,48 +343,55 @@ async function rollbackAfterReopenFailure(params: {
   try {
     await params.params.closeActiveDb();
   } catch {
-    // Best-effort: activation validation failed before a usable pool existed.
+    // Validation can fail before a usable pool exists.
   }
 
-  const rollback = await activateProviderFirstShadowDb({
-    activeDbPath: params.activeDbPath,
-    shadowDbPath: previousDbPath,
-    generationId: `${params.params.generationId}-reopen-rollback`,
-    fs: params.params.fs,
-  });
-  if (rollback.status === "activated") {
-    try {
-      await params.params.reopenActiveDb(params.activeDbPath);
-      return {
-        ...params.activation,
-        status: "failed",
-        rollback: "restored",
-        reasons: [params.reopenReason, "previous active DB was restored"],
-      };
-    } catch (err) {
-      return {
-        ...params.activation,
-        status: "failed",
-        rollback: "failed",
-        reasons: [
-          params.reopenReason,
-          `previous active DB was restored but could not be reopened: ${errorMessage(err)}`,
-        ],
-      };
+  const renamePath = params.params.fs?.rename ?? rename;
+  let rejectedShadowMoved = false;
+  try {
+    // Undo the exact two-path swap. Keeping the rejected shadow under an
+    // active-prefixed backup name would contaminate the restored family.
+    await renamePath(params.activeDbPath, shadowDbPath);
+    rejectedShadowMoved = true;
+    await renamePath(previousDbPath, params.activeDbPath);
+  } catch (err) {
+    if (rejectedShadowMoved) {
+      try {
+        await renamePath(shadowDbPath, params.activeDbPath);
+      } catch {
+        // Report the original restoration failure; neither path is trusted.
+      }
     }
+    return {
+      ...params.activation,
+      status: "failed",
+      rollback: "failed",
+      reasons: [
+        params.reopenReason,
+        `previous active DB could not be restored: ${errorMessage(err)}`,
+      ],
+    };
   }
 
-  // A nested "restored" only restores the failed rollback swap's source; it
-  // does not mean the original active DB was restored from previousDbPath.
-  return {
-    ...params.activation,
-    status: "failed",
-    rollback: "failed",
-    reasons: [
-      params.reopenReason,
-      `previous active DB could not be restored: ${rollback.reasons.join("; ")}`,
-    ],
-  };
+  try {
+    await params.params.reopenActiveDb(params.activeDbPath);
+    return {
+      ...params.activation,
+      status: "failed",
+      rollback: "restored",
+      reasons: [params.reopenReason, "previous active DB was restored"],
+    };
+  } catch (err) {
+    return {
+      ...params.activation,
+      status: "failed",
+      rollback: "failed",
+      reasons: [
+        params.reopenReason,
+        `previous active DB was restored but could not be reopened: ${errorMessage(err)}`,
+      ],
+    };
+  }
 }
 
 function safePathSegment(value: string): string {

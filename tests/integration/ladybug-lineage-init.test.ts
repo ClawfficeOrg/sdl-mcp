@@ -10,9 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 
+import { fingerprintDbFamily } from "../../dist/benchmark/external-runner.js";
+import { bindVerifiedLadybugClone } from "../../dist/db/ladybug-lineage.js";
 import {
   closeLadybugDb,
   initLadybugDb,
+  initValidatedLadybugClone,
 } from "../../dist/db/ladybug.js";
 
 describe("Ladybug production lineage guard", { concurrency: 1 }, () => {
@@ -37,17 +40,25 @@ describe("Ladybug production lineage guard", { concurrency: 1 }, () => {
 
     await initLadybugDb(dbPath);
 
-    assert.equal(existsSync(markerPath), true);
-    const receiptBefore = readFileSync(markerPath, "utf8");
+    assert.equal(
+      existsSync(markerPath),
+      false,
+      "a live fresh database is not stamped before strict close",
+    );
+    assert.equal(existsSync(dbPath + ".sdl-family.lock"), true);
     const identityBefore = statSync(dbPath, { bigint: true });
-    // Strict close checkpoints the primary before the separate reopen.
+    // Strict close checkpoints the primary before publishing its closed-family receipt.
     await closeLadybugDb({ strict: true });
+    assert.equal(existsSync(markerPath), true);
+    assert.equal(existsSync(dbPath + ".sdl-family.lock"), false);
+    const receiptBefore = readFileSync(markerPath, "utf8");
     const identityAfter = statSync(dbPath, { bigint: true });
     assert.equal(identityAfter.dev, identityBefore.dev);
     assert.equal(identityAfter.ino, identityBefore.ino);
 
     await initLadybugDb(dbPath);
     assert.equal(readFileSync(markerPath, "utf8"), receiptBefore);
+    assert.equal(existsSync(dbPath + ".sdl-family.lock"), true);
   });
 
   it("rejects an unmarked existing database before production reopen", async () => {
@@ -61,5 +72,23 @@ describe("Ladybug production lineage guard", { concurrency: 1 }, () => {
       initLadybugDb(dbPath),
       /lineage marker is missing[\s\S]*--safe-rebuild/iu,
     );
+  });
+
+  it("promotes a verified clone into the normal closed-family lifecycle", async () => {
+    const dbPath = createPath();
+    const markerPath = dbPath + ".sdl-lineage.json";
+    await initLadybugDb(dbPath);
+    await closeLadybugDb({ strict: true });
+    rmSync(markerPath, { force: true });
+
+    const authority = bindVerifiedLadybugClone(
+      dbPath,
+      fingerprintDbFamily(dbPath),
+    );
+    await initValidatedLadybugClone(dbPath, authority);
+    await closeLadybugDb({ strict: true });
+
+    assert.equal(existsSync(markerPath), true);
+    await assert.doesNotReject(initLadybugDb(dbPath));
   });
 });
