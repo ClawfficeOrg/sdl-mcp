@@ -251,7 +251,7 @@ describe("sdl.file.write", () => {
         configJson: JSON.stringify({
           repoId,
           rootPath: testDir,
-          ignore: ["ignored/**"],
+          ignore: ["ignored"],
           languages: ["ts", "json", "yaml", "md"],
           maxFileBytes: 2_000_000,
           includeNodeModulesTypes: false,

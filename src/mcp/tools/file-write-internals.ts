@@ -553,8 +553,18 @@ export async function syncLiveIndex(
     const { ignore } = RepoConfigSchema.pick({ ignore: true }).parse(
       JSON.parse(repo.configJson),
     );
-    if (shouldIgnorePath(relPath, compilePatterns(ignore), false)) {
-      return undefined;
+    const pathSegments = normalizePath(relPath).split("/");
+    const ignorePatterns = compilePatterns(ignore);
+    for (let end = 1; end <= pathSegments.length; end += 1) {
+      if (
+        shouldIgnorePath(
+          pathSegments.slice(0, end).join("/"),
+          ignorePatterns,
+          end < pathSegments.length,
+        )
+      ) {
+        return undefined;
+      }
     }
 
     const patchResult = await patchSavedFile({

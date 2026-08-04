@@ -994,7 +994,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
         rootPath: priorRepo.rootPath,
         configJson: JSON.stringify({
           ...repoConfig,
-          ignore: ["ignored/**"],
+          ignore: ["ignored"],
         }),
         createdAt: priorRepo.createdAt,
       });
