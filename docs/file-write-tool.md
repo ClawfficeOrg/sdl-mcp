@@ -488,6 +488,8 @@ flowchart LR
 
 By default, `file.write` creates and retains a sibling `.bak` file before modifying an existing file. A successful response returns that retained path as `backupPath`. This differs from `symbol.edit` and `search.edit`, which use temporary rollback copies and remove them after full success.
 
+Backup creation is fail-closed: `file.write` never replaces an existing `.bak`. If that path already exists, remove or move the retained backup, or retry with `createBackup: false` only when another rollback mechanism is available.
+
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
 flowchart TD

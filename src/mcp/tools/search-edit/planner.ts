@@ -1798,6 +1798,7 @@ async function planSearchEditBatchPreview(
     preconditions.push({
       relPath: rel,
       absPath: abs,
+      canonicalAbsPath: realpathSync.native(abs),
       sha256: contentSha,
       mtimeMs: stats.mtimeMs,
     });
@@ -2326,6 +2327,7 @@ async function planSingleSearchEditPreview(
     preconditions.push({
       relPath: rel,
       absPath: abs,
+      canonicalAbsPath: realpathSync.native(abs),
       sha256: contentSha,
       mtimeMs: stats.mtimeMs,
     });

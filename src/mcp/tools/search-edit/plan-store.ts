@@ -24,6 +24,8 @@ export const MAX_AGGREGATE_PLAN_BYTES = 64 * 1024 * 1024; // 64 MB
 export interface PlanPrecondition {
   relPath: string;
   absPath: string;
+  /** Canonical target identity captured at preview time. */
+  canonicalAbsPath: string;
   /** null = file did not exist at preview time. */
   sha256: string | null;
   /** null = file did not exist at preview time. */

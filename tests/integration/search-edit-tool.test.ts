@@ -16,7 +16,15 @@
 import { describe, it, before, after } from "node:test";
 import { strict as assert } from "node:assert";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  rm,
+  writeFile,
+  readFile,
+  mkdir,
+  symlink,
+  unlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -1239,6 +1247,60 @@ describe("sdl.search.edit", { concurrency: false }, () => {
     // first write.
     const b = await readFile(join(repoRoot, "b.txt"), "utf-8");
     assert.ok(b.includes("oldName"));
+  });
+
+  it("fails closed when a search-edit target changes canonical identity", async (t) => {
+    const relPath = "identity-swap.txt";
+    const targetPath = join(repoRoot, relPath);
+    const alternatePath = join(repoRoot, "identity-alternate.txt");
+    const originalContent = "identityValue = 1;\n";
+    await writeFile(targetPath, originalContent, "utf-8");
+    await writeFile(alternatePath, originalContent, "utf-8");
+
+    const preview = (await handleSearchEdit(
+      SearchEditRequestSchema.parse({
+        mode: "preview",
+        repoId: REPO_ID,
+        targeting: "text",
+        query: {
+          literal: "identityValue = 1",
+          replacement: "identityValue = 2",
+        },
+        editMode: "replacePattern",
+        filters: { include: [relPath] },
+      }),
+    )) as SearchEditPreviewResponse;
+
+    await unlink(targetPath);
+    try {
+      await symlink(alternatePath, targetPath, "file");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        process.platform === "win32" &&
+        (code === "EPERM" || code === "EACCES")
+      ) {
+        t.skip("file symlink creation is unavailable on this Windows host");
+        return;
+      }
+      throw error;
+    }
+
+    const apply = (await handleSearchEdit(
+      SearchEditRequestSchema.parse({
+        mode: "apply",
+        repoId: REPO_ID,
+        planHandle: preview.planHandle,
+      }),
+    )) as SearchEditApplyResponse;
+
+    assert.equal(apply.filesWritten, 0);
+    assert.equal(apply.filesFailed, 1);
+    assert.match(
+      apply.results[0]?.reason ?? "",
+      /target identity changed after validation/i,
+    );
+    assert.equal(await readFile(alternatePath, "utf-8"), originalContent);
   });
 
   it("preview populates retrievalEvidence when hybrid narrowing runs", async () => {

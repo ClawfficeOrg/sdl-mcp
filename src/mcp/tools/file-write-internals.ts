@@ -108,6 +108,24 @@ export interface PreparedPath {
   fileExists: boolean;
 }
 
+/** Fail closed if a write target resolves to a different canonical identity. */
+export function assertStableCanonicalIdentity(
+  preparedPath: string,
+  currentPath: string,
+): void {
+  const preparedIdentity = normalizePath(preparedPath);
+  const currentIdentity = normalizePath(currentPath);
+  const sameIdentity = process.platform === "win32"
+    ? preparedIdentity.toLowerCase() === currentIdentity.toLowerCase()
+    : preparedIdentity === currentIdentity;
+
+  if (!sameIdentity) {
+    throw new ValidationError(
+      "Write target identity changed after validation; refusing write",
+    );
+  }
+}
+
 /**
  * Resolve and validate a relative repo path. Throws on repo-miss,
  * path escape, or denied extension.
@@ -509,7 +527,16 @@ export async function writeWithBackup(
   if (fileExists && createBackup) {
     backupPath = `${absPath}${backupSuffix ?? ".bak"}`;
     // Refuse pre-created backup destinations, including hardlinks to outside files.
-    await copyFile(absPath, backupPath, constants.COPYFILE_EXCL);
+    try {
+      await copyFile(absPath, backupPath, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new ValidationError(
+          "Backup destination already exists; remove or move the retained .bak file, or retry with createBackup: false",
+        );
+      }
+      throw error;
+    }
     logger.debug(`file.write created backup: ${backupPath}`);
   }
 

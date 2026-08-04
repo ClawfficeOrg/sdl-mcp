@@ -18,6 +18,7 @@ import { validatePathWithinRoot } from "../../../util/paths.js";
 import { getLadybugConn } from "../../../db/ladybug.js";
 import * as ladybugDb from "../../../db/ladybug-queries.js";
 import {
+  assertStableCanonicalIdentity,
   hashFileIfExists,
   removeBackup,
   restoreBackup,
@@ -190,6 +191,12 @@ export async function applyBatch(
             `symlink-escape-at-write: ${edit.relPath}: ${symErr instanceof Error ? symErr.message : String(symErr)}`,
           );
         }
+        if (!pc) {
+          throw new ValidationError(
+            "Write target identity changed after validation; refusing write",
+          );
+        }
+        assertStableCanonicalIdentity(pc.canonicalAbsPath, writePath);
       }
       const backupPath = await writeWithBackup(
         edit.absPath,

@@ -6,6 +6,7 @@
  * callsite files.
  */
 
+import { realpathSync } from "fs";
 import { resolve } from "path";
 
 import type { SyntaxNode } from "tree-sitter";
@@ -464,7 +465,13 @@ export async function planSignatureSearchEditPreview(request: SearchEditSingleOp
       filesSkipped.push({ path: rel, reason: aggregateByteCapExceededReason(maxPlanBytes) });
       continue;
     }
-    preconditions.push({ relPath: rel, absPath: abs, sha256: contentSha, mtimeMs: stats.mtimeMs });
+    preconditions.push({
+      relPath: rel,
+      absPath: abs,
+      canonicalAbsPath: realpathSync.native(abs),
+      sha256: contentSha,
+      mtimeMs: stats.mtimeMs,
+    });
     edits.push({ relPath: rel, absPath: abs, newContent, createBackup, fileExists: true, indexedSource: isIndexedSource(rel), matchCount: sourceEdits.length, editMode: "replacePattern" });
     fileEntries.push({ file: rel, matchCount: sourceEdits.length, editMode: "replacePattern", snippets: buildSearchEditPreviewSnippets(content, newContent, contextLines, regex), indexedSource: isIndexedSource(rel) });
     totalMatches += sourceEdits.length;

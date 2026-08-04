@@ -22,6 +22,8 @@ import {
 } from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import { handleFileWrite } from "../../dist/mcp/tools/file-write.js";
+import * as fileWriteInternals from "../../dist/mcp/tools/file-write-internals.js";
+import { ValidationError } from "../../dist/domain/errors.js";
 import { generateFileId } from "../../dist/util/hashing.js";
 import {
   capturePersistedGraphIntegrity,
@@ -160,6 +162,25 @@ describe("sdl.file.write", () => {
       assert.equal(readFileSync(filePath + ".bak", "utf-8"), '{"old": true}');
     });
 
+    it("rejects a canonical target identity change", () => {
+      const guard = Reflect.get(
+        fileWriteInternals,
+        "assertStableCanonicalIdentity",
+      ) as ((preparedPath: string, currentPath: string) => void) | undefined;
+      assert.ok(guard, "expected shared canonical identity guard");
+
+      const preparedPath = join(testDir, "StableTarget.ts");
+      const equivalentPath =
+        process.platform === "win32" ? preparedPath.toUpperCase() : preparedPath;
+      assert.doesNotThrow(() => guard(preparedPath, equivalentPath));
+      assert.throws(
+        () => guard(preparedPath, `${preparedPath}.changed`),
+        (error: unknown) =>
+          error instanceof ValidationError &&
+          /target identity changed after validation/i.test(error.message),
+      );
+    });
+
     it("refuses an existing hardlinked backup destination", async () => {
       const filePath = join(configDir, "hardlink-target.json");
       const backupPath = `${filePath}.bak`;
@@ -181,8 +202,13 @@ describe("sdl.file.write", () => {
             content: '{"changed": true}',
             createBackup: true,
           }),
-          (error: unknown) =>
-            (error as NodeJS.ErrnoException).code === "EEXIST",
+          (error: unknown) => {
+            assert.ok(error instanceof ValidationError);
+            assert.match(error.message, /backup destination already exists/i);
+            assert.match(error.message, /remove or move/i);
+            assert.match(error.message, /createBackup: false/);
+            return true;
+          },
         );
         assert.equal(readFileSync(outsidePath, "utf-8"), outsideContent);
         assert.equal(readFileSync(filePath, "utf-8"), originalContent);

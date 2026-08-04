@@ -21,6 +21,7 @@ import {
 } from "./search-edit/structural.js";
 import { attachRawContext } from "../token-usage.js";
 import {
+  assertStableCanonicalIdentity,
   BYTES_PER_TOKEN,
   preparePath,
   prepareNewContent,
@@ -166,12 +167,12 @@ export async function handleFileWrite(
     );
   }
 
-  // Re-verify path hasn't been swapped for a symlink since preparePath
+  // Re-verify the prepared canonical target immediately before writing.
+  let writePath = canonicalAbsPath;
   if (fileExists) {
-    const resolved = realpathSync(absPath);
-    if (resolved !== absPath) {
-      validatePathWithinRoot(canonicalRootPath, resolved);
-    }
+    writePath = realpathSync.native(absPath);
+    validatePathWithinRoot(canonicalRootPath, writePath);
+    assertStableCanonicalIdentity(canonicalAbsPath, writePath);
   }
 
   const backupPath = await writeWithBackup(
@@ -180,7 +181,7 @@ export async function handleFileWrite(
     request.createBackup ?? true,
     fileExists,
     undefined,
-    canonicalAbsPath,
+    writePath,
   );
 
   const bytesWritten = Buffer.byteLength(newContent, "utf-8");
@@ -203,7 +204,7 @@ export async function handleFileWrite(
         false,
         true,
         undefined,
-        canonicalAbsPath,
+        writePath,
       );
     } else {
       await unlink(absPath);
