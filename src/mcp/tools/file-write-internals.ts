@@ -17,7 +17,7 @@ import {
   rename,
   unlink,
 } from "fs/promises";
-import { existsSync, realpathSync } from "fs";
+import { constants, existsSync, realpathSync } from "fs";
 import { createHash, randomBytes } from "crypto";
 
 import { RepoConfigSchema } from "../../config/types.js";
@@ -497,7 +497,8 @@ export async function writeWithBackup(
   }
   if (fileExists && createBackup) {
     backupPath = `${absPath}${backupSuffix ?? ".bak"}`;
-    await copyFile(absPath, backupPath);
+    // Refuse pre-created backup destinations, including hardlinks to outside files.
+    await copyFile(absPath, backupPath, constants.COPYFILE_EXCL);
     logger.debug(`file.write created backup: ${backupPath}`);
   }
 

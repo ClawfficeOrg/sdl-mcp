@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   rmSync,
   writeFileSync,
@@ -133,6 +134,37 @@ describe("sdl.file.write", () => {
       assert.match(response.snippets?.after ?? "", /new/);
       assert.equal(readFileSync(filePath, "utf-8"), '{"new": true}');
       assert.equal(readFileSync(filePath + ".bak", "utf-8"), '{"old": true}');
+    });
+
+    it("refuses an existing hardlinked backup destination", async () => {
+      const filePath = join(configDir, "hardlink-target.json");
+      const backupPath = `${filePath}.bak`;
+      const outsidePath = join(
+        dirname(testDir),
+        `file-write-hardlink-outside-${process.pid}.json`,
+      );
+      const originalContent = '{"original": true}';
+      const outsideContent = '{"outside": true}';
+      writeFileSync(filePath, originalContent, "utf-8");
+      writeFileSync(outsidePath, outsideContent, "utf-8");
+      linkSync(outsidePath, backupPath);
+
+      try {
+        await assert.rejects(
+          handleFileWrite({
+            repoId,
+            filePath: "config/hardlink-target.json",
+            content: '{"changed": true}',
+            createBackup: true,
+          }),
+          (error: unknown) =>
+            (error as NodeJS.ErrnoException).code === "EEXIST",
+        );
+        assert.equal(readFileSync(outsidePath, "utf-8"), outsideContent);
+        assert.equal(readFileSync(filePath, "utf-8"), originalContent);
+      } finally {
+        rmSync(outsidePath, { force: true });
+      }
     });
 
     it("refuses writes through final-path symlinks", async (t) => {
