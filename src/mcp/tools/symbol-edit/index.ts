@@ -524,6 +524,7 @@ async function buildPreview(
   const precondition: PlanPrecondition = {
     relPath: target.relPath,
     absPath: target.absPath,
+    canonicalAbsPath: realpathSync.native(target.absPath),
     sha256: target.savedFileSha256,
     mtimeMs: target.mtimeMs,
   };

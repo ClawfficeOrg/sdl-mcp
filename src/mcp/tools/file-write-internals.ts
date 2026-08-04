@@ -215,7 +215,7 @@ export function validateExactlyOneMode(request: FileWriteRequest): void {
 }
 
 export interface PrepareContentInput {
-  prepared: PreparedPath;
+  prepared: Pick<PreparedPath, "relPath" | "fileExists">;
   request: FileWriteRequest;
   existingContent: string;
   existingBytes: number;
