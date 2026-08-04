@@ -418,6 +418,116 @@ describe("sdl.file.write", () => {
       },
     );
 
+    it(
+      "syncs eligible TypeScript through a Windows junction repo root",
+      { skip: process.platform !== "win32" },
+      async () => {
+        const realRoot = join(testDir, "real-root");
+        const junctionRoot = join(testDir, "junction-root");
+        const relPath = "junction-write.ts";
+        const content = "export const junctionWrite = 1;";
+        mkdirSync(realRoot, { recursive: true });
+        symlinkSync(realRoot, junctionRoot, "junction");
+
+        const conn = await getLadybugConn();
+        const now = "2026-08-04T14:00:00.000Z";
+        await ladybugDb.upsertRepo(conn, {
+          repoId,
+          rootPath: junctionRoot,
+          configJson: JSON.stringify({
+            repoId,
+            rootPath: junctionRoot,
+            ignore: [],
+            languages: ["ts", "json", "yaml", "md"],
+            maxFileBytes: 2_000_000,
+            includeNodeModulesTypes: false,
+            packageJsonPath: null,
+            tsconfigPath: null,
+            workspaceGlobs: null,
+          }),
+          createdAt: now,
+        });
+        await ladybugDb.createVersion(conn, {
+          versionId: "v-junction-root",
+          repoId,
+          createdAt: now,
+          reason: "junction-root file.write baseline",
+          prevVersionHash: null,
+          versionHash: null,
+        });
+        const baseline = await capturePersistedGraphIntegrity(conn, repoId);
+        await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, repoId, {
+          files: [],
+          fileless: [],
+        });
+        await markGraphIntegrityVerified(
+          repoId,
+          "v-junction-root",
+          baseline.digest,
+        );
+        assert.equal(
+          (await getDerivedState(repoId))?.graphIntegrityState,
+          "verified",
+        );
+        assert.deepStrictEqual(
+          await ladybugDb.listGraphIntegrityFileStates(conn, repoId),
+          [],
+        );
+
+        const response = await handleFileWrite({
+          repoId,
+          filePath: relPath,
+          content,
+          createIfMissing: true,
+          createBackup: false,
+        });
+
+        assert.equal(readFileSync(join(realRoot, relPath), "utf-8"), content);
+        assert.equal(
+          response.indexUpdate?.applied,
+          true,
+          response.indexUpdate?.error,
+        );
+        const persistedFile = await ladybugDb.getFileByRepoPath(
+          conn,
+          repoId,
+          relPath,
+        );
+        assert.equal(persistedFile?.relPath, relPath);
+        assert.ok(persistedFile);
+        assert.ok(
+          (await ladybugDb.getSymbolsByFile(conn, persistedFile.fileId)).length >
+            0,
+        );
+        assert.equal(
+          await ladybugDb.getFileByRepoPath(
+            conn,
+            repoId,
+            `../real-root/${relPath}`,
+          ),
+          null,
+        );
+        const committedState = await getDerivedState(repoId);
+        assert.equal(committedState?.graphIntegrityVersionId, "v-junction-root");
+        assert.equal(committedState?.graphIntegrityRevision, 1);
+        const manifest = createGraphIntegrityExpectationFromManifest(
+          await ladybugDb.listGraphIntegrityFileStates(conn, repoId),
+          await ladybugDb.listGraphIntegrityFilelessStates(conn, repoId),
+        );
+        const graph = await capturePersistedGraphIntegrity(conn, repoId);
+        assert.equal(
+          graph.digest,
+          manifest.digest,
+          JSON.stringify(compareGraphIntegrityExpectations(manifest, graph)),
+        );
+        await waitForVerifiedRevision(repoId, 1);
+        assert.equal(
+          (await getDerivedState(repoId))?.graphIntegrityDigest,
+          graph.digest,
+        );
+      },
+    );
+
     it("keeps graph integrity available when creating a new indexed file", async () => {
       const relPath = "src/new-indexed.ts";
       mkdirSync(join(testDir, "src"), { recursive: true });

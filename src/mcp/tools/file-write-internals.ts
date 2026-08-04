@@ -554,9 +554,13 @@ export async function syncLiveIndex(
     if (!repo) {
       throw new NotFoundError(`Repository ${repoId} not found`);
     }
+    const canonicalRootPath = realpathSync.native(repo.rootPath);
+    const canonicalFilePath = realpathSync.native(
+      resolve(repo.rootPath, relPath),
+    );
     const canonicalRelPath = getRelativePath(
-      repo.rootPath,
-      realpathSync.native(resolve(repo.rootPath, relPath)),
+      canonicalRootPath,
+      canonicalFilePath,
     );
     const { ignore } = RepoConfigSchema.pick({ ignore: true }).parse(
       JSON.parse(repo.configJson),
