@@ -1,6 +1,6 @@
 {
   "name": "create-sdl-mcp",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Clean foreground installer for SDL-MCP",
   "type": "module",
   "bin": {
