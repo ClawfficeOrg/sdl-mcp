@@ -23,7 +23,11 @@ import { createHash } from "crypto";
 
 import { getLadybugConn } from "../../../db/ladybug.js";
 import * as ladybugDb from "../../../db/ladybug-queries.js";
-import { normalizePath, validatePathWithinRoot } from "../../../util/paths.js";
+import {
+  getRelativePath,
+  normalizePath,
+  validatePathWithinRoot,
+} from "../../../util/paths.js";
 import {
   detectDominantEol,
   normalizeToLf,
@@ -1484,6 +1488,8 @@ interface SafeReadCandidateResult {
   content: string;
   contentSha: string;
   stats: Stats;
+  canonicalAbsPath: string;
+  canonicalRelPath: string;
 }
 
 export async function readSearchEditCandidateFile(
@@ -1492,8 +1498,10 @@ export async function readSearchEditCandidateFile(
 ): Promise<
   { ok: true; value: SafeReadCandidateResult } | { ok: false; reason: string }
 > {
+  let canonicalRootPath: string;
   try {
     validatePathWithinRoot(rootPath, abs);
+    canonicalRootPath = realpathSync.native(rootPath);
   } catch (err) {
     return {
       ok: false,
@@ -1535,8 +1543,13 @@ export async function readSearchEditCandidateFile(
       return { ok: false, reason: "file-too-large" };
     }
 
-    const resolved = realpathSync(abs);
-    validatePathWithinRoot(rootPath, resolved);
+    const resolved = realpathSync.native(abs);
+    validatePathWithinRoot(canonicalRootPath, resolved);
+    const canonicalRelPath = getRelativePath(canonicalRootPath, resolved);
+    const canonicalPolicy = isPathAllowed(canonicalRelPath, undefined);
+    if (!canonicalPolicy.allowed) {
+      return { ok: false, reason: canonicalPolicy.reason ?? "path-denied" };
+    }
     const pathStats = await stat(resolved);
     if (
       (stats.dev !== 0 ||
@@ -1553,8 +1566,11 @@ export async function readSearchEditCandidateFile(
       return { ok: false, reason: "file-too-large" };
     }
 
-    const afterRead = realpathSync(abs);
-    validatePathWithinRoot(rootPath, afterRead);
+    const afterRead = realpathSync.native(abs);
+    validatePathWithinRoot(canonicalRootPath, afterRead);
+    if (normalizePath(afterRead) !== normalizePath(resolved)) {
+      return { ok: false, reason: "path-changed-during-read" };
+    }
     const afterReadStats = await stat(afterRead);
     if (
       (stats.dev !== 0 ||
@@ -1576,6 +1592,8 @@ export async function readSearchEditCandidateFile(
         content: buf.toString("utf-8"),
         contentSha: createHash("sha256").update(buf).digest("hex"),
         stats,
+        canonicalAbsPath: afterRead,
+        canonicalRelPath,
       },
     };
   } catch (err) {
@@ -1701,7 +1719,8 @@ async function planSearchEditBatchPreview(
       partial = true;
       continue;
     }
-    const { content, contentSha, stats } = readResult.value;
+    const { content, contentSha, stats, canonicalAbsPath } =
+      readResult.value;
     const sourceEdits: SourceEdit[] = [];
     const recomputedMatchCounts = new Map<string, number>();
     let skipFileReason: PreviewFileSkip | undefined;
@@ -1798,7 +1817,7 @@ async function planSearchEditBatchPreview(
     preconditions.push({
       relPath: rel,
       absPath: abs,
-      canonicalAbsPath: realpathSync.native(abs),
+      canonicalAbsPath,
       sha256: contentSha,
       mtimeMs: stats.mtimeMs,
     });
@@ -2183,7 +2202,8 @@ async function planSingleSearchEditPreview(
       skipped.push({ path: rel, reason: readResult.reason });
       continue;
     }
-    const { content, contentSha, stats } = readResult.value;
+    const { content, contentSha, stats, canonicalAbsPath } =
+      readResult.value;
 
     let matchCount = 0;
     if (regex) {
@@ -2327,7 +2347,7 @@ async function planSingleSearchEditPreview(
     preconditions.push({
       relPath: rel,
       absPath: abs,
-      canonicalAbsPath: realpathSync.native(abs),
+      canonicalAbsPath,
       sha256: contentSha,
       mtimeMs: stats.mtimeMs,
     });

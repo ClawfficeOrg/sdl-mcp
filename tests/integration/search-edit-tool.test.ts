@@ -1117,6 +1117,57 @@ describe("sdl.search.edit", { concurrency: false }, () => {
   });
 
   it(
+    "rejects canonical denied extensions reached through Windows 8.3 aliases",
+    { skip: process.platform !== "win32" },
+    async (t) => {
+      const canonicalRelPath = "LongDeniedNotebookFilename.ipynb";
+      const filePath = join(repoRoot, canonicalRelPath);
+      const originalContent =
+        '{"cells":[],"metadata":{"marker":"original"},"nbformat":4}\n';
+      await writeFile(filePath, originalContent, "utf-8");
+      const shortName = getWindowsShortBasename(filePath);
+      if (!shortName) {
+        t.skip("8.3 filename aliases are unavailable on the test volume");
+        return;
+      }
+
+      const preview = (await handleSearchEdit(
+        SearchEditRequestSchema.parse({
+          mode: "preview",
+          repoId: REPO_ID,
+          targeting: "text",
+          query: {
+            literal: "original",
+            replacement: "changed",
+          },
+          editMode: "replacePattern",
+          filters: { include: [shortName] },
+        }),
+      )) as SearchEditPreviewResponse;
+      const apply = (await handleSearchEdit(
+        SearchEditRequestSchema.parse({
+          mode: "apply",
+          repoId: REPO_ID,
+          planHandle: preview.planHandle,
+        }),
+      )) as SearchEditApplyResponse;
+
+      assert.equal(preview.filesMatched, 0);
+      assert.equal(
+        preview.filesSkipped.some(
+          (entry) =>
+            entry.path === shortName &&
+            entry.reason === "denied-extension:.ipynb",
+        ),
+        true,
+        JSON.stringify(preview.filesSkipped),
+      );
+      assert.equal(apply.filesWritten, 0);
+      assert.equal(await readFile(filePath, "utf-8"), originalContent);
+    },
+  );
+
+  it(
     "syncs Windows 8.3 source aliases under their canonical identity",
     { skip: process.platform !== "win32" },
     async (t) => {

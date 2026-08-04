@@ -6,7 +6,6 @@
  * callsite files.
  */
 
-import { realpathSync } from "fs";
 import { resolve } from "path";
 
 import type { SyntaxNode } from "tree-sitter";
@@ -431,7 +430,8 @@ export async function planSignatureSearchEditPreview(request: SearchEditSingleOp
       filesSkipped.push({ path: rel, reason: readResult.reason });
       continue;
     }
-    const { content, contentSha, stats } = readResult.value;
+    const { content, contentSha, stats, canonicalAbsPath } =
+      readResult.value;
     let sourceEdits: SourceEdit[] = [];
     let skipReason: string | undefined;
     if (role === "declaration") {
@@ -468,7 +468,7 @@ export async function planSignatureSearchEditPreview(request: SearchEditSingleOp
     preconditions.push({
       relPath: rel,
       absPath: abs,
-      canonicalAbsPath: realpathSync.native(abs),
+      canonicalAbsPath,
       sha256: contentSha,
       mtimeMs: stats.mtimeMs,
     });
