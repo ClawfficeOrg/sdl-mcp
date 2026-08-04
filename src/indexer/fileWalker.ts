@@ -26,7 +26,7 @@ export interface WalkRepositoryFilesOptions {
   openDirectory?: (directoryPath: string) => Promise<DirectoryHandleLike>;
 }
 
-function compilePatterns(patterns: string[]): RegExp[] {
+export function compilePatterns(patterns: string[]): RegExp[] {
   // Preserve class escapes; the shared compiler normalizes separators.
   return patterns.map((pattern) => globToSafeRegex(pattern));
 }
@@ -35,7 +35,7 @@ function matchesAnyPattern(path: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(path));
 }
 
-function shouldIgnorePath(
+export function shouldIgnorePath(
   path: string,
   ignorePatterns: RegExp[],
   isDirectory: boolean,

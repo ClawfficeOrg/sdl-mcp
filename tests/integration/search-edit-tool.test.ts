@@ -38,10 +38,19 @@ import {
 import { withTransaction } from "../../dist/db/ladybug-core.js";
 import {
   beginGraphIntegrityVersion,
+  getDerivedState,
   markGraphIntegrityVerified,
 } from "../../dist/db/ladybug-derived-state.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
-import { createGraphIntegrityExpectationFromManifest } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
+import {
+  capturePersistedGraphIntegrity,
+  createGraphIntegrityExpectationFromManifest,
+} from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
+import {
+  cancelAndWaitForGraphIntegrityVerifier,
+  waitForGraphIntegrityVerifier,
+} from "../../dist/indexer/provider-first/background-graph-integrity-verifier.js";
+import { generateFileId } from "../../dist/util/hashing.js";
 import { normalizePath } from "../../dist/util/paths.js";
 import { ValidationError } from "../../dist/domain/errors.js";
 import { loadConfiguredAdapterPlugins } from "../../dist/startup/plugins.js";
@@ -124,6 +133,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
   });
 
   after(async () => {
+    await cancelAndWaitForGraphIntegrityVerifier(REPO_ID);
     await closeLadybugDb();
     await rm(repoRoot, { recursive: true, force: true });
   });
@@ -905,6 +915,175 @@ describe("sdl.search.edit", { concurrency: false }, () => {
     assert.ok(b.includes("newName"));
     assert.ok(!a.includes("oldName"));
     assert.ok(!b.includes("oldName"));
+  });
+
+  it("syncs eligible search edits without mutating the graph for ignored files", async () => {
+    const conn = await getLadybugConn();
+    const priorRepo = await ladybugDb.getRepo(conn, REPO_ID);
+    assert.ok(priorRepo);
+    const repoConfig = {
+      repoId: REPO_ID,
+      rootPath: repoRoot,
+      ignore: [] as string[],
+      languages: ["ts", "json", "yaml", "md"],
+      maxFileBytes: 2_000_000,
+      includeNodeModulesTypes: false,
+      packageJsonPath: null,
+      tsconfigPath: null,
+      workspaceGlobs: null,
+    };
+
+    try {
+      await ladybugDb.upsertRepo(conn, {
+        repoId: REPO_ID,
+        rootPath: priorRepo.rootPath,
+        configJson: JSON.stringify(repoConfig),
+        createdAt: priorRepo.createdAt,
+      });
+
+    const eligibleRelPath = "src/eligible-search-edit.ts";
+    await mkdir(join(repoRoot, "src"), { recursive: true });
+    await writeFile(
+      join(repoRoot, eligibleRelPath),
+      "export const eligibleSearchEdit = 1;\n",
+      "utf-8",
+    );
+
+    const eligibleBefore = await getDerivedState(REPO_ID);
+    assert.ok(eligibleBefore?.graphIntegrityRevision != null);
+    const eligiblePreview = (await handleSearchEdit(
+      SearchEditRequestSchema.parse({
+        mode: "preview",
+        repoId: REPO_ID,
+        targeting: "text",
+        query: {
+          literal: "eligibleSearchEdit = 1",
+          replacement: "eligibleSearchEdit = 2",
+        },
+        editMode: "replacePattern",
+        filters: { include: [eligibleRelPath] },
+      }),
+    )) as SearchEditPreviewResponse;
+    const eligibleApply = (await handleSearchEdit(
+      SearchEditRequestSchema.parse({
+        mode: "apply",
+        repoId: REPO_ID,
+        planHandle: eligiblePreview.planHandle,
+      }),
+    )) as SearchEditApplyResponse;
+
+    assert.equal(
+      eligibleApply.results[0]?.indexUpdate?.applied,
+      true,
+      eligibleApply.results[0]?.indexUpdate?.error,
+    );
+    const eligibleAfterApply = await getDerivedState(REPO_ID);
+    assert.ok(
+      (eligibleAfterApply?.graphIntegrityRevision ?? 0) >
+        eligibleBefore.graphIntegrityRevision,
+    );
+    await waitForGraphIntegrityVerifier(REPO_ID);
+    const eligibleVerified = await getDerivedState(REPO_ID);
+    assert.equal(
+      eligibleVerified?.graphIntegrityVerifiedRevision,
+      eligibleVerified?.graphIntegrityRevision,
+    );
+
+    await ladybugDb.upsertRepo(conn, {
+        repoId: REPO_ID,
+        rootPath: priorRepo.rootPath,
+        configJson: JSON.stringify({
+          ...repoConfig,
+          ignore: ["ignored/**"],
+        }),
+        createdAt: priorRepo.createdAt,
+      });
+
+      const ignoredRelPath = "ignored/search-edit-target.ts";
+      const ignoredFileId = generateFileId(REPO_ID, ignoredRelPath);
+      await mkdir(join(repoRoot, "ignored"), { recursive: true });
+      await writeFile(
+        join(repoRoot, ignoredRelPath),
+        "export const ignoredSearchEdit = 1;\n",
+        "utf-8",
+      );
+
+      const ignoredBaseline = {
+        derivedState: await getDerivedState(REPO_ID),
+        file: await ladybugDb.getFileByRepoPath(
+          conn,
+          REPO_ID,
+          ignoredRelPath,
+        ),
+        symbols: await ladybugDb.getSymbolsByFile(conn, ignoredFileId),
+        manifestFiles: await ladybugDb.listGraphIntegrityFileStates(
+          conn,
+          REPO_ID,
+        ),
+        manifestFileless: await ladybugDb.listGraphIntegrityFilelessStates(
+          conn,
+          REPO_ID,
+        ),
+        graphDigest: (await capturePersistedGraphIntegrity(conn, REPO_ID)).digest,
+      };
+
+      const ignoredPreview = (await handleSearchEdit(
+        SearchEditRequestSchema.parse({
+          mode: "preview",
+          repoId: REPO_ID,
+          targeting: "text",
+          query: {
+            literal: "ignoredSearchEdit = 1",
+            replacement: "ignoredSearchEdit = 2",
+          },
+          editMode: "replacePattern",
+          filters: { include: [ignoredRelPath] },
+        }),
+      )) as SearchEditPreviewResponse;
+      const ignoredApply = (await handleSearchEdit(
+        SearchEditRequestSchema.parse({
+          mode: "apply",
+          repoId: REPO_ID,
+          planHandle: ignoredPreview.planHandle,
+        }),
+      )) as SearchEditApplyResponse;
+
+      assert.equal(ignoredApply.filesWritten, 1);
+      assert.equal(
+        await readFile(join(repoRoot, ignoredRelPath), "utf-8"),
+        "export const ignoredSearchEdit = 2;\n",
+      );
+      assert.equal(ignoredApply.results[0]?.indexUpdate, undefined);
+      assert.deepEqual(
+        {
+          derivedState: await getDerivedState(REPO_ID),
+          file: await ladybugDb.getFileByRepoPath(
+            conn,
+            REPO_ID,
+            ignoredRelPath,
+          ),
+          symbols: await ladybugDb.getSymbolsByFile(conn, ignoredFileId),
+          manifestFiles: await ladybugDb.listGraphIntegrityFileStates(
+            conn,
+            REPO_ID,
+          ),
+          manifestFileless: await ladybugDb.listGraphIntegrityFilelessStates(
+            conn,
+            REPO_ID,
+          ),
+          graphDigest: (await capturePersistedGraphIntegrity(conn, REPO_ID))
+            .digest,
+        },
+        ignoredBaseline,
+      );
+    } finally {
+      await ladybugDb.upsertRepo(conn, {
+        repoId: REPO_ID,
+        rootPath: priorRepo.rootPath,
+        configJson: priorRepo.configJson,
+        createdAt: priorRepo.createdAt,
+      });
+    }
   });
 
   it("apply with unknown planHandle fails closed", async () => {

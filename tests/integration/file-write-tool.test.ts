@@ -236,6 +236,92 @@ describe("sdl.file.write", () => {
       );
     });
 
+    it("writes ignored TypeScript without updating the graph", async () => {
+      const relPath = "ignored/indexed.ts";
+      const filePath = join(testDir, relPath);
+      const fileId = generateFileId(repoId, relPath);
+      const conn = await getLadybugConn();
+      const now = "2026-08-04T12:00:00.000Z";
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, "export const ignored = 1;", "utf-8");
+
+      await ladybugDb.upsertRepo(conn, {
+        repoId,
+        rootPath: testDir,
+        configJson: JSON.stringify({
+          repoId,
+          rootPath: testDir,
+          ignore: ["ignored/**"],
+          languages: ["ts", "json", "yaml", "md"],
+          maxFileBytes: 2_000_000,
+          includeNodeModulesTypes: false,
+          packageJsonPath: null,
+          tsconfigPath: null,
+          workspaceGlobs: null,
+        }),
+        createdAt: now,
+      });
+      await ladybugDb.createVersion(conn, {
+        versionId: "v-ignored",
+        repoId,
+        createdAt: now,
+        reason: "ignored file.write baseline",
+        prevVersionHash: null,
+        versionHash: null,
+      });
+      const baselineGraph = await capturePersistedGraphIntegrity(conn, repoId);
+      await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, repoId, {
+        files: [],
+        fileless: [],
+      });
+      await markGraphIntegrityVerified(
+        repoId,
+        "v-ignored",
+        baselineGraph.digest,
+      );
+      const baseline = {
+        derivedState: await getDerivedState(repoId),
+        file: await ladybugDb.getFileByRepoPath(conn, repoId, relPath),
+        symbols: await ladybugDb.getSymbolsByFile(conn, fileId),
+        manifestFiles: await ladybugDb.listGraphIntegrityFileStates(conn, repoId),
+        manifestFileless: await ladybugDb.listGraphIntegrityFilelessStates(
+          conn,
+          repoId,
+        ),
+        graphDigest: baselineGraph.digest,
+      };
+
+      const response = await handleFileWrite({
+        repoId,
+        filePath: relPath,
+        content: "export const ignored = 2;",
+        createBackup: false,
+      });
+
+      assert.equal(
+        readFileSync(filePath, "utf-8"),
+        "export const ignored = 2;",
+      );
+      assert.deepStrictEqual(
+        {
+          derivedState: await getDerivedState(repoId),
+          file: await ladybugDb.getFileByRepoPath(conn, repoId, relPath),
+          symbols: await ladybugDb.getSymbolsByFile(conn, fileId),
+          manifestFiles: await ladybugDb.listGraphIntegrityFileStates(
+            conn,
+            repoId,
+          ),
+          manifestFileless: await ladybugDb.listGraphIntegrityFilelessStates(
+            conn,
+            repoId,
+          ),
+          graphDigest: (await capturePersistedGraphIntegrity(conn, repoId)).digest,
+        },
+        baseline,
+      );
+      assert.equal(response.indexUpdate, undefined);
+    });
+
     it("keeps graph integrity available when creating a new indexed file", async () => {
       const relPath = "src/new-indexed.ts";
       mkdirSync(join(testDir, "src"), { recursive: true });

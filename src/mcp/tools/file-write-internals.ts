@@ -20,8 +20,13 @@ import {
 import { existsSync, realpathSync } from "fs";
 import { createHash, randomBytes } from "crypto";
 
+import { RepoConfigSchema } from "../../config/types.js";
 import { getLadybugConn } from "../../db/ladybug.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
+import {
+  compilePatterns,
+  shouldIgnorePath,
+} from "../../indexer/fileWalker.js";
 import { normalizePath, validatePathWithinRoot } from "../../util/paths.js";
 import {
   detectDominantEol,
@@ -540,6 +545,18 @@ export async function syncLiveIndex(
   }
 
   try {
+    const conn = await getLadybugConn();
+    const repo = await ladybugDb.getRepo(conn, repoId);
+    if (!repo) {
+      throw new NotFoundError(`Repository ${repoId} not found`);
+    }
+    const { ignore } = RepoConfigSchema.pick({ ignore: true }).parse(
+      JSON.parse(repo.configJson),
+    );
+    if (shouldIgnorePath(relPath, compilePatterns(ignore), false)) {
+      return undefined;
+    }
+
     const patchResult = await patchSavedFile({
       repoId,
       filePath: relPath,
