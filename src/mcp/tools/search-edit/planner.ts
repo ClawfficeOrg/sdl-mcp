@@ -1413,7 +1413,6 @@ function collectReplacePatternSourceEdits(
 }
 
 function sourceEditsForPlan(
-  rootPath: string,
   content: string,
   plan: OperationFilePlan,
 ): SourceEdit[] {
@@ -1442,10 +1441,7 @@ function sourceEditsForPlan(
   validateExactlyOneMode(fileWriteRequest);
   const result = prepareNewContent({
     prepared: {
-      repoId: plan.request.repoId,
-      rootPath,
       relPath: plan.edit.relPath,
-      absPath: plan.edit.absPath,
       fileExists: true,
     },
     request: fileWriteRequest,
@@ -1728,7 +1724,7 @@ async function planSearchEditBatchPreview(
     for (const plan of plans) {
       let ranges: SourceEdit[];
       try {
-        ranges = sourceEditsForPlan(rootPath, content, plan);
+        ranges = sourceEditsForPlan(content, plan);
       } catch (err) {
         if (isStructuralBudgetError(err)) {
           skipFileReason = {
@@ -2296,10 +2292,7 @@ async function planSingleSearchEditPreview(
       try {
         result = prepareNewContent({
           prepared: {
-            repoId: request.repoId,
-            rootPath,
             relPath: rel,
-            absPath: abs,
             fileExists: true,
           },
           request: fileWriteRequest,
