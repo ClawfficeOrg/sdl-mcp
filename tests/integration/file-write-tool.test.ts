@@ -322,6 +322,102 @@ describe("sdl.file.write", () => {
       assert.equal(response.indexUpdate, undefined);
     });
 
+    it(
+      "uses canonical Windows path casing before applying ignore rules",
+      { skip: process.platform !== "win32" },
+      async () => {
+        const canonicalRelPath = "Ignored/windows-casing.ts";
+        const requestRelPath = "ignored/windows-casing.ts";
+        const filePath = join(testDir, canonicalRelPath);
+        const fileId = generateFileId(repoId, requestRelPath);
+        const conn = await getLadybugConn();
+        const now = "2026-08-04T13:00:00.000Z";
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, "export const casing = 1;", "utf-8");
+
+        await ladybugDb.upsertRepo(conn, {
+          repoId,
+          rootPath: testDir,
+          configJson: JSON.stringify({
+            repoId,
+            rootPath: testDir,
+            ignore: ["Ignored"],
+            languages: ["ts", "json", "yaml", "md"],
+            maxFileBytes: 2_000_000,
+            includeNodeModulesTypes: false,
+            packageJsonPath: null,
+            tsconfigPath: null,
+            workspaceGlobs: null,
+          }),
+          createdAt: now,
+        });
+        await ladybugDb.createVersion(conn, {
+          versionId: "v-ignored-windows-casing",
+          repoId,
+          createdAt: now,
+          reason: "ignored Windows casing baseline",
+          prevVersionHash: null,
+          versionHash: null,
+        });
+        const baselineGraph = await capturePersistedGraphIntegrity(conn, repoId);
+        await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, repoId, {
+          files: [],
+          fileless: [],
+        });
+        await markGraphIntegrityVerified(
+          repoId,
+          "v-ignored-windows-casing",
+          baselineGraph.digest,
+        );
+        const baseline = {
+          derivedState: await getDerivedState(repoId),
+          file: await ladybugDb.getFileByRepoPath(conn, repoId, requestRelPath),
+          symbols: await ladybugDb.getSymbolsByFile(conn, fileId),
+          manifestFiles: await ladybugDb.listGraphIntegrityFileStates(conn, repoId),
+          manifestFileless: await ladybugDb.listGraphIntegrityFilelessStates(
+            conn,
+            repoId,
+          ),
+          graphDigest: baselineGraph.digest,
+        };
+
+        const response = await handleFileWrite({
+          repoId,
+          filePath: requestRelPath,
+          content: "export const casing = 2;",
+          createBackup: false,
+        });
+
+        assert.equal(
+          readFileSync(filePath, "utf-8"),
+          "export const casing = 2;",
+        );
+        assert.deepStrictEqual(
+          {
+            derivedState: await getDerivedState(repoId),
+            file: await ladybugDb.getFileByRepoPath(
+              conn,
+              repoId,
+              requestRelPath,
+            ),
+            symbols: await ladybugDb.getSymbolsByFile(conn, fileId),
+            manifestFiles: await ladybugDb.listGraphIntegrityFileStates(
+              conn,
+              repoId,
+            ),
+            manifestFileless: await ladybugDb.listGraphIntegrityFilelessStates(
+              conn,
+              repoId,
+            ),
+            graphDigest: (await capturePersistedGraphIntegrity(conn, repoId))
+              .digest,
+          },
+          baseline,
+        );
+        assert.equal(response.indexUpdate, undefined);
+      },
+    );
+
     it("keeps graph integrity available when creating a new indexed file", async () => {
       const relPath = "src/new-indexed.ts";
       mkdirSync(join(testDir, "src"), { recursive: true });

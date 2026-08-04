@@ -27,7 +27,11 @@ import {
   compilePatterns,
   shouldIgnorePath,
 } from "../../indexer/fileWalker.js";
-import { normalizePath, validatePathWithinRoot } from "../../util/paths.js";
+import {
+  getRelativePath,
+  normalizePath,
+  validatePathWithinRoot,
+} from "../../util/paths.js";
 import {
   detectDominantEol,
   normalizeToLf,
@@ -550,10 +554,14 @@ export async function syncLiveIndex(
     if (!repo) {
       throw new NotFoundError(`Repository ${repoId} not found`);
     }
+    const canonicalRelPath = getRelativePath(
+      repo.rootPath,
+      realpathSync.native(resolve(repo.rootPath, relPath)),
+    );
     const { ignore } = RepoConfigSchema.pick({ ignore: true }).parse(
       JSON.parse(repo.configJson),
     );
-    const pathSegments = normalizePath(relPath).split("/");
+    const pathSegments = canonicalRelPath.split("/");
     const ignorePatterns = compilePatterns(ignore);
     for (let end = 1; end <= pathSegments.length; end += 1) {
       if (
@@ -569,7 +577,7 @@ export async function syncLiveIndex(
 
     const patchResult = await patchSavedFile({
       repoId,
-      filePath: relPath,
+      filePath: canonicalRelPath,
       content: newContent,
     });
     const symbolsMatched =
