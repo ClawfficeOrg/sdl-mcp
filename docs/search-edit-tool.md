@@ -345,8 +345,9 @@ metadata so callers can reason about narrowing quality:
 ## Precondition failures
 
 Apply re-hashes every target file before the first write. If any
-sha256 or mtime differs from the preview snapshot, apply throws a
-`ValidationError` listing the drifted files and writes nothing.
+SHA-256 content hash differs from the preview snapshot, apply throws a
+`ValidationError` listing the drifted files and writes nothing. An mtime-only
+change is diagnostic when the SHA-256 hash still matches and does not abort apply.
 
 Apply also resolves each target's canonical identity immediately before
 writing and compares it with the identity bound during preview. If the
@@ -438,7 +439,7 @@ Apply with the returned `planHandle`.
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `planHandle missing or expired`                                 | Apply called with an unknown or TTL-expired handle. Rerun the original preview arguments and apply the new handle. |
 | `planHandle was created for repoId ...`                         | Repo mismatch between preview and apply.                                     |
-| `search.edit apply aborted: N file(s) drifted`                  | sha256 or mtime changed between preview and apply for one or more target files. |
+| `search.edit apply aborted: N file(s) drifted`                  | SHA-256 content changed between preview and apply. An mtime-only change is diagnostic and does not abort apply. |
 | `Write target identity changed after validation`                     | The canonical target changed after preview. Resolve the path change, then create and apply a fresh preview. |
 | `Pattern contains nested quantifiers ...`                       | ReDoS guard rejected the regex.                                              |
 | `jsonPath editMode is not supported in search.edit v1`          | Use `file.write` for JSON-path edits.                                        |
