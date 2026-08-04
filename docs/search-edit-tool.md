@@ -16,9 +16,10 @@ The tool runs in two modes:
 
 Plan handles are stored in-process with a 15-minute TTL and an LRU
 cap of 16 handles. They do not survive server restart. Apply fails
-closed on missing, expired, or repo-mismatched handles, and on any
-file whose sha256/mtime has drifted or whose canonical target identity
-has changed since preview. For a missing or expired handle, rerun
+closed on missing, expired, or repo-mismatched handles, and when
+SHA-256 content drift or a canonical target identity change is detected.
+An mtime-only change is diagnostic and does not abort apply. For a missing
+or expired handle, rerun
 `search.edit` with `mode: "preview"` and the original preview arguments,
 then apply the new `planHandle`. For an identity change, resolve the path
 change before creating and applying a fresh preview.
