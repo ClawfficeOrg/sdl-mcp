@@ -302,6 +302,71 @@ describe("saved file graph patch", () => {
     else process.env.SDL_CONFIG_PATH = prevConfigPath;
   });
 
+  it("keeps a provider-backed declaration range stable across edit and restore", async () => {
+    const baselineContent = [
+      "export function alpha() {",
+      "  return beta();",
+      "}",
+      "",
+      "export function beta() {",
+      "  return 1;",
+      "}",
+    ].join("\n");
+    const editedContent = baselineContent.replace(
+      "return beta();",
+      "return beta() + 1;",
+    );
+    assert.notEqual(editedContent, baselineContent);
+
+    const conn = await getLadybugConn();
+    const baselineSymbols = await ladybugDb.getSymbolsByFile(conn, durableFileId);
+    const baselineAlpha = baselineSymbols.find((symbol) => symbol.name === "alpha");
+    assert.ok(baselineAlpha);
+    assert.equal(baselineAlpha.symbolId, "scip-alpha");
+
+    const completeRange = (
+      symbol: (typeof baselineSymbols)[number],
+    ) => ({
+      startLine: symbol.rangeStartLine,
+      startCol: symbol.rangeStartCol,
+      endLine: symbol.rangeEndLine,
+      endCol: symbol.rangeEndCol,
+    });
+    const baselineRange = completeRange(baselineAlpha);
+
+    const patchAndReadAlpha = async (content: string, version: number) => {
+      let committedRevision: number | undefined;
+      await patchSavedFile(
+        {
+          repoId,
+          filePath: "src/example.ts",
+          content,
+          language: "typescript",
+          version,
+        },
+        {
+          onCommitted(revision: number) {
+            committedRevision = revision;
+          },
+        },
+      );
+      assert.ok(committedRevision !== undefined);
+      await waitForVerifiedRevision(repoId, committedRevision);
+
+      const symbols = await ladybugDb.getSymbolsByFile(conn, durableFileId);
+      const alpha = symbols.find((symbol) => symbol.name === "alpha");
+      assert.ok(alpha);
+      assert.equal(alpha.symbolId, "scip-alpha");
+      return alpha;
+    };
+
+    const editedAlpha = await patchAndReadAlpha(editedContent, 2);
+    assert.deepStrictEqual(completeRange(editedAlpha), baselineRange);
+
+    const restoredAlpha = await patchAndReadAlpha(baselineContent, 3);
+    assert.deepStrictEqual(completeRange(restoredAlpha), baselineRange);
+  });
+
   it("serializes concurrent saved-file integrity patches for the same repository", async (t) => {
     const startingState = await getDerivedState(repoId);
     assert.equal(startingState?.graphIntegrityState, "verified");

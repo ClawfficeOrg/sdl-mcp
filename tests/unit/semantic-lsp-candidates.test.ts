@@ -33,7 +33,7 @@ function makeRow(
     sourceFileId: "file:caller",
     sourceLanguage: "typescript",
     sourceRangeStartLine: 1,
-    sourceRangeStartCol: 7,
+    sourceRangeStartCol: 0,
     sourceRangeEndLine: 3,
     sourceRangeEndCol: 1,
     targetSymbolId: "unresolved:call:missingCall",

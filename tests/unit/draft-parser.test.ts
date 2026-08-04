@@ -147,7 +147,7 @@ describe("parseDraftFile", () => {
         content: "export function stable() { return 2; }\n",
         version: 2,
       });
-      assert.deepEqual(fallbacks, ["function:stable:1:7"]);
+      assert.deepEqual(fallbacks, ["function:stable:1:0"]);
       assert.equal(changed.symbols[0]?.symbolId, durableSymbol.symbolId);
     } finally {
       _setDraftSymbolFallbackObserverForTests();

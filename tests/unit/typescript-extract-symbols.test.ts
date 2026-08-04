@@ -281,6 +281,46 @@ export interface Config {
     }
   });
 
+  it("uses export wrapper ranges for supported declarations", () => {
+    const TypeScript = require("tree-sitter-typescript");
+    const Parser = require("tree-sitter");
+    const {
+      extractSymbols,
+    } = require("../../dist/indexer/treesitter/extractSymbols.js");
+
+    const parser = new Parser();
+    parser.setLanguage(TypeScript.typescript);
+
+    const code = [
+      "export function direct() {}",
+      "export default function defaulted() {}",
+      "export const exportedValue = 1;",
+      "function local() {}",
+      "export namespace Container {",
+      "  const nested = 1;",
+      "}",
+    ].join("\n");
+
+    const symbols = extractSymbols(parser.parse(code));
+    const ranges = Object.fromEntries(
+      ["direct", "defaulted", "exportedValue", "local", "nested"].map(
+        (name) => {
+          const symbol = symbols.find((candidate: any) => candidate.name === name);
+          assert.ok(symbol, `Should find ${name}`);
+          return [name, symbol.range];
+        },
+      ),
+    );
+
+    assert.deepStrictEqual(ranges, {
+      direct: { startLine: 1, startCol: 0, endLine: 1, endCol: 27 },
+      defaulted: { startLine: 2, startCol: 0, endLine: 2, endCol: 38 },
+      exportedValue: { startLine: 3, startCol: 0, endLine: 3, endCol: 31 },
+      local: { startLine: 4, startCol: 0, endLine: 4, endCol: 19 },
+      nested: { startLine: 6, startCol: 8, endLine: 6, endCol: 18 },
+    });
+  });
+
   it("should extract TSX component exports from fixture file", () => {
     const TypeScript = require("tree-sitter-typescript");
     const Parser = require("tree-sitter");

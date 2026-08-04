@@ -172,6 +172,30 @@ function extractRange(node: Parser.SyntaxNode) {
   };
 }
 
+const DECLARATION_RANGE_WRAPPER_TYPES = new Set([
+  "object_pattern",
+  "array_pattern",
+  "pair",
+  "variable_declarator",
+  "lexical_declaration",
+  "variable_declaration",
+]);
+
+/** Align declaration ranges with SCIP enclosing ranges without crossing owning declarations. */
+function extractDeclarationRange(node: Parser.SyntaxNode) {
+  let boundedNode = node;
+  while (
+    boundedNode.parent &&
+    DECLARATION_RANGE_WRAPPER_TYPES.has(boundedNode.parent.type)
+  ) {
+    boundedNode = boundedNode.parent;
+  }
+
+  return boundedNode.parent?.type === "export_statement"
+    ? extractRange(boundedNode.parent)
+    : extractRange(node);
+}
+
 function processFunctionDeclaration(
   node: Parser.SyntaxNode,
 ): RawExtractedSymbol | null {
@@ -194,7 +218,7 @@ function processFunctionDeclaration(
     kind: "function",
     exported: isExported(node),
     visibility: undefined,
-    range: extractRange(node),
+    range: extractDeclarationRange(node),
     signature: {
       params,
       returns,
@@ -247,7 +271,7 @@ function processClassDeclaration(
     kind: "class",
     exported: isExported(node),
     visibility: undefined,
-    range: extractRange(node),
+    range: extractDeclarationRange(node),
     signature: {
       params: [],
       generics: generics.length > 0 ? generics : undefined,
@@ -269,7 +293,7 @@ function processInterfaceDeclaration(
     kind: "interface",
     exported: isExported(node),
     visibility: undefined,
-    range: extractRange(node),
+    range: extractDeclarationRange(node),
     signature: {
       params: [],
       generics: generics.length > 0 ? generics : undefined,
@@ -290,7 +314,7 @@ function processTypeAliasDeclaration(
     kind: "type",
     exported: isExported(node),
     visibility: undefined,
-    range: extractRange(node),
+    range: extractDeclarationRange(node),
     signature: {
       params: [],
       generics: generics.length > 0 ? generics : undefined,
@@ -328,7 +352,7 @@ function processVariableDeclaration(
             kind: "variable",
             exported: isExported(node),
             visibility: undefined,
-            range: extractRange(child),
+            range: extractDeclarationRange(child),
           });
         }
       } else {
@@ -341,7 +365,7 @@ function processVariableDeclaration(
               kind: "variable",
               exported: isExported(node),
               visibility: undefined,
-              range: extractRange(identifier),
+              range: extractDeclarationRange(identifier),
             });
           }
         }
@@ -361,7 +385,7 @@ function processVariableDeclaration(
       kind: "variable",
       exported: isExported(node),
       visibility: undefined,
-      range: extractRange(node),
+      range: extractDeclarationRange(node),
     },
   ];
 }
@@ -375,7 +399,7 @@ function processModule(node: Parser.SyntaxNode): RawExtractedSymbol | null {
     kind: "module",
     exported: isExported(node),
     visibility: undefined,
-    range: extractRange(node),
+    range: extractDeclarationRange(node),
   };
 }
 
