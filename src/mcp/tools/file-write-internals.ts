@@ -127,10 +127,9 @@ export async function preparePath(
   const canonicalRootPath = realpathSync.native(rootPath);
 
   const fileExists = existsSync(absPath);
-  let preparedAbsPath = absPath;
   if (fileExists) {
-    preparedAbsPath = realpathSync.native(absPath);
-    validatePathWithinRoot(canonicalRootPath, preparedAbsPath);
+    const canonicalTargetPath = realpathSync.native(absPath);
+    validatePathWithinRoot(canonicalRootPath, canonicalTargetPath);
   } else {
     let existingAncestor = absPath;
     while (!existsSync(existingAncestor)) {
@@ -155,7 +154,7 @@ export async function preparePath(
     repoId,
     rootPath: canonicalRootPath,
     relPath,
-    absPath: preparedAbsPath,
+    absPath,
     fileExists,
   };
 }

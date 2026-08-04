@@ -135,6 +135,40 @@ describe("sdl.file.write", () => {
       assert.equal(readFileSync(filePath + ".bak", "utf-8"), '{"old": true}');
     });
 
+    it("refuses writes through final-path symlinks", async (t) => {
+      const symlinkDir = join(testDir, "symlink-target");
+      const targetPath = join(symlinkDir, "real.txt");
+      const linkPath = join(symlinkDir, "linked.txt");
+      const originalContent = "original";
+      mkdirSync(symlinkDir, { recursive: true });
+      writeFileSync(targetPath, originalContent, "utf-8");
+
+      try {
+        symlinkSync(targetPath, linkPath, "file");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (
+          process.platform === "win32" &&
+          (code === "EPERM" || code === "EACCES")
+        ) {
+          t.skip("file symlink creation is unavailable on this Windows host");
+          return;
+        }
+        throw error;
+      }
+
+      await assert.rejects(
+        handleFileWrite({
+          repoId,
+          filePath: "symlink-target/linked.txt",
+          content: "changed",
+          createBackup: false,
+        }),
+        /Symlink detected at write target; refusing write/,
+      );
+      assert.equal(readFileSync(targetPath, "utf-8"), originalContent);
+    });
+
     it("updates an indexed TypeScript graph through the shared saved-file patch", async () => {
       const relPath = "src/indexed.ts";
       const filePath = join(testDir, relPath);
