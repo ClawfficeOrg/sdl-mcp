@@ -254,6 +254,31 @@ fn is_exported(node: Node<'_>) -> bool {
     false
 }
 
+/// Align exported declaration ranges with SCIP and the TypeScript extractor.
+fn declaration_range_node<'tree>(node: Node<'tree>) -> Node<'tree> {
+    let mut bounded_node = node;
+    while let Some(parent) = bounded_node.parent() {
+        if matches!(
+            parent.kind(),
+            "object_pattern"
+                | "array_pattern"
+                | "pair"
+                | "variable_declarator"
+                | "lexical_declaration"
+                | "variable_declaration"
+        ) {
+            bounded_node = parent;
+        } else {
+            break;
+        }
+    }
+
+    match bounded_node.parent() {
+        Some(parent) if parent.kind() == "export_statement" => parent,
+        _ => node,
+    }
+}
+
 fn extract_visibility(node: Node<'_>, source: &[u8]) -> String {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -310,6 +335,7 @@ fn process_function_declaration(
         &decorators,
     );
     symbol.exported = is_exported(node);
+    symbol.range = extract_range(declaration_range_node(node));
     Some(symbol)
 }
 
@@ -362,6 +388,7 @@ fn process_method_definition(
         &decorators,
     );
     symbol.exported = is_exported(node);
+    symbol.range = extract_range(declaration_range_node(node));
     Some(symbol)
 }
 
@@ -389,6 +416,7 @@ fn process_class_declaration(
         &decorators,
     );
     symbol.exported = is_exported(node);
+    symbol.range = extract_range(declaration_range_node(node));
     Some(symbol)
 }
 
@@ -415,6 +443,7 @@ fn process_interface_declaration(
         &extract_decorators(node, source),
     );
     symbol.exported = is_exported(node);
+    symbol.range = extract_range(declaration_range_node(node));
     Some(symbol)
 }
 
@@ -441,6 +470,7 @@ fn process_type_alias_declaration(
         &extract_decorators(node, source),
     );
     symbol.exported = is_exported(node);
+    symbol.range = extract_range(declaration_range_node(node));
     Some(symbol)
 }
 
@@ -487,7 +517,7 @@ fn process_variable_declaration(
                         &extract_decorators(child, source),
                     );
                     symbol.exported = is_exported(parent_node);
-                    symbol.range = extract_range(child);
+                    symbol.range = extract_range(declaration_range_node(child));
                     results.push(symbol);
                 }
             }
@@ -514,6 +544,7 @@ fn process_variable_declaration(
         &extract_decorators(declarator, source),
     );
     symbol.exported = is_exported(parent_node);
+    symbol.range = extract_range(declaration_range_node(declarator));
     vec![symbol]
 }
 
@@ -538,6 +569,7 @@ fn process_module(
         &extract_decorators(node, source),
     );
     symbol.exported = is_exported(node);
+    symbol.range = extract_range(declaration_range_node(node));
     Some(symbol)
 }
 

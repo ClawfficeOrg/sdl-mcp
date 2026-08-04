@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cross-platform CI stability**: Matched Rust and TypeScript exported-declaration ranges, recognized signal-terminated HTTP test children, excluded Node's immutable `fs` default export from module mocks, and budgeted the full Ladybug qualification canary for hosted Windows runners.
+
 ## [0.13.1] - 2026-08-03
 
 ### Added

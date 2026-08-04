@@ -10,13 +10,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
+// The original builtin default export has non-configurable properties such as `constants`.
+const fsNamedExports = Object.fromEntries(
+  Object.entries(fs).filter(([name]) => name !== "default"),
+);
+
 describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
   it("rejects a non-regular control path before opening it", async (t) => {
     const virtualFifo = join(tmpdir(), "sdl-ladybug-virtual-fifo");
     let opened = false;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         lstatSync(path: fs.PathLike, ...args: unknown[]): fs.Stats {
           if (String(path) === virtualFifo) {
             return {
@@ -84,7 +89,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let lstatCalls = 0;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         lstatSync(path: fs.PathLike): fs.Stats {
           if (String(path) !== virtualPath) return fs.lstatSync(path);
           lstatCalls += 1;
@@ -121,7 +126,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let openedFlags = -1;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         constants: {
           ...fs.constants,
           O_NOFOLLOW: noFollow,
@@ -165,7 +170,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let failLockUnlink = true;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         unlinkSync(path: fs.PathLike): void {
           if (failLockUnlink && String(path).endsWith(".sdl-family.lock")) {
             failLockUnlink = false;
@@ -209,7 +214,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let failUnlink = true;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         writeFileSync(path: fs.PathOrFileDescriptor, ...args: unknown[]): void {
           if (failWrite && typeof path === "number") {
             failWrite = false;
@@ -279,7 +284,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let failUnlink = true;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         openSync(path: fs.PathLike, ...args: unknown[]): number {
           if (String(path).replaceAll("\\", "/") === dbPath.replaceAll("\\", "/")) {
             throw Object.assign(new Error("reservation-race-sentinel"), {
@@ -340,7 +345,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let failUnlink = true;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         unlinkSync(path: fs.PathLike): void {
           if (failUnlink && String(path).endsWith(".sdl-family.lock")) {
             throw unlinkFailure;
@@ -416,7 +421,7 @@ describe("Ladybug lineage file boundaries", { concurrency: 1 }, () => {
     let failDescriptorClose = false;
     t.mock.module("node:fs", {
       namedExports: {
-        ...fs,
+        ...fsNamedExports,
         closeSync(descriptor: number): void {
           if (failDescriptorClose) {
             failDescriptorClose = false;

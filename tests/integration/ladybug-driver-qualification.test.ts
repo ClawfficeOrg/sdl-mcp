@@ -861,7 +861,10 @@ describe("Ladybug driver qualification", { concurrency: 1 }, () => {
 
   it(
     "keeps #725 open on pinned 0.18 and asserts the complete 0.19 receipt",
-    { timeout: 600_000 },
+    {
+      // The 15 reopen phases exceed ten minutes on hosted Windows runners.
+      timeout: process.platform === "win32" ? 900_000 : 600_000,
+    },
     async () => {
       const {
         installedLadybugVersion,

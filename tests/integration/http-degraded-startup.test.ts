@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clone.ts";
 
 async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === "win32" && child.pid !== undefined) {
     spawnSync(
       "taskkill.exe",
@@ -19,10 +19,17 @@ async function stopChild(child: ReturnType<typeof spawn>): Promise<void> {
   } else {
     child.kill("SIGKILL");
   }
-  for (let attempt = 0; attempt < 100 && child.exitCode === null; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < 100 && child.exitCode === null && child.signalCode === null;
+    attempt += 1
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.notEqual(child.exitCode, null, "serve child did not exit");
+  assert.ok(
+    child.exitCode !== null || child.signalCode !== null,
+    "serve child did not exit",
+  );
 }
 
 describe("HTTP degraded startup", () => {
