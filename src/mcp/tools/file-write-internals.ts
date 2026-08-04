@@ -589,6 +589,19 @@ export async function syncLiveIndex(
   relPath: string,
   newContent: string,
 ): Promise<FileWriteResponse["indexUpdate"] | undefined> {
+  // Windows 8.3 aliases can truncate long source extensions (.java -> .JAV).
+  const normalizedRelPath = relPath.toLowerCase();
+  const couldBeTruncatedWindowsSource =
+    process.platform === "win32" &&
+    [...SDL_SOURCE_EXTENSIONS].some(
+      (sourceExtension) =>
+        sourceExtension.length > 4 &&
+        normalizedRelPath.endsWith(sourceExtension.slice(0, 4)),
+    );
+  if (!isIndexedSource(relPath) && !couldBeTruncatedWindowsSource) {
+    return undefined;
+  }
+
   try {
     const conn = await getLadybugConn();
     const repo = await ladybugDb.getRepo(conn, repoId);
