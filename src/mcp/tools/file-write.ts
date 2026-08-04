@@ -121,7 +121,6 @@ export async function handleFileWrite(
   const request = parseActionHandlerArgs(FileWriteRequestSchema, args);
   const prepared = await preparePath(request.repoId, request.filePath);
   const {
-    rootPath,
     canonicalRootPath,
     relPath,
     canonicalRelPath,
@@ -225,7 +224,7 @@ export async function handleFileWrite(
     linesWritten,
     mode,
     ...(backupPath && {
-      backupPath: normalizePath(relative(rootPath, backupPath)),
+      backupPath: normalizePath(relative(canonicalRootPath, backupPath)),
     }),
     ...(replacementCount !== undefined && { replacementCount }),
     ...(snippets !== undefined && { snippets }),

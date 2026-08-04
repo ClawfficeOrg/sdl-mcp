@@ -14,6 +14,7 @@ import {
   handleManual,
 } from "../../dist/code-mode/index.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
+import { FileGatewayRequestSchema } from "../../dist/mcp/tools/file-gateway.js";
 import {
   FileWriteRequestSchema,
   SearchEditRequestSchema,
@@ -103,15 +104,21 @@ describe("code-mode action catalog", () => {
       const backupField = (schema: Parameters<typeof zodToSchemaSummary>[0]) =>
         zodToSchemaSummary(schema).fields.find((summaryField) => summaryField.name === "createBackup");
       const fileBackup = backupField(FileWriteRequestSchema);
+      const gatewayWriteSchema = FileGatewayRequestSchema.options.find(
+        (option) => option.shape.op.value === "write",
+      );
+      assert.ok(gatewayWriteSchema);
+      const gatewayBackup = backupField(gatewayWriteSchema);
       const symbolBackup = backupField(SymbolEditRequestSchema);
       const searchBackup = backupField(SearchEditRequestSchema);
 
-      assert.equal(fileBackup?.default, true);
-      assert.match(fileBackup?.description ?? "", /retained sibling \.bak/);
-      assert.match(
-        fileBackup?.description ?? "",
-        /successful responses return backupPath when a backup is created/,
-      );
+      for (const retainedBackup of [fileBackup, gatewayBackup]) {
+        assert.equal(retainedBackup?.default, true);
+        assert.match(retainedBackup?.description ?? "", /retained sibling \.bak/);
+        assert.match(retainedBackup?.description ?? "", /fails if .*already exists/);
+        assert.match(retainedBackup?.description ?? "", /remove or move/);
+        assert.match(retainedBackup?.description ?? "", /createBackup: false/);
+      }
       const withoutBackup = FileWriteRequestSchema.parse({
         repoId: "repo-1",
         filePath: "src/new-file.ts",

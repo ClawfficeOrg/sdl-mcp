@@ -115,11 +115,8 @@ export function assertStableCanonicalIdentity(
 ): void {
   const preparedIdentity = normalizePath(preparedPath);
   const currentIdentity = normalizePath(currentPath);
-  const sameIdentity = process.platform === "win32"
-    ? preparedIdentity.toLowerCase() === currentIdentity.toLowerCase()
-    : preparedIdentity === currentIdentity;
 
-  if (!sameIdentity) {
+  if (preparedIdentity !== currentIdentity) {
     throw new ValidationError(
       "Write target identity changed after validation; refusing write",
     );
@@ -499,8 +496,9 @@ export async function hashFileIfExists(
  * Write the file, creating parent dir on demand and producing a `.bak`
  * backup copy first when `createBackup` is true and the file existed.
  * Returns the absolute backup path (if created) so callers can expose
- * it in their response or remove it in rollback. `writePath` preserves
- * a canonical existing filename while `absPath` remains the lexical safety check.
+ * it in their response or remove it in rollback. `writePath` is the
+ * validated canonical target for backup and replacement I/O; `absPath` remains the
+ * lexical safety check.
  */
 export async function writeWithBackup(
   absPath: string,
@@ -525,10 +523,10 @@ export async function writeWithBackup(
     }
   }
   if (fileExists && createBackup) {
-    backupPath = `${absPath}${backupSuffix ?? ".bak"}`;
+    backupPath = `${writePath}${backupSuffix ?? ".bak"}`;
     // Refuse pre-created backup destinations, including hardlinks to outside files.
     try {
-      await copyFile(absPath, backupPath, constants.COPYFILE_EXCL);
+      await copyFile(writePath, backupPath, constants.COPYFILE_EXCL);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new ValidationError(
@@ -560,11 +558,11 @@ export async function writeWithBackup(
  * If the backup is missing, leaves the target untouched.
  */
 export async function restoreBackup(
-  absPath: string,
+  writePath: string,
   backupPath: string,
 ): Promise<void> {
   if (!existsSync(backupPath)) return;
-  await rename(backupPath, absPath);
+  await rename(backupPath, writePath);
 }
 
 /**

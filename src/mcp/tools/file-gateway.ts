@@ -154,7 +154,9 @@ const FileGatewayWriteSchema = z.object({
     .boolean()
     .optional()
     .default(true)
-    .describe("Create .bak backup before modifying (default: true)"),
+    .describe(
+      "Create a retained sibling .bak backup before modifying; fails if that backup already exists, so remove or move it or set createBackup: false (default: true)",
+    ),
   createIfMissing: z
     .boolean()
     .optional()

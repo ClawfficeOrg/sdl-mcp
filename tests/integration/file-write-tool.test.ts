@@ -170,15 +170,70 @@ describe("sdl.file.write", () => {
       assert.ok(guard, "expected shared canonical identity guard");
 
       const preparedPath = join(testDir, "StableTarget.ts");
-      const equivalentPath =
-        process.platform === "win32" ? preparedPath.toUpperCase() : preparedPath;
-      assert.doesNotThrow(() => guard(preparedPath, equivalentPath));
+      const caseDistinctPath = join(testDir, "stableTarget.ts");
+      assert.doesNotThrow(() => guard(preparedPath, preparedPath));
       assert.throws(
-        () => guard(preparedPath, `${preparedPath}.changed`),
+        () => guard(preparedPath, caseDistinctPath),
         (error: unknown) =>
           error instanceof ValidationError &&
           /target identity changed after validation/i.test(error.message),
       );
+    });
+
+    it("routes backups through the validated canonical target identity", async (t) => {
+      const canonicalPath = join(configDir, "canonical-backup-target.json");
+      const lexicalParent = join(testDir, "retargeted-parent");
+      const outsideRoot = join(
+        dirname(testDir),
+        `file-write-backup-route-${process.pid}`,
+      );
+      const lexicalPath = join(lexicalParent, "canonical-backup-target.json");
+      const outsidePath = join(outsideRoot, "canonical-backup-target.json");
+      const canonicalBackupPath = `${canonicalPath}.bak`;
+      const outsideBackupPath = `${outsidePath}.bak`;
+      const canonicalContent = '{"canonical": true}';
+      const outsideContent = '{"outside": true}';
+
+      mkdirSync(outsideRoot, { recursive: true });
+      writeFileSync(canonicalPath, canonicalContent, "utf-8");
+      writeFileSync(outsidePath, outsideContent, "utf-8");
+      try {
+        symlinkSync(
+          outsideRoot,
+          lexicalParent,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (
+          process.platform === "win32" &&
+          (code === "EPERM" || code === "EACCES")
+        ) {
+          rmSync(outsideRoot, { recursive: true, force: true });
+          t.skip("directory junction creation is unavailable on this host");
+          return;
+        }
+        throw error;
+      }
+
+      try {
+        const backupPath = await fileWriteInternals.writeWithBackup(
+          lexicalPath,
+          '{"updated": true}',
+          true,
+          true,
+          undefined,
+          canonicalPath,
+        );
+
+        assert.equal(backupPath, canonicalBackupPath);
+        assert.equal(readFileSync(canonicalBackupPath, "utf-8"), canonicalContent);
+        assert.equal(readFileSync(canonicalPath, "utf-8"), '{"updated": true}');
+        assert.equal(readFileSync(outsidePath, "utf-8"), outsideContent);
+        assert.equal(existsSync(outsideBackupPath), false);
+      } finally {
+        rmSync(outsideRoot, { recursive: true, force: true });
+      }
     });
 
     it("refuses an existing hardlinked backup destination", async () => {
