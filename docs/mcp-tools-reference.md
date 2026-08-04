@@ -1144,7 +1144,7 @@ For search-edit previews, copy `applyArgs` from the preview when using `sdl.sear
 - `filePath`, `bytesWritten`, `linesWritten`, `mode`
 - `backupPath` when backup creation is enabled
 - `replacementCount` for pattern-replace operations
-- `indexUpdate` when SDL-MCP can live-sync an indexed source file after the write
+- `indexUpdate` when SDL-MCP can live-sync an indexed source file after the write. A write to a source path matching a repository ignore pattern still succeeds, but skips the graph patch and omits `indexUpdate`; this is expected, not a live-sync failure. For other live-sync failures, `file.write` restores the prior file (or unlinks a newly created file) and throws `INDEX_ERROR`.
 
 See [file.write Tool Reference](./file-write-tool.md) for the mode-by-mode guide.
 

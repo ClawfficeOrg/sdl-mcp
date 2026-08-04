@@ -357,10 +357,13 @@ When `createBackup` is enabled, `search.edit` creates temporary rollback copies 
 - On write failure mid-batch: previously-written files are restored
   from their backups (where created), `rollback.triggered = true`,
   and the failing file is reported with `status: "failed"`.
-- Live-index sync failures do **not** trigger rollback. They are
-  surfaced as `indexUpdate.applied = false` with an error message,
-  matching current `file.write` behavior. The configured file watcher
-  provider plus periodic `index.refresh` eventually reconcile.
+- A write to a source path matching a repository ignore pattern still succeeds,
+  but skips the graph patch and omits `indexUpdate`; this is expected, not a
+  live-sync failure.
+- Other live-index sync failures do **not** trigger rollback. `search.edit`
+  keeps the file edit and reports `indexUpdate.applied = false` with an error
+  message. Unlike `file.write`, it does not restore the file or throw
+  `INDEX_ERROR`.
 - Backups are cleaned up after a fully successful batch.
 
 ## Limits and deny-list
