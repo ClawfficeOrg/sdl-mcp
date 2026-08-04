@@ -525,6 +525,83 @@ describe("sdl.file.write", () => {
           (await getDerivedState(repoId))?.graphIntegrityDigest,
           graph.digest,
         );
+
+        const overwriteContent = "export const junctionWrite = 2;";
+        const overwriteResponse = await handleFileWrite({
+          repoId,
+          filePath: relPath,
+          content: overwriteContent,
+          createBackup: false,
+        });
+
+        assert.equal(overwriteResponse.mode, "overwrite");
+        assert.equal(
+          overwriteResponse.indexUpdate?.applied,
+          true,
+          overwriteResponse.indexUpdate?.error,
+        );
+        assert.equal(
+          readFileSync(join(realRoot, relPath), "utf-8"),
+          overwriteContent,
+        );
+        await waitForVerifiedRevision(repoId, 2);
+        const overwrittenManifest = createGraphIntegrityExpectationFromManifest(
+          await ladybugDb.listGraphIntegrityFileStates(conn, repoId),
+          await ladybugDb.listGraphIntegrityFilelessStates(conn, repoId),
+        );
+        const overwrittenGraph = await capturePersistedGraphIntegrity(
+          conn,
+          repoId,
+        );
+        assert.equal(
+          overwrittenGraph.digest,
+          overwrittenManifest.digest,
+          JSON.stringify(
+            compareGraphIntegrityExpectations(
+              overwrittenManifest,
+              overwrittenGraph,
+            ),
+          ),
+        );
+      },
+    );
+
+    it(
+      "rejects missing writes through an escaping Windows junction",
+      { skip: process.platform !== "win32" },
+      async () => {
+        const outsideRoot = join(
+          testDir,
+          "..",
+          "test-file-write-tool-outside",
+        );
+        const outsideFile = join(outsideRoot, "nested", "new.ts");
+        rmSync(outsideRoot, { recursive: true, force: true });
+        mkdirSync(outsideRoot, { recursive: true });
+        symlinkSync(outsideRoot, join(testDir, "escape"), "junction");
+
+        try {
+          await assert.rejects(
+            handleFileWrite({
+              repoId,
+              filePath: "escape/nested/new.ts",
+              content: "export const escaped = true;",
+              createIfMissing: true,
+              createBackup: false,
+            }),
+            (error: unknown) => {
+              assert.equal(
+                (error as { code?: string }).code,
+                "VALIDATION_ERROR",
+              );
+              return true;
+            },
+          );
+          assert.equal(existsSync(outsideFile), false);
+          assert.equal(existsSync(join(outsideRoot, "nested")), false);
+        } finally {
+          rmSync(outsideRoot, { recursive: true, force: true });
+        }
       },
     );
 

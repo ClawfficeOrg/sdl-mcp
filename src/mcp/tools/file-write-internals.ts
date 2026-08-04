@@ -124,13 +124,20 @@ export async function preparePath(
   const absPath = resolve(rootPath, relPath);
 
   validatePathWithinRoot(rootPath, absPath);
+  const canonicalRootPath = realpathSync.native(rootPath);
 
   const fileExists = existsSync(absPath);
+  let preparedAbsPath = absPath;
   if (fileExists) {
-    const resolved = realpathSync(absPath);
-    if (resolved !== absPath) {
-      validatePathWithinRoot(rootPath, resolved);
+    preparedAbsPath = realpathSync.native(absPath);
+    validatePathWithinRoot(canonicalRootPath, preparedAbsPath);
+  } else {
+    let existingAncestor = absPath;
+    while (!existsSync(existingAncestor)) {
+      existingAncestor = dirname(existingAncestor);
     }
+    const canonicalAncestor = realpathSync.native(existingAncestor);
+    validatePathWithinRoot(canonicalRootPath, canonicalAncestor);
   }
 
   const basename = relPath.includes("/") ? relPath.slice(relPath.lastIndexOf("/") + 1) : relPath;
@@ -146,9 +153,9 @@ export async function preparePath(
 
   return {
     repoId,
-    rootPath,
+    rootPath: canonicalRootPath,
     relPath,
-    absPath,
+    absPath: preparedAbsPath,
     fileExists,
   };
 }
@@ -558,6 +565,7 @@ export async function syncLiveIndex(
     const canonicalFilePath = realpathSync.native(
       resolve(repo.rootPath, relPath),
     );
+    validatePathWithinRoot(canonicalRootPath, canonicalFilePath);
     const canonicalRelPath = getRelativePath(
       canonicalRootPath,
       canonicalFilePath,
