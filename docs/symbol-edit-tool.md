@@ -34,10 +34,10 @@ Unsupported shapes fail closed. For example, ambient declarations and overload-o
 Preview stores:
 
 - `symbolId`, `astFingerprint`, and symbol range
-- resolved file path, saved-file sha256, and saved-file mtime
+- resolved file path, canonical target identity, saved-file sha256, and saved-file mtime
 - draft version and draft content sha when the preview is planned against a live overlay
 
-Apply rejects stale symbols, stale files, and stale drafts. The caller must re-run preview after a rejection.
+Apply rejects stale symbols, stale files, stale canonical target identities, and stale drafts. Saved-file preview/apply uses the shared search-edit identity guard, which fails closed with a `ValidationError` when the canonical target changes after preview. Resolve the path change and create a fresh preview before retrying.
 
 ## Validation
 

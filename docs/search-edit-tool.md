@@ -8,7 +8,8 @@ The tool runs in two modes:
 
 - **`preview`** — returns a `planHandle` plus a summary of every file
   it would touch, the proposed edits, and the precondition snapshot
-  (sha256 + mtime per file). Nothing is written.
+  (sha256, mtime, and canonical target identity per file). Nothing is
+  written.
 - **`apply`** — re-checks preconditions against current disk state,
   then writes the files sequentially in deterministic order. A
   mid-batch failure triggers rollback from backups.
@@ -16,9 +17,11 @@ The tool runs in two modes:
 Plan handles are stored in-process with a 15-minute TTL and an LRU
 cap of 16 handles. They do not survive server restart. Apply fails
 closed on missing, expired, or repo-mismatched handles, and on any
-file whose sha256/mtime has drifted since the preview was taken. For a
-missing or expired handle, rerun `search.edit` with `mode: "preview"`
-and the original preview arguments, then apply the new `planHandle`.
+file whose sha256/mtime has drifted or whose canonical target identity
+has changed since preview. For a missing or expired handle, rerun
+`search.edit` with `mode: "preview"` and the original preview arguments,
+then apply the new `planHandle`. For an identity change, resolve the path
+change before creating and applying a fresh preview.
 
 Any failed apply consumes its plan, so rerun preview before retrying after a drift or other apply failure.
 
@@ -342,9 +345,14 @@ metadata so callers can reason about narrowing quality:
 ## Precondition failures
 
 Apply re-hashes every target file before the first write. If any
-sha256 differs from the preview snapshot, apply throws a
-`ValidationError` listing the drifted files, writes nothing, and the
-handle remains usable only after producing a fresh preview.
+sha256 or mtime differs from the preview snapshot, apply throws a
+`ValidationError` listing the drifted files and writes nothing.
+
+Apply also resolves each target's canonical identity immediately before
+writing and compares it with the identity bound during preview. If the
+identity changed, apply fails closed with a `ValidationError`, and normal
+batch rollback semantics cover any earlier writes. Resolve the path change
+and create a fresh preview before retrying.
 
 ## Backup behavior
 
@@ -430,7 +438,8 @@ Apply with the returned `planHandle`.
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `planHandle missing or expired`                                 | Apply called with an unknown or TTL-expired handle. Rerun the original preview arguments and apply the new handle. |
 | `planHandle was created for repoId ...`                         | Repo mismatch between preview and apply.                                     |
-| `search.edit apply aborted: N file(s) drifted`                  | sha256 changed between preview and apply for one or more target files.       |
+| `search.edit apply aborted: N file(s) drifted`                  | sha256 or mtime changed between preview and apply for one or more target files. |
+| `Write target identity changed after validation`                     | The canonical target changed after preview. Resolve the path change, then create and apply a fresh preview. |
 | `Pattern contains nested quantifiers ...`                       | ReDoS guard rejected the regex.                                              |
 | `jsonPath editMode is not supported in search.edit v1`          | Use `file.write` for JSON-path edits.                                        |
 | `replacePattern editMode requires query.literal or query.regex` | Missing query field for the selected edit mode.                              |
