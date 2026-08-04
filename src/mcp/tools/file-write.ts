@@ -119,7 +119,7 @@ export async function handleFileWrite(
 ): Promise<FileWriteResponse> {
   const request = parseActionHandlerArgs(FileWriteRequestSchema, args);
   const prepared = await preparePath(request.repoId, request.filePath);
-  const { rootPath, relPath, absPath, fileExists } = prepared;
+  const { rootPath, canonicalRootPath, relPath, absPath, fileExists } = prepared;
 
   validateExactlyOneMode(request);
 
@@ -160,7 +160,7 @@ export async function handleFileWrite(
   if (fileExists) {
     const resolved = realpathSync(absPath);
     if (resolved !== absPath) {
-      validatePathWithinRoot(rootPath, resolved);
+      validatePathWithinRoot(canonicalRootPath, resolved);
     }
   }
 

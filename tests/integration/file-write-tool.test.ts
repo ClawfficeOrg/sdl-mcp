@@ -565,10 +565,19 @@ describe("sdl.file.write", () => {
           repoId,
           filePath: relPath,
           content: overwriteContent,
-          createBackup: false,
+          createBackup: true,
         });
 
         assert.equal(overwriteResponse.mode, "overwrite");
+        assert.equal(overwriteResponse.backupPath, `${relPath}.bak`);
+        assert.ok(!overwriteResponse.backupPath.includes(".."));
+        assert.equal(
+          readFileSync(
+            join(junctionRoot, overwriteResponse.backupPath),
+            "utf-8",
+          ),
+          content,
+        );
         assert.equal(
           overwriteResponse.indexUpdate?.applied,
           true,

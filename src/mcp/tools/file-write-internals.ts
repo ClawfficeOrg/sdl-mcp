@@ -100,6 +100,7 @@ export const FILE_WRITE_DENY_EXTENSIONS = new Set([
 export interface PreparedPath {
   repoId: string;
   rootPath: string;
+  canonicalRootPath: string;
   relPath: string;
   absPath: string;
   fileExists: boolean;
@@ -152,7 +153,8 @@ export async function preparePath(
 
   return {
     repoId,
-    rootPath: canonicalRootPath,
+    rootPath,
+    canonicalRootPath,
     relPath,
     absPath,
     fileExists,
