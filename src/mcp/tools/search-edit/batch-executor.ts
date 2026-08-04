@@ -64,7 +64,7 @@ export async function preflightPreconditions(
   if (!repo) {
     return [{ file: "*", reason: "repo-not-found" }];
   }
-  const rootPath = repo.rootPath;
+  const canonicalRootPath = realpathSync.native(repo.rootPath);
   for (const pc of plan.preconditions) {
     let currentSha: string | null = null;
     let currentMtime: number | null = null;
@@ -90,7 +90,7 @@ export async function preflightPreconditions(
       try {
         const resolved = realpathSync(pc.absPath);
         if (resolved !== pc.absPath) {
-          validatePathWithinRoot(rootPath, resolved);
+          validatePathWithinRoot(canonicalRootPath, resolved);
         }
       } catch (err) {
         failures.push({
@@ -143,12 +143,13 @@ export async function applyBatch(
   const conn = await getLadybugConn();
   const repo = await ladybugDb.getRepo(conn, plan.repoId);
   if (!repo) throw new ValidationError(`Repository ${plan.repoId} not found`);
-  const rootPath = repo.rootPath;
+  const canonicalRootPath = realpathSync.native(repo.rootPath);
 
   const results: BatchApplyResult["results"] = [];
   const writtenSoFar: Array<{
     edit: PlannedFileEdit;
     backupPath: string | undefined;
+    writePath: string;
   }> = [];
   const restoredFiles: string[] = [];
   let rollbackTriggered = false;
@@ -167,6 +168,7 @@ export async function applyBatch(
         ? overrideCreateBackup
         : edit.createBackup;
     try {
+      let writePath = edit.absPath;
       const pc = preconditionByPath.get(edit.relPath);
       if (pc) {
         const currentSha = await hashFileIfExists(pc.absPath);
@@ -181,10 +183,8 @@ export async function applyBatch(
       // ENOENT legitimately until the file is created.
       if (edit.fileExists) {
         try {
-          const resolved = realpathSync(edit.absPath);
-          if (resolved !== edit.absPath) {
-            validatePathWithinRoot(rootPath, resolved);
-          }
+          writePath = realpathSync.native(edit.absPath);
+          validatePathWithinRoot(canonicalRootPath, writePath);
         } catch (symErr) {
           throw new Error(
             `symlink-escape-at-write: ${edit.relPath}: ${symErr instanceof Error ? symErr.message : String(symErr)}`,
@@ -197,8 +197,9 @@ export async function applyBatch(
         useBackup,
         edit.fileExists,
         backupSuffix,
+        writePath,
       );
-      writtenSoFar.push({ edit, backupPath });
+      writtenSoFar.push({ edit, backupPath, writePath });
       results.push({
         file: edit.relPath,
         status: "written",
@@ -235,7 +236,7 @@ export async function applyBatch(
           continue;
         }
         try {
-          await restoreBackup(prev.edit.absPath, prev.backupPath);
+          await restoreBackup(prev.writePath, prev.backupPath);
           restoredFiles.push(prev.edit.relPath);
         } catch (restoreErr) {
           logger.error(
@@ -267,7 +268,6 @@ export async function applyBatch(
   // 3. live-index sync (best-effort, no rollback on failure)
   if (!rollbackTriggered) {
     for (const entry of writtenSoFar) {
-      if (!entry.edit.indexedSource) continue;
       const indexUpdate = await syncLiveIndex(
         plan.repoId,
         entry.edit.relPath,

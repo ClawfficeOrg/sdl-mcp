@@ -15,9 +15,10 @@
 
 import { describe, it, before, after } from "node:test";
 import { strict as assert } from "node:assert";
+import { execFileSync } from "node:child_process";
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { handleSearchEdit } from "../../dist/mcp/tools/search-edit/index.js";
@@ -62,6 +63,27 @@ import {
 const REPO_ID = "search-edit-smoke";
 
 let repoRoot: string;
+
+function getWindowsShortBasename(filePath: string): string | null {
+  const longName = basename(filePath);
+  const output = execFileSync(
+    process.env.ComSpec ?? "cmd.exe",
+    ["/d", "/c", "for %I in (*) do @echo %~nxI^|%~snxI"],
+    {
+      cwd: dirname(filePath),
+      encoding: "utf-8",
+      windowsHide: true,
+    },
+  );
+  const entry = output
+    .split(/\r?\n/u)
+    .map((line) => line.split("|"))
+    .find(([name]) => name?.toLowerCase() === longName.toLowerCase());
+  if (!entry?.[1]) {
+    throw new Error(`Unable to resolve Windows short name for ${filePath}`);
+  }
+  return entry[1].toLowerCase() === longName.toLowerCase() ? null : entry[1];
+}
 
 function parseSearchEditResponse(value: unknown): void {
   const schema = Reflect.get(toolSchemas, "SearchEditResponseSchema") as
@@ -1085,6 +1107,86 @@ describe("sdl.search.edit", { concurrency: false }, () => {
       });
     }
   });
+
+  it(
+    "syncs Windows 8.3 source aliases under their canonical identity",
+    { skip: process.platform !== "win32" },
+    async (t) => {
+      const canonicalRelPath = "LongSearchEditSourceFilename.java";
+      const filePath = join(repoRoot, canonicalRelPath);
+      await writeFile(
+        filePath,
+        "class LongSearchEditSourceFilename { int value = 1; }\n",
+        "utf-8",
+      );
+      const shortName = getWindowsShortBasename(filePath);
+      if (!shortName) {
+        t.skip("8.3 filename aliases are unavailable on the test volume");
+        return;
+      }
+
+      const conn = await getLadybugConn();
+      const priorRepo = await ladybugDb.getRepo(conn, REPO_ID);
+      assert.ok(priorRepo);
+      t.after(async () => {
+        await ladybugDb.upsertRepo(conn, priorRepo);
+      });
+      await ladybugDb.upsertRepo(conn, {
+        ...priorRepo,
+        configJson: JSON.stringify({
+          repoId: REPO_ID,
+          rootPath: repoRoot,
+          ignore: [],
+          languages: ["java"],
+          maxFileBytes: 2_000_000,
+          includeNodeModulesTypes: false,
+          packageJsonPath: null,
+          tsconfigPath: null,
+          workspaceGlobs: null,
+        }),
+      });
+      const before = await getDerivedState(REPO_ID);
+      assert.ok(before?.graphIntegrityRevision != null);
+      const preview = (await handleSearchEdit(
+        SearchEditRequestSchema.parse({
+          mode: "preview",
+          repoId: REPO_ID,
+          targeting: "text",
+          query: {
+            literal: "value = 1",
+            replacement: "value = 2",
+          },
+          editMode: "replacePattern",
+          filters: { include: [shortName] },
+        }),
+      )) as SearchEditPreviewResponse;
+      const apply = (await handleSearchEdit(
+        SearchEditRequestSchema.parse({
+          mode: "apply",
+          repoId: REPO_ID,
+          planHandle: preview.planHandle,
+        }),
+      )) as SearchEditApplyResponse;
+
+      assert.equal(apply.filesWritten, 1);
+      assert.equal(
+        apply.results[0]?.indexUpdate?.applied,
+        true,
+        apply.results[0]?.indexUpdate?.error,
+      );
+      assert.ok(
+        await ladybugDb.getFileByRepoPath(conn, REPO_ID, canonicalRelPath),
+      );
+      assert.equal(
+        await ladybugDb.getFileByRepoPath(conn, REPO_ID, shortName),
+        null,
+      );
+      assert.ok(
+        (await getDerivedState(REPO_ID))!.graphIntegrityRevision >
+          before.graphIntegrityRevision,
+      );
+    },
+  );
 
   it("apply with unknown planHandle fails closed", async () => {
     const applyReq = SearchEditRequestSchema.parse({

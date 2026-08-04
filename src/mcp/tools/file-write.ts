@@ -119,7 +119,15 @@ export async function handleFileWrite(
 ): Promise<FileWriteResponse> {
   const request = parseActionHandlerArgs(FileWriteRequestSchema, args);
   const prepared = await preparePath(request.repoId, request.filePath);
-  const { rootPath, canonicalRootPath, relPath, absPath, fileExists } = prepared;
+  const {
+    rootPath,
+    canonicalRootPath,
+    relPath,
+    canonicalRelPath,
+    absPath,
+    canonicalAbsPath,
+    fileExists,
+  } = prepared;
 
   validateExactlyOneMode(request);
 
@@ -148,12 +156,14 @@ export async function handleFileWrite(
   const snippets = buildDiffPreview(existingContent, newContent);
 
   // Indexed source must remain parseable before either disk or graph state changes.
-  const syntaxTree = parseTreeForPath(relPath, newContent);
+  const syntaxTree = parseTreeForPath(canonicalRelPath, newContent);
   if (
-    getStructuralLanguageForPath(relPath) !== null
+    getStructuralLanguageForPath(canonicalRelPath) !== null
     && (!syntaxTree || syntaxTree.rootNode.hasError)
   ) {
-    throw new ValidationError(`Parse validation failed for indexed source: ${relPath}`);
+    throw new ValidationError(
+      `Parse validation failed for indexed source: ${canonicalRelPath}`,
+    );
   }
 
   // Re-verify path hasn't been swapped for a symlink since preparePath
@@ -169,6 +179,8 @@ export async function handleFileWrite(
     newContent,
     request.createBackup ?? true,
     fileExists,
+    undefined,
+    canonicalAbsPath,
   );
 
   const bytesWritten = Buffer.byteLength(newContent, "utf-8");
@@ -180,12 +192,19 @@ export async function handleFileWrite(
 
   const indexUpdate = await syncLiveIndex(
     request.repoId,
-    relPath,
+    canonicalRelPath,
     newContent,
   );
   if (indexUpdate?.applied === false) {
     if (fileExists) {
-      await writeWithBackup(absPath, existingContent, false, true);
+      await writeWithBackup(
+        absPath,
+        existingContent,
+        false,
+        true,
+        undefined,
+        canonicalAbsPath,
+      );
     } else {
       await unlink(absPath);
     }

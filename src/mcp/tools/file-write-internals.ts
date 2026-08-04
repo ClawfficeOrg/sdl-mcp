@@ -102,7 +102,9 @@ export interface PreparedPath {
   rootPath: string;
   canonicalRootPath: string;
   relPath: string;
+  canonicalRelPath: string;
   absPath: string;
+  canonicalAbsPath: string;
   fileExists: boolean;
 }
 
@@ -128,9 +130,12 @@ export async function preparePath(
   const canonicalRootPath = realpathSync.native(rootPath);
 
   const fileExists = existsSync(absPath);
+  let canonicalAbsPath = absPath;
+  let canonicalRelPath = relPath;
   if (fileExists) {
-    const canonicalTargetPath = realpathSync.native(absPath);
-    validatePathWithinRoot(canonicalRootPath, canonicalTargetPath);
+    canonicalAbsPath = realpathSync.native(absPath);
+    validatePathWithinRoot(canonicalRootPath, canonicalAbsPath);
+    canonicalRelPath = getRelativePath(canonicalRootPath, canonicalAbsPath);
   } else {
     let existingAncestor = absPath;
     while (!existsSync(existingAncestor)) {
@@ -140,7 +145,9 @@ export async function preparePath(
     validatePathWithinRoot(canonicalRootPath, canonicalAncestor);
   }
 
-  const basename = relPath.includes("/") ? relPath.slice(relPath.lastIndexOf("/") + 1) : relPath;
+  const basename = canonicalRelPath.includes("/")
+    ? canonicalRelPath.slice(canonicalRelPath.lastIndexOf("/") + 1)
+    : canonicalRelPath;
   const extParts = basename.split(".");
   for (let i = 1; i < extParts.length; i++) {
     const subExt = ("." + extParts[i]).toLowerCase();
@@ -156,7 +163,9 @@ export async function preparePath(
     rootPath,
     canonicalRootPath,
     relPath,
+    canonicalRelPath,
     absPath,
+    canonicalAbsPath,
     fileExists,
   };
 }
@@ -472,7 +481,8 @@ export async function hashFileIfExists(
  * Write the file, creating parent dir on demand and producing a `.bak`
  * backup copy first when `createBackup` is true and the file existed.
  * Returns the absolute backup path (if created) so callers can expose
- * it in their response or remove it in rollback.
+ * it in their response or remove it in rollback. `writePath` preserves
+ * a canonical existing filename while `absPath` remains the lexical safety check.
  */
 export async function writeWithBackup(
   absPath: string,
@@ -480,6 +490,7 @@ export async function writeWithBackup(
   createBackup: boolean,
   fileExists: boolean,
   backupSuffix?: string,
+  writePath = absPath,
 ): Promise<string | undefined> {
   if (!fileExists) {
     const parent = dirname(absPath);
@@ -502,10 +513,10 @@ export async function writeWithBackup(
     logger.debug(`file.write created backup: ${backupPath}`);
   }
 
-  const tmpPath = `${absPath}.${randomBytes(6).toString("hex")}.tmp`;
+  const tmpPath = `${writePath}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     await writeFile(tmpPath, newContent, "utf-8");
-    await rename(tmpPath, absPath);
+    await rename(tmpPath, writePath);
   } catch (err) {
     try {
       await unlink(tmpPath);
@@ -553,10 +564,6 @@ export async function syncLiveIndex(
   relPath: string,
   newContent: string,
 ): Promise<FileWriteResponse["indexUpdate"] | undefined> {
-  if (!isIndexedSource(relPath)) {
-    return undefined;
-  }
-
   try {
     const conn = await getLadybugConn();
     const repo = await ladybugDb.getRepo(conn, repoId);
@@ -572,6 +579,9 @@ export async function syncLiveIndex(
       canonicalRootPath,
       canonicalFilePath,
     );
+    if (!isIndexedSource(canonicalRelPath)) {
+      return undefined;
+    }
     const { ignore } = RepoConfigSchema.pick({ ignore: true }).parse(
       JSON.parse(repo.configJson),
     );

@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   linkSync,
   mkdirSync,
+  mkdtempSync,
   rmSync,
   writeFileSync,
   readFileSync,
   symlinkSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -36,6 +39,27 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+function getWindowsShortBasename(filePath: string): string | null {
+  const longName = basename(filePath);
+  const output = execFileSync(
+    process.env.ComSpec ?? "cmd.exe",
+    ["/d", "/c", "for %I in (*) do @echo %~nxI^|%~snxI"],
+    {
+      cwd: dirname(filePath),
+      encoding: "utf-8",
+      windowsHide: true,
+    },
+  );
+  const entry = output
+    .split(/\r?\n/u)
+    .map((line) => line.split("|"))
+    .find(([name]) => name?.toLowerCase() === longName.toLowerCase());
+  if (!entry?.[1]) {
+    throw new Error(`Unable to resolve Windows short name for ${filePath}`);
+  }
+  return entry[1].toLowerCase() === longName.toLowerCase() ? null : entry[1];
+}
 
 async function waitForVerifiedRevision(
   repoId: string,
@@ -200,6 +224,107 @@ describe("sdl.file.write", () => {
       );
       assert.equal(readFileSync(targetPath, "utf-8"), originalContent);
     });
+
+    it(
+      "uses canonical Windows 8.3 identity for write policy and indexing",
+      { skip: process.platform !== "win32" },
+      async (t) => {
+        const aliasRoot = mkdtempSync(join(tmpdir(), "sdl-file-write-8dot3-"));
+        const deniedName = "LongNotebookFilenameForAlias.ipynb";
+        const sourceName = "LongJavaSourceFilename.java";
+        const deniedPath = join(aliasRoot, deniedName);
+        const sourcePath = join(aliasRoot, sourceName);
+        const deniedContent = '{"original": true}';
+        const sourceContent =
+          "class LongJavaSourceFilename { int value = 1; }\n";
+        const conn = await getLadybugConn();
+        const priorRepo = await ladybugDb.getRepo(conn, repoId);
+        assert.ok(priorRepo);
+
+        try {
+          writeFileSync(deniedPath, deniedContent, "utf-8");
+          writeFileSync(sourcePath, sourceContent, "utf-8");
+          const deniedShortName = getWindowsShortBasename(deniedPath);
+          const sourceShortName = getWindowsShortBasename(sourcePath);
+          if (!deniedShortName || !sourceShortName) {
+            t.skip("8.3 filename aliases are unavailable on the test volume");
+            return;
+          }
+
+          const now = "2026-08-04T16:00:00.000Z";
+          await ladybugDb.upsertRepo(conn, {
+            ...priorRepo,
+            rootPath: aliasRoot,
+          });
+          await ladybugDb.createVersion(conn, {
+            versionId: "v-eight-dot-three-source",
+            repoId,
+            createdAt: now,
+            reason: "8.3 canonical identity baseline",
+            prevVersionHash: null,
+            versionHash: null,
+          });
+          const baseline = await capturePersistedGraphIntegrity(conn, repoId);
+          await ladybugDb.replaceGraphIntegrityManifestInTransaction(
+            conn,
+            repoId,
+            { files: [], fileless: [] },
+          );
+          await markGraphIntegrityVerified(
+            repoId,
+            "v-eight-dot-three-source",
+            baseline.digest,
+          );
+
+          await assert.rejects(
+            handleFileWrite({
+              repoId,
+              filePath: deniedShortName,
+              content: '{"changed": true}',
+              createBackup: false,
+            }),
+            /Write denied for extension "\.ipynb"/,
+          );
+          assert.equal(readFileSync(deniedPath, "utf-8"), deniedContent);
+
+          await assert.rejects(
+            handleFileWrite({
+              repoId,
+              filePath: sourceShortName,
+              content: "class {",
+              createBackup: false,
+            }),
+            new RegExp(
+              `Parse validation failed for indexed source: ${sourceName.replace(".", "\\.")}`,
+            ),
+          );
+          assert.equal(readFileSync(sourcePath, "utf-8"), sourceContent);
+
+          const response = await handleFileWrite({
+            repoId,
+            filePath: sourceShortName,
+            content: "class LongJavaSourceFilename { int value = 2; }\n",
+            createBackup: false,
+          });
+          assert.equal(
+            response.indexUpdate?.applied,
+            true,
+            response.indexUpdate?.error,
+          );
+          assert.ok(
+            await ladybugDb.getFileByRepoPath(conn, repoId, sourceName),
+          );
+          assert.equal(
+            await ladybugDb.getFileByRepoPath(conn, repoId, sourceShortName),
+            null,
+          );
+          await waitForVerifiedRevision(repoId, 1);
+        } finally {
+          await ladybugDb.upsertRepo(conn, priorRepo);
+          rmSync(aliasRoot, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("updates an indexed TypeScript graph through the shared saved-file patch", async () => {
       const relPath = "src/indexed.ts";
