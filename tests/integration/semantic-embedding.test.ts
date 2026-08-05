@@ -346,7 +346,22 @@ describe("Semantic Embedding Pipeline", () => {
   });
 
   it("refreshSymbolEmbeddings persists vectors through a real rebuild cycle", async () => {
-    const { provider } = createRecordingProvider();
+    const { provider: recordingProvider } = createRecordingProvider();
+    let embeddingCallsStarted = 0;
+    let releaseConcurrentCalls!: () => void;
+    const concurrentCallsStarted = new Promise<void>((resolve) => {
+      releaseConcurrentCalls = resolve;
+    });
+    const provider: EmbeddingProvider = {
+      ...recordingProvider,
+      async embed(texts): Promise<number[][]> {
+        if (++embeddingCallsStarted === 2) releaseConcurrentCalls();
+        await concurrentCallsStarted;
+        return recordingProvider.embed(texts);
+      },
+    };
+    const timings = new Map<string, number>();
+    const timingCalls: string[] = [];
 
     const result = await refreshSymbolEmbeddings({
       repoId,
@@ -356,6 +371,11 @@ describe("Semantic Embedding Pipeline", () => {
       rebuildMinUncachedRows: 1,
       embeddingProvider: provider,
       batchSize: 1,
+      concurrency: 2,
+      recordTiming: (phaseName, durationMs) => {
+        timingCalls.push(phaseName);
+        timings.set(phaseName, (timings.get(phaseName) ?? 0) + durationMs);
+      },
     });
 
     assert.deepStrictEqual(result, {
@@ -374,6 +394,26 @@ describe("Semantic Embedding Pipeline", () => {
       assert.ok(embedding.vector.length > 0);
       assert.ok(embedding.cardHash.length > 0);
     }
+
+    for (const phaseName of [
+      "inference",
+      "persistence.finalFlush",
+      "hnsw.drop",
+      "hnsw.create",
+      "checkpoint.pre",
+      "checkpoint.post",
+    ]) {
+      assert.equal(
+        typeof timings.get(phaseName),
+        "number",
+        `expected ${phaseName} timing`,
+      );
+    }
+    assert.equal(
+      timingCalls.filter((phaseName) => phaseName === "inference").length,
+      Math.ceil(symbols.length / 2),
+      "overlapping inference batches should emit one wall-time interval per concurrency window",
+    );
   });
 
   it("refreshFileSummaryEmbeddings marks mock fallback as degraded without persistence", async () => {

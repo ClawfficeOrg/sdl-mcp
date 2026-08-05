@@ -324,6 +324,8 @@ export async function refreshSymbolEmbeddings(params: {
   postIndexSessionTimeoutMs?: number;
   /** @internal Allows tests to exercise provider degradation deterministically. */
   embeddingProvider?: EmbeddingProvider;
+  /** Records internal phase durations for opt-in indexing diagnostics. */
+  recordTiming?: (phaseName: string, durationMs: number) => void;
 }): Promise<{
   embedded: number;
   skipped: number;
@@ -333,6 +335,31 @@ export async function refreshSymbolEmbeddings(params: {
   const modelName = params.model ?? "jina-embeddings-v2-base-code";
   const provider =
     params.embeddingProvider ?? getEmbeddingProvider(params.provider, modelName);
+  const measure = async <T>(
+    phaseName: string,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = Date.now();
+    try {
+      return await fn();
+    } finally {
+      params.recordTiming?.(phaseName, Date.now() - startedAt);
+    }
+  };
+  // Record the union of overlapping calls so concurrency still reports wall time.
+  let activeInferenceCalls = 0;
+  let inferenceStartedAt = 0;
+  const measureInference = async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (activeInferenceCalls++ === 0) inferenceStartedAt = Date.now();
+    try {
+      return await fn();
+    } finally {
+      activeInferenceCalls--;
+      if (activeInferenceCalls === 0) {
+        params.recordTiming?.("inference", Date.now() - inferenceStartedAt);
+      }
+    }
+  };
   const conn = await getLadybugConn();
   const symbols =
     params.symbols ?? (await ladybugDb.getSymbolsByRepo(conn, params.repoId));
@@ -482,8 +509,8 @@ export async function refreshSymbolEmbeddings(params: {
     let indexDropped = false;
     if (useRebuildPath) {
       // The outer HNSW lifecycle checkpoints before this session starts.
-      const dropResult = await withWriteConn((wConn) =>
-        dropVectorIndex(wConn, "Symbol", indexName),
+      const dropResult = await measure("hnsw.drop", () =>
+        withWriteConn((wConn) => dropVectorIndex(wConn, "Symbol", indexName)),
       );
       indexDropped = dropResult.status !== "failed";
       if (dropResult.status === "dropped") {
@@ -560,7 +587,7 @@ export async function refreshSymbolEmbeddings(params: {
       const batchTexts = batch.map((item) => item.prefixedText);
       let batchVectors: number[][];
       try {
-        batchVectors = await provider.embed(batchTexts);
+        batchVectors = await measureInference(() => provider.embed(batchTexts));
       } catch (error) {
         recordEmbeddingFailure();
         logger.warn("Batch embedding failed, continuing to next batch", {
@@ -716,7 +743,11 @@ export async function refreshSymbolEmbeddings(params: {
         // will retry once.
         if (indexDropped) {
           try {
-            await flushPendingWrites(false);
+            const flushPhaseName =
+              chunkStart + maxConcurrency >= batches.length
+                ? "persistence.finalFlush"
+                : "persistence.flush";
+            await measure(flushPhaseName, () => flushPendingWrites(false));
           } catch (err) {
             logger.warn(
               "[embeddings] Coalesced write flush failed (will retry at end)",
@@ -735,7 +766,7 @@ export async function refreshSymbolEmbeddings(params: {
       // and counted toward `embedded` only after successful flush.
       if (indexDropped && pendingWriteItems.length > 0) {
         try {
-          await flushPendingWrites(true);
+          await measure("persistence.finalFlush", () => flushPendingWrites(true));
         } catch (err) {
           logger.error(
             `[embeddings] Final coalesced write flush failed — ${pendingWriteItems.length} vectors will not be persisted; vector retrieval may be stale`,
@@ -751,13 +782,15 @@ export async function refreshSymbolEmbeddings(params: {
       if (indexDropped && vecProp !== null && indexName !== null) {
         const modelInfo = EMBEDDING_MODELS[modelName];
         if (modelInfo) {
-          const ok = await withWriteConn((wConn) =>
-            createVectorIndex(
-              wConn,
-              "Symbol",
-              vecProp,
-              indexName,
-              modelInfo.dimension,
+          const ok = await measure("hnsw.create", () =>
+            withWriteConn((wConn) =>
+              createVectorIndex(
+                wConn,
+                "Symbol",
+                vecProp,
+                indexName,
+                modelInfo.dimension,
+              ),
             ),
           );
           if (ok) {
@@ -791,5 +824,6 @@ export async function refreshSymbolEmbeddings(params: {
     "symbol-vector-rebuild-post-create",
     runPersistenceCycle,
     params.postIndexSessionTimeoutMs,
+    params.recordTiming,
   );
 }

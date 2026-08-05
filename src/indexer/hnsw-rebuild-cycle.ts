@@ -23,9 +23,24 @@ export function runHnswRebuildCycle<T>(
   postCheckpointPhase: string,
   rebuild: () => Promise<T>,
   timeoutMs?: number,
+  recordTiming?: (phaseName: string, durationMs: number) => void,
 ): Promise<T> {
   return withExclusiveLadybugOperation(async () => {
-    await requireCheckpoint(preCheckpointPhase, "pre");
+    const measure = async (
+      phaseName: string,
+      fn: () => Promise<void>,
+    ): Promise<void> => {
+      const startedAt = Date.now();
+      try {
+        await fn();
+      } finally {
+        recordTiming?.(phaseName, Date.now() - startedAt);
+      }
+    };
+
+    await measure("checkpoint.pre", () =>
+      requireCheckpoint(preCheckpointPhase, "pre"),
+    );
 
     let result!: T;
     let rebuildFailed = false;
@@ -42,7 +57,9 @@ export function runHnswRebuildCycle<T>(
     let postCheckpointFailed = false;
     let postCheckpointError: unknown;
     try {
-      await requireCheckpoint(postCheckpointPhase, "post");
+      await measure("checkpoint.post", () =>
+        requireCheckpoint(postCheckpointPhase, "post"),
+      );
     } catch (error) {
       postCheckpointFailed = true;
       postCheckpointError = error;

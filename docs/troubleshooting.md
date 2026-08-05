@@ -98,6 +98,13 @@ a `Pass 1 Write Drain` row-count summary. Use the largest timings to separate
 stale symbol deletion, file upsert, symbol reference insert, symbol upsert, and
 `DEPENDS_ON` edge insert costs.
 
+If provider-first indexing pauses after `Symbol Embeddings` reaches 100%, that
+progress tick marks completed inference, not the end of persistence. With
+`--diagnostics`, compare the wall-clock `.inference`, `.persistence.flush`,
+`.persistence.finalFlush`, `.hnsw.drop`, `.hnsw.create`, `.checkpoint.pre`, and
+`.checkpoint.post` subphases under
+`semanticReadiness.symbolEmbeddings:<model>` to identify the remaining work.
+
 ### Indexing or Tool Queue Timeouts
 
 Start by checking the server log named by `sdl-mcp info`. The two timeout

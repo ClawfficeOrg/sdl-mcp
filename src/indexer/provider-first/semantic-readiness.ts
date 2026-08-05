@@ -166,7 +166,8 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
     }
 
     for (const embModel of modelPlan.symbolEmbeddingModels) {
-      const stats = await measure(`semanticReadiness.symbolEmbeddings:${embModel}`, () =>
+      const phaseName = `semanticReadiness.symbolEmbeddings:${embModel}`;
+      const stats = await measure(phaseName, () =>
         deps.refreshSymbolEmbeddings({
           repoId: params.repoId,
           provider: semanticConfig.provider ?? "local",
@@ -175,6 +176,8 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
           concurrency: semanticConfig.embeddingConcurrency,
           batchSize: semanticConfig.embeddingBatchSize,
           postIndexSessionTimeoutMs: params.postIndexSessionTimeoutMs,
+          recordTiming: (subphaseName, durationMs) =>
+            params.recordTiming?.(`${phaseName}.${subphaseName}`, durationMs),
         }),
       );
       if (stats.degraded || (stats.deferred ?? 0) > 0) {

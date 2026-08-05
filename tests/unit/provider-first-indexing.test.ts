@@ -353,7 +353,9 @@ describe("provider-first indexing foundation", () => {
 
   it("runs provider-first semantic readiness refresh with deferred indexes", async () => {
     const calls: string[] = [];
+    const timings: string[] = [];
     const result = await runProviderFirstSemanticReadinessRefresh({
+      recordTiming: (phaseName) => timings.push(phaseName),
       repoId: "repo-semantic-refresh",
       versionId: "v-semantic-refresh",
       appConfig: {
@@ -384,6 +386,7 @@ describe("provider-first indexing foundation", () => {
         },
         refreshSymbolEmbeddings: async (params) => {
           calls.push(`symbol:${params.model}`);
+          params.recordTiming?.("inference", 1);
           return { embedded: 5, skipped: 6 };
         },
         buildDeferredIndexes: async (params) => {
@@ -410,6 +413,11 @@ describe("provider-first indexing foundation", () => {
       "indexes:false:false",
       "computed:true:true",
     ]);
+    assert.ok(
+      timings.includes(
+        "semanticReadiness.symbolEmbeddings:jina-embeddings-v2-base-code.inference",
+      ),
+    );
   });
 
   it("keeps semantic readiness deferred when either embedding lane is incomplete", async () => {
