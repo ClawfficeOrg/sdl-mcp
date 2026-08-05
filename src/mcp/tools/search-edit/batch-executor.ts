@@ -89,7 +89,7 @@ export async function preflightPreconditions(
     // realpathSync would throw ENOENT legitimately.
     if (pc.sha256 !== null) {
       try {
-        const resolved = realpathSync(pc.absPath);
+        const resolved = realpathSync.native(pc.absPath);
         if (resolved !== pc.absPath) {
           validatePathWithinRoot(canonicalRootPath, resolved);
         }

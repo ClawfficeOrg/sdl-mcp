@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -34,7 +34,7 @@ async function makeFile(root: string, rel: string, content: string) {
 function makePlan(
   repoId: string,
   edits: PlannedFileEdit[],
-  preconditions: PlanPrecondition[],
+  preconditions: Array<Omit<PlanPrecondition, "canonicalAbsPath">>,
   defaultBackup = true,
 ): StoredPlan {
   return {
@@ -45,7 +45,13 @@ function makePlan(
     defaultCreateBackup: defaultBackup,
     consumed: false,
     edits,
-    preconditions,
+    preconditions: preconditions.map((precondition) => ({
+      ...precondition,
+      canonicalAbsPath:
+        precondition.sha256 === null
+          ? precondition.absPath
+          : realpathSync.native(precondition.absPath),
+    })),
     summary: {},
   };
 }
