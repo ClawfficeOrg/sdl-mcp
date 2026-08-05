@@ -6,11 +6,11 @@ import { describe, it } from "node:test";
 
 const artifactPath = join(
   process.cwd(),
-  "devdocs/benchmarks/seed-resolution-evaluation-v2.json",
+  "docs/benchmarks/seed-resolution-evaluation-v2.json",
 );
 const corpusPath = join(
   process.cwd(),
-  "devdocs/benchmarks/seed-resolution-corpus-v2.json",
+  "docs/benchmarks/seed-resolution-corpus-v2.json",
 );
 
 const expectedCaseIds = [

@@ -32,11 +32,11 @@ interface Corpus {
 const ROOT = resolve(import.meta.dirname, "..");
 const CORPUS_PATH = resolve(
   ROOT,
-  "devdocs/benchmarks/seed-resolution-corpus-v2.json",
+  "docs/benchmarks/seed-resolution-corpus-v2.json",
 );
 const OUTPUT_PATH = resolve(
   ROOT,
-  "devdocs/benchmarks/seed-resolution-evaluation-v2.json",
+  "docs/benchmarks/seed-resolution-evaluation-v2.json",
 );
 const SOURCE_PATHS = [
   "src/context/engine.ts",

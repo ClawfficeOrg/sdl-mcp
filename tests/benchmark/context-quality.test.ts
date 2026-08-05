@@ -1838,7 +1838,7 @@ function persistBenchmarkArtifact(): void {
     ladybugClosedBeforeArtifact,
     seedResolutionDiagnostics: {
       command: "npm run benchmark:seed-resolution",
-      artifact: "devdocs/benchmarks/seed-resolution-evaluation-v2.json",
+      artifact: "docs/benchmarks/seed-resolution-evaluation-v2.json",
     },
     corpusCaseCount: metrics.totalCases,
     selectedCaseId: SELECTED_CASE_ID ?? null,
