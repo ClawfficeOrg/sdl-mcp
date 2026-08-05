@@ -514,29 +514,104 @@ describe("public graph retrieval admission classifier", () => {
   });
 
   it("identifies only workflows that refresh before graph retrieval", () => {
-    for (const refreshArgs of [{ mode: "incremental" }, { async: true }]) {
-      assert.equal(
-        workflowHasRefreshBeforeGraph({
+    const cases: Array<{
+      label: string;
+      args: unknown;
+      expected: boolean;
+    }> = [
+      {
+        label: "camelCase synchronous refresh before graph",
+        args: {
           steps: [
-            { fn: "indexRefresh", args: refreshArgs },
+            { fn: "indexRefresh", args: { mode: "incremental" } },
             { fn: "symbolSearch", args: { query: "alpha" } },
           ],
-        }),
-        true,
-      );
-    }
-
-    for (const args of [
-      {
-        steps: [
-          { fn: "symbolSearch", args: { query: "alpha" } },
-          { fn: "indexRefresh", args: { mode: "incremental" } },
-        ],
+        },
+        expected: true,
       },
-      { steps: [{ fn: "indexRefresh", args: { mode: "incremental" } }] },
-      { steps: [{ fn: "symbolSearch", args: { query: "alpha" } }] },
-    ]) {
-      assert.equal(workflowHasRefreshBeforeGraph(args), false);
+      {
+        label: "camelCase asynchronous refresh before graph",
+        args: {
+          steps: [
+            { fn: "indexRefresh", args: { async: true } },
+            { fn: "symbolSearch", args: { query: "alpha" } },
+          ],
+        },
+        expected: true,
+      },
+      {
+        label: "canonical refresh before graph",
+        args: {
+          steps: [
+            { fn: "index.refresh", args: { mode: "incremental" } },
+            { fn: "symbol.search", args: { query: "alpha" } },
+          ],
+        },
+        expected: true,
+      },
+      {
+        label: "multiple refreshes before multiple graph reads",
+        args: {
+          steps: [
+            { fn: "indexRefresh", args: {} },
+            { fn: "index.refresh", args: {} },
+            { fn: "symbolSearch", args: { query: "alpha" } },
+            { fn: "repo.overview", args: {} },
+          ],
+        },
+        expected: true,
+      },
+      {
+        label: "graph before refresh before another graph",
+        args: {
+          steps: [
+            { fn: "symbolSearch", args: { query: "alpha" } },
+            { fn: "indexRefresh", args: {} },
+            { fn: "repoOverview", args: {} },
+          ],
+        },
+        expected: false,
+      },
+      {
+        label: "malformed entries around refresh before graph",
+        args: {
+          steps: [
+            null,
+            "invalid",
+            [],
+            {},
+            { fn: 42 },
+            { fn: "indexRefresh", args: {} },
+            { fn: "symbolSearch", args: { query: "alpha" } },
+          ],
+        },
+        expected: true,
+      },
+      {
+        label: "malformed entries only",
+        args: { steps: [null, "invalid", [], {}, { fn: 42 }] },
+        expected: false,
+      },
+      {
+        label: "refresh without graph",
+        args: { steps: [{ fn: "indexRefresh", args: {} }] },
+        expected: false,
+      },
+      {
+        label: "graph without refresh",
+        args: {
+          steps: [{ fn: "symbolSearch", args: { query: "alpha" } }],
+        },
+        expected: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      assert.equal(
+        workflowHasRefreshBeforeGraph(testCase.args),
+        testCase.expected,
+        testCase.label,
+      );
     }
   });
 

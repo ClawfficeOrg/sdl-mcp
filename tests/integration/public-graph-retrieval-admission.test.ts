@@ -647,41 +647,50 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
     }
   });
 
-  it("rejects refresh-before-graph workflows with split recovery guidance", async () => {
-    let dispatched = 0;
-    server.registerPostDispatchHook(async (toolName, args) => {
-      if (
-        toolName === "sdl.workflow"
-        && typeof args === "object"
-        && args !== null
-        && ["unknown", "failed-degraded"].includes(
-          String((args as { repoId?: unknown }).repoId),
-        )
-      ) {
-        dispatched += 1;
-      }
-    });
+  it("rejects refresh-before-graph workflows before handler entry", async () => {
+    type RegisteredTool = {
+      handler: (args: unknown, context?: unknown) => Promise<unknown>;
+    };
+    const registry = (
+      server as unknown as { tools: Map<string, RegisteredTool> }
+    ).tools;
+    const workflowTool = registry.get("sdl.workflow");
+    assert.ok(workflowTool, "registered sdl.workflow handler");
+    const originalHandler = workflowTool.handler;
+    let handlerEntries = 0;
+    workflowTool.handler = async (args, context) => {
+      handlerEntries += 1;
+      return originalHandler(args, context);
+    };
 
-    for (const repoId of ["unknown", "failed-degraded"]) {
-      for (const [label, refreshArgs] of [
-        ["synchronous", { mode: "incremental" }],
-        ["asynchronous", { mode: "incremental", async: true }],
-      ] as const) {
-        const response = (await client.callTool({
-          name: "sdl.workflow",
-          arguments: {
-            repoId,
-            steps: [
-              { fn: "indexRefresh", args: refreshArgs },
-              { fn: "symbolSearch", args: { query: "alpha" } },
-            ],
-          },
-        })) as ErrorEnvelope;
-        assertSplitWorkflowRecovery(response, `${repoId}:${label}`);
+    try {
+      for (const repoId of ["unknown", "failed-degraded"]) {
+        for (const [label, refreshArgs] of [
+          ["synchronous", { mode: "incremental" }],
+          ["asynchronous", { mode: "incremental", async: true }],
+        ] as const) {
+          const response = (await client.callTool({
+            name: "sdl.workflow",
+            arguments: {
+              repoId,
+              steps: [
+                { fn: "indexRefresh", args: refreshArgs },
+                { fn: "symbolSearch", args: { query: "alpha" } },
+              ],
+            },
+          })) as ErrorEnvelope;
+          assertSplitWorkflowRecovery(response, `${repoId}:${label}`);
+        }
       }
+
+      assert.equal(
+        handlerEntries,
+        0,
+        "rejected workflows entered the workflow handler",
+      );
+    } finally {
+      workflowTool.handler = originalHandler;
     }
-
-    assert.equal(dispatched, 0, "rejected workflows reached handler dispatch");
   });
 
   it("keeps graph-before-refresh recovery unchanged", async () => {

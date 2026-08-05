@@ -750,9 +750,9 @@ export class MCPServer {
                     && toolName === "sdl.workflow"
                     && workflowHasRefreshBeforeGraph(parsedArgs)
                   ) {
-                    throw new GraphRetrievalUnavailableError(
-                      `${error.message} Run indexRefresh in one sdl.workflow, wait for it to complete, then run graph retrieval in a second sdl.workflow.`,
-                    );
+                    error.message +=
+                      " Run indexRefresh in one sdl.workflow, wait for it to complete, then run graph retrieval in a second sdl.workflow.";
+                    throw error;
                   }
                   throw error;
                 }
