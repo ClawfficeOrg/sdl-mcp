@@ -566,10 +566,12 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
         name: "sdl.workflow",
         arguments: {
           repoId: REPO_ID,
+          detail: "full",
           steps: [
             {
-              fn: "searchEditPreview",
+              fn: "searchEdit",
               args: {
+                mode: "preview",
                 targeting: "text",
                 query: { literal: "Hello", replacement: "Hi", global: true },
                 filters: { include: ["src/greeting.ts"] },
@@ -587,8 +589,8 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
               },
             },
             {
-              fn: "searchEditApply",
-              args: { planHandle: "$0.planHandle" },
+              fn: "searchEdit",
+              args: { mode: "apply", planHandle: "$0.planHandle" },
             },
           ],
         },
@@ -600,7 +602,19 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
       )?.results;
 
       assert.equal(response.isError, true);
-      assert.ok(results?.some((result) => result.status === "error"));
+      assert.deepEqual(
+        results?.map((result) => result.status),
+        ["ok", "ok", "error"],
+        JSON.stringify(response.structuredContent),
+      );
+      const applyFailure = results?.[2] as {
+        error?: string;
+        failureTrace?: { message?: string };
+      } | undefined;
+      assert.match(
+        [applyFailure?.error, applyFailure?.failureTrace?.message].join("\n"),
+        /drifted/iu,
+      );
       assert.equal(
         readFileSync(join(REPO_ROOT, "src", "greeting.ts"), "utf8"),
         interveningSource,
