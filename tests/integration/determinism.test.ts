@@ -60,6 +60,16 @@ const FIXTURE_REPO = join(TEST_ROOT, "fixture-repo");
 const GRAPH_DB_PATH = join(TEST_ROOT, "graph.lbug");
 const CONFIG_PATH = join(TEST_ROOT, "sdl-determinism.config.json");
 const DIFF_DIR = resolve(process.cwd(), ".determinism-diffs");
+const GRAPH_DB_FAMILY_PATHS = [
+  GRAPH_DB_PATH,
+  `${GRAPH_DB_PATH}.sdl-lineage.json`,
+] as const;
+
+function removeGraphDbFamily(): void {
+  for (const path of GRAPH_DB_FAMILY_PATHS) {
+    rmSync(path, { recursive: true, force: true });
+  }
+}
 
 const PublicRepoOverviewFullResponseSchema = RepoOverviewResponseSchema.options[0]
   .pick({
@@ -471,12 +481,12 @@ before(async () => {
   );
   writeConfig();
   rmSync(DIFF_DIR, { recursive: true, force: true });
-  rmSync(GRAPH_DB_PATH, { recursive: true, force: true });
+  removeGraphDbFamily();
 
   legA = await runLeg(2, { setup: true });
 
   if (process.env.REBUILD_INDEX === "1") {
-    rmSync(GRAPH_DB_PATH, { recursive: true, force: true });
+    removeGraphDbFamily();
   }
 
   legB = await runLeg(1, { setup: process.env.REBUILD_INDEX === "1" });
