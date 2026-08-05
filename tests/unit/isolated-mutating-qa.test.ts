@@ -23,6 +23,91 @@ async function loadRunner() {
 }
 
 describe("isolated mutating QA runner", () => {
+  it("reports structured child tool failures without undefined fields", async () => {
+    const { assertToolSucceeded } = await loadRunner();
+
+    assert.throws(
+      () =>
+        assertToolSucceeded("sdl.file", {
+          isError: true,
+          content: [
+            { type: "text", text: "" },
+            { type: "text", text: "Invalid tool arguments" },
+            { type: "text", text: "ignored" },
+          ],
+          structuredContent: {
+            error: {
+              code: "VALIDATION_ERROR",
+            },
+          },
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /QA tool failed: sdl\.file/);
+        assert.match(error.message, /isError=true/);
+        assert.match(error.message, /code=VALIDATION_ERROR/);
+        assert.match(error.message, /classification=invalid_input/);
+        assert.match(error.message, /Invalid tool arguments/);
+        assert.doesNotMatch(error.message, /ignored/);
+        return true;
+      },
+    );
+
+    assert.throws(
+      () =>
+        assertToolSucceeded("sdl.file", {
+          content: [],
+          structuredContent: { error: {} },
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, "QA tool failed: sdl.file");
+        assert.doesNotMatch(error.message, /undefined/);
+        return true;
+      },
+    );
+  });
+
+  it("preflights only top-level scenario tools and explains missing Code Mode", async () => {
+    const { assertScenarioToolsAvailable } = await loadRunner();
+
+    assert.doesNotThrow(() =>
+      assertScenarioToolsAvailable(
+        { tools: [{ name: "sdl.info" }, { name: "sdl.workflow" }] },
+        [
+          {
+            tool: "sdl.workflow",
+            arguments: {
+              repoId: "qa",
+              steps: [{ fn: "fileRead", args: {} }],
+            },
+          },
+        ],
+      ),
+    );
+
+    assert.throws(
+      () =>
+        assertScenarioToolsAvailable(
+          { tools: [{ name: "sdl.info" }] },
+          [
+            { tool: "sdl.file", arguments: {} },
+            { tool: "sdl.retrieve", arguments: {} },
+            { tool: "sdl.workflow", arguments: {} },
+          ],
+        ),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /sdl\.file/);
+        assert.match(error.message, /sdl\.retrieve/);
+        assert.match(error.message, /sdl\.workflow/);
+        assert.match(error.message, /Code Mode is unavailable/);
+        assert.doesNotMatch(error.message, /fileRead/);
+        return true;
+      },
+    );
+  });
+
   it("rejects any QA database path in an active database family", async () => {
     const { assertDistinctDatabaseFamilies } = await loadRunner();
     const root = mkdtempSync(join(tmpdir(), "sdl-qa-family-"));

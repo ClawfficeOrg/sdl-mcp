@@ -107,7 +107,7 @@ describe("isolated mutating QA process", () => {
   );
 
   it(
-    "retains the QA fixture and reports its path when a tool call fails",
+    "preflights unknown tools and retains the exact QA fixture paths",
     { timeout: 120_000 },
     async () => {
       const { runIsolatedMutatingQa } = await import(
@@ -136,16 +136,62 @@ describe("isolated mutating QA process", () => {
             qaDbPath?: string;
             qaRootPath?: string;
           };
-          assert.match(error.message, /tool|method|not found/i);
+          assert.match(error.message, /sdl\.not-a-tool/);
+          assert.match(error.message, /not available/i);
           assert.equal(typeof qaError.qaDbPath, "string");
           assert.equal(typeof qaError.qaRootPath, "string");
+          assert.equal(qaError.qaDbPath, join(qaError.qaRootPath!, "qa.lbug"));
           assert.equal(existsSync(qaError.qaRootPath!), true);
+          assert.equal(existsSync(inputs.fixtureRoot), true);
           retainedRoot = qaError.qaRootPath;
           return true;
         },
       );
 
       assert.deepEqual(readFileSync(inputs.activeDbPath), activeBytes);
+      if (retainedRoot) {
+        cleanupRoots.push(retainedRoot);
+      }
+    },
+  );
+
+  it(
+    "reports structured validation details from an available child tool",
+    { timeout: 120_000 },
+    async () => {
+      const { runIsolatedMutatingQa } = await import(
+        "../../scripts/run-isolated-mutating-qa.mjs"
+      );
+      const inputs = makeQaInputs([
+        {
+          tool: "sdl.repo.register",
+          arguments: {},
+        },
+      ]);
+      let retainedRoot: string | undefined;
+
+      await assert.rejects(
+        runIsolatedMutatingQa({
+          activeDbPath: inputs.activeDbPath,
+          fixtureRoot: inputs.fixtureRoot,
+          configPath: inputs.configPath,
+          scenarioPath: inputs.scenarioPath,
+          projectRoot: process.cwd(),
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof Error);
+          const qaError = error as Error & { qaRootPath?: string };
+          assert.match(error.message, /QA tool failed: sdl\.repo\.register/);
+          assert.match(error.message, /isError=true/);
+          assert.match(error.message, /code=VALIDATION_ERROR/);
+          assert.match(error.message, /classification=invalid_input/);
+          assert.match(error.message, /Invalid tool arguments/);
+          assert.equal(existsSync(qaError.qaRootPath!), true);
+          retainedRoot = qaError.qaRootPath;
+          return true;
+        },
+      );
+
       if (retainedRoot) {
         cleanupRoots.push(retainedRoot);
       }

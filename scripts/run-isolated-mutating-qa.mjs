@@ -183,10 +183,55 @@ function extractActiveDbPath(result) {
   return activePath;
 }
 
-function assertToolSucceeded(tool, result) {
-  if (result.isError || result.structuredContent?.error) {
-    throw new Error(`QA tool failed: ${tool}`);
+export function assertToolSucceeded(tool, result) {
+  const structuredError = result.structuredContent?.error;
+  if (!result.isError && !structuredError) {
+    return;
   }
+
+  const firstText = result.content
+    ?.find(
+      (item) =>
+        item?.type === "text" &&
+        typeof item.text === "string" &&
+        item.text.trim().length > 0,
+    )
+    ?.text.trim()
+    .replace(/\s+/g, " ");
+  const details = [`QA tool failed: ${tool}`];
+  if (result.isError === true) details.push("isError=true");
+  if (typeof structuredError?.code === "string") {
+    details.push(`code=${structuredError.code}`);
+  }
+  // Pre-dispatch schema errors omit the domain formatter's default classification.
+  const classification =
+    structuredError?.classification ??
+    (structuredError?.code === "VALIDATION_ERROR" ? "invalid_input" : undefined);
+  if (typeof classification === "string") {
+    details.push(`classification=${classification}`);
+  }
+  if (firstText) details.push(`text=${firstText}`);
+  throw new Error(details.join(" | "));
+}
+
+export function assertScenarioToolsAvailable(listToolsResult, scenario) {
+  const available = new Set(listToolsResult.tools.map((tool) => tool.name));
+  const required = new Set(["sdl.info", ...scenario.map((step) => step.tool)]);
+  const missing = [...required].filter((tool) => !available.has(tool));
+  if (missing.length === 0) {
+    return;
+  }
+
+  const codeModeUnavailable = missing.some((tool) =>
+    ["sdl.file", "sdl.retrieve", "sdl.workflow"].includes(tool),
+  );
+  throw new Error(
+    `Scenario tools are not available: ${missing.join(", ")}.${
+      codeModeUnavailable
+        ? " Code Mode is unavailable because its required tools are missing."
+        : ""
+    }`,
+  );
 }
 
 async function readScenario(path) {
@@ -267,6 +312,8 @@ export async function runIsolatedMutatingQa(options) {
     });
 
     await client.connect(transport);
+    const toolsResult = await client.listTools();
+    assertScenarioToolsAvailable(toolsResult, scenario);
     const infoResult = await client.callTool({
       name: "sdl.info",
       arguments: { redactPaths: false },
