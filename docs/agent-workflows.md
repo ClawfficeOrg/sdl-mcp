@@ -170,7 +170,7 @@ Never run mutating QA against the production HTTP server or any active/quarantin
 npm run qa:isolated -- --active-db <active.lbug> --fixture-root <disposable-root> --config <qa-config.json> --scenario <calls.json>
 ```
 
-The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }` calls. The runner preflights every required top-level tool, creates an initially absent `qa.lbug`, strips alternate database-path environment variables, verifies `ladybug.activePath` through `sdl.info` before scenario calls, and cleans up only after the owned client/server closes without WAL sidecars. On a child failure it reports the tool name, `isError`, first text, error code, and classification, and retains the QA fixture artifacts for diagnosis. If this runner is unavailable, use read-only calls and edit previews only.
+The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }` calls. The runner preflights every required top-level tool, creates an initially absent `qa.lbug`, strips alternate database-path environment variables, verifies `ladybug.activePath` through `sdl.info` before scenario calls, and cleans up only after the owned client/server closes without WAL sidecars. On any failed run, the runner retains and prints the QA fixture artifacts for diagnosis. When a child tool fails, it reports the tool name, `isError`, first text block, and any present error code and classification. If this runner is unavailable, use read-only calls and edit previews only.
 
 ### 3) Token controls by tool
 
