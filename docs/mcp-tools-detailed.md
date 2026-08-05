@@ -16,6 +16,8 @@ Use `repo.unregister` only for runtime registrations. It requires `confirmRepoId
 
 The `verifying` and `failed` states can remain graph-readable when the current Version has a valid manifest and revision metadata. They do not claim that the latest revision is verified. Continue normal graph reads during `verifying`; SDL-MCP recovers lost verifier wakeups without an agent-triggered refresh. After a permanent failure, `nextBestAction` stops refresh retry loops and directs the operator to a stopped `index --force --safe-rebuild` recovery.
 
+Graph-backed retrieval remains fail-closed when it is unavailable, including when an `indexRefresh` step appeared earlier in the same `sdl.workflow`. The error directs clients to run the refresh in one workflow, wait for completion, and run retrieval in a separate workflow.
+
 ## Symbol search misses
 
 `sdl.symbol.search` searches symbol names; it does not add file-path matches to symbol ranking. When a search has no useful result and its query is clearly path-like (a slash or backslash, a known source extension, or an exact indexed repository-relative path), the response includes one structured `nextBestAction`. Call `sdl.context` with the supplied flat `focusPaths: [query]`. Ordinary symbol-name misses do not receive this path-specific hint.
@@ -26,6 +28,11 @@ The `verifying` and `failed` states can remain graph-readable when the current V
 required `budget.maxTokens` bounds the complete canonical payload. Optional
 `focusPaths`, `focusSymbols`, and `chatMentions` prioritize resolved seeds but do
 not create a hard output boundary.
+
+If an exact indexed `focusPaths` entry has no usable symbols, `sdl.context`
+returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` instead of unrelated context. Its
+recovery calls for an incremental refresh followed by the canonical
+`sdl.context` retry.
 
 The `taskType` selects a deterministic retrieval profile. SDL-MCP chooses the
 available lexical, vector, graph, overlay, feedback, and memory lanes, then

@@ -977,6 +977,11 @@ Unknown root keys and unknown budget keys are rejected.
 
 Flat focus fields are authoritative seed priorities, not output boundaries.
 
+If an exact indexed `focusPaths` entry has no usable symbols, `sdl.context`
+returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` rather than unrelated context. Follow
+its incremental `index.refresh` recovery and retry the canonical `sdl.context`
+request.
+
 Semantic test-case facets add normalized titles, suite names, frameworks, categories, and modifiers to the existing symbol FTS text. A valid facet makes a symbol test evidence for the existing card and hot-path rungs; SDL-MCP does not add a test-only retrieval lane or scan source at query time. When `includeTests: false`, SDL-MCP filters unpinned test candidates identified by a valid facet or a test-like path. Explicit focus pins remain eligible, and `includeTests: true` admits test candidates. Canonical card and context output remains deterministic.
 
 
@@ -1413,7 +1418,7 @@ For `jsonPath` results, strings are returned whole only when their serialized JS
 
 Execute a multi-step workflow of SDL-MCP actions and internal transforms in one round trip.
 
-Use this for runtime execution, data shaping, batch mutations, and reusable multi-step pipelines. Do not use it for context retrieval; route that work to `sdl.context`. Set `includeDiagnostics: true` to include workflow phase timings. Set `onlyFinalResult: true` to omit successful intermediate envelopes while retaining prior failures and skips; `intermediateResultsSuppressed` counts only omitted successes, and `$N` execution still uses the unprojected prior results.
+Use this for runtime execution, data shaping, batch mutations, and reusable multi-step pipelines. Do not use it for context retrieval; route that work to `sdl.context`. Set `includeDiagnostics: true` to include workflow phase timings. If any step has `status: "error"`, the top-level MCP response sets `isError: true` while preserving ordered results and `onError` behavior. Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow; when unavailable, run the refresh, wait for completion, and retrieve in a separate workflow. Set `onlyFinalResult: true` to omit successful intermediate envelopes while retaining prior failures and skips; `intermediateResultsSuppressed` counts only omitted successes, and `$N` execution still uses the unprojected prior results.
 
 ### `sdl.retrieve`
 

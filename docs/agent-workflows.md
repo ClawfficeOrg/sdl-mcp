@@ -170,7 +170,7 @@ Never run mutating QA against the production HTTP server or any active/quarantin
 npm run qa:isolated -- --active-db <active.lbug> --fixture-root <disposable-root> --config <qa-config.json> --scenario <calls.json>
 ```
 
-The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }` calls. The runner creates an initially absent `qa.lbug`, strips alternate database-path environment variables, verifies `ladybug.activePath` through `sdl.info` before scenario calls, and cleans up only after the owned client/server closes without WAL sidecars. Failed runs retain and print the QA fixture path for diagnosis. If this runner is unavailable, use read-only calls and edit previews only.
+The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }` calls. The runner preflights every required top-level tool, creates an initially absent `qa.lbug`, strips alternate database-path environment variables, verifies `ladybug.activePath` through `sdl.info` before scenario calls, and cleans up only after the owned client/server closes without WAL sidecars. On a child failure it reports the tool name, `isError`, first text, error code, and classification, and retains the QA fixture artifacts for diagnosis. If this runner is unavailable, use read-only calls and edit previews only.
 
 ### 3) Token controls by tool
 
@@ -214,6 +214,8 @@ The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }
 - `sdl.workflow` _(Code Mode)_:
   - Set `budget.maxTotalTokens` (or the accepted alias `budget.maxTokens`) and `budget.maxSteps` to bound chain execution. If a later step references a packed-capable result, `sdl.workflow` requests JSON-compatible output for that referenced step automatically.
   - Use `onError: "continue"` (default) to skip only steps that reference failed/skipped prior steps, `"continueAll"` to run later steps even when their dependencies failed, or `"stop"` to halt on first error.
+  - If any step has `status: "error"`, the top-level MCP response sets `isError: true`. Results remain in order, and `onError` still controls the remaining steps.
+  - Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow. When retrieval is unavailable, refresh in one workflow, wait for it to complete, then retrieve in a separate workflow.
   - Set `onlyFinalResult: true` to omit successful intermediate result envelopes. SDL-MCP retains prior failures and skips, and `intermediateResultsSuppressed` counts only the omitted successes.
 
 ### 4) Live buffer workflow
@@ -231,6 +233,7 @@ Stale buffer pushes (version ≤ current) are rejected automatically.
 
 - Always provide `budget.maxTokens`; it limits the complete canonical payload.
 - Pass `focusSymbols`, `focusPaths`, and `chatMentions` as flat fields when known. They are authoritative seed priorities, not output boundaries.
+- An exact indexed `focusPaths` entry with no usable symbols returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` instead of unrelated context. Follow its incremental-refresh recovery, then retry the canonical `sdl.context` request.
 - Use one of the task profiles: `"debug"`, `"review"`, `"implement"`, or `"explain"`. The profile selects expansion direction, depth, test defaults, and preferred evidence rungs.
 - SDL-MCP selects available retrieval lanes automatically and reports `retrieval.level` plus ordered lane availability. Callers do not choose semantic or context modes.
 - Successful responses contain `status`, `taskType`, `retrieval`, `evidence`, `edges`, `omitted`, and `nextActions`. Evidence rungs are `card`, `skeleton`, and `hotPath`; raw windows remain behind `codeNeedWindow`.
@@ -311,6 +314,7 @@ Workflow guidance:
 - If `response.get` rejects a JSON path, choose from the sorted valid keys in the error and retry the suggested call with the same response handle.
 - Set `budget`: `{ maxTotalTokens, maxSteps, maxDurationMs }`; `maxTokens` is accepted as an alias for `maxTotalTokens`.
 - `onError`: `"continue"` (default, skip only dependency-blocked steps), `"continueAll"` (legacy run-every-later-step behavior), or `"stop"` (halt on first error).
+- Any errored step makes the top-level MCP response `isError: true`, without changing ordered results or `onError` behavior. A graph-retrieval error remains fail-closed even after an earlier `indexRefresh`; run the refresh, wait for completion, and retrieve in a separate workflow.
 - The workflow enforces the same context-ladder escalation rules as individual tools.
 - Cross-step ETag caching is automatic — no need to pass ETags manually between steps.
 - Use workflows for multi-step operations: retrieval ladder escalation, runtime execution, data shaping, batch mutations, and CI pipelines. Do not use them merely to wrap a single `sdl.context` call or any other single action.
