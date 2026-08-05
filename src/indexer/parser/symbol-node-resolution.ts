@@ -6,6 +6,7 @@ const NODE_TYPES_BY_SYMBOL_KIND = new Map<string, readonly string[]>([
   ["interface", ["interface_declaration"]],
   ["type", ["type_alias_declaration"]],
   ["method", ["method_definition"]],
+  ["constructor", ["method_definition"]],
   ["variable", ["variable_declaration"]],
 ]);
 

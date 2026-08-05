@@ -78,3 +78,39 @@ describe("resolveSymbolNodeForFingerprint", () => {
     );
   });
 });
+
+it("assigns distinct identities to constructors in different classes", () => {
+  const source = [
+    "class Alpha {",
+    "  constructor(readonly value: string) {}",
+    "}",
+    "class Beta {",
+    "  constructor(readonly count: number) {}",
+    "}",
+  ].join("\n");
+  const filePath = "src/constructors.ts";
+  const adapter = getAdapterForExtension(".ts");
+  assert.ok(adapter);
+  const tree = adapter.parse(source, filePath);
+  assert.ok(tree);
+  const constructors = adapter
+    .extractSymbols(tree, source, filePath)
+    .filter((symbol) => symbol.kind === "constructor");
+  assert.equal(constructors.length, 2);
+
+  const nodes = constructors.map((constructor) =>
+    resolveSymbolNodeForFingerprint(tree, {
+      kind: constructor.kind,
+      name: constructor.name,
+      startLine: constructor.range.startLine,
+      startCol: constructor.range.startCol,
+    }),
+  );
+  assert.ok(nodes[0]);
+  assert.ok(nodes[1]);
+
+  assert.notEqual(
+    generateAstFingerprint(nodes[0]),
+    generateAstFingerprint(nodes[1]),
+  );
+});
