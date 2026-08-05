@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -49,6 +50,13 @@ const REPO_ROOT = join(TEST_ROOT, "repo");
 const DB_PATH = join(TEST_ROOT, "graph.lbug");
 const CONFIG_PATH = join(TEST_ROOT, "sdl.config.json");
 const REPO_ID = "output-schema-wire";
+const GREETING_SOURCE = [
+  "export function greet(name: string): string {",
+  "  const message = \`Hello ${name}\`;",
+  "  return message;",
+  "}",
+  "",
+].join("\n");
 
 interface ToolEnvelope {
   content?: Array<{ type: string; text?: string }>;
@@ -121,13 +129,7 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     mkdirSync(join(REPO_ROOT, "src"), { recursive: true });
     writeFileSync(
       join(REPO_ROOT, "src", "greeting.ts"),
-      [
-        "export function greet(name: string): string {",
-        "  const message = `Hello ${name}`;",
-        "  return message;",
-        "}",
-        "",
-      ].join("\n"),
+      GREETING_SOURCE,
       "utf8",
     );
     writeFileSync(
@@ -514,6 +516,135 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     assert.equal(failure.isError, true);
     GenericStructuredErrorSchema.parse(failure.structuredContent);
     assert.match(responseText(failure), /Response artifact not found/u);
+  });
+
+  it("marks an invalid indexed fileWrite workflow step as an MCP error", async () => {
+    try {
+      const response = (await client.callTool({
+        name: "sdl.workflow",
+        arguments: {
+          repoId: REPO_ID,
+          steps: [
+            {
+              fn: "fileWrite",
+              args: {
+                filePath: "src/greeting.ts",
+                content: "export function greet(",
+                createBackup: false,
+              },
+            },
+          ],
+        },
+      })) as ToolEnvelope;
+      const results = (
+        response.structuredContent as {
+          results?: Array<{ status?: string; result?: unknown }>;
+        }
+      )?.results;
+
+      assert.equal(response.isError, true);
+      assert.ok(results?.some((result) => result.status === "error"));
+    } finally {
+      const restore = (await client.callTool({
+        name: "sdl.file.write",
+        arguments: {
+          repoId: REPO_ID,
+          filePath: "src/greeting.ts",
+          content: GREETING_SOURCE,
+          createBackup: false,
+        },
+      })) as ToolEnvelope;
+      assert.notEqual(restore.isError, true);
+    }
+  });
+
+  it("marks a stale searchEditApply workflow step as an MCP error", async () => {
+    const interveningSource = GREETING_SOURCE.replace("Hello", "Intervening");
+
+    try {
+      const response = (await client.callTool({
+        name: "sdl.workflow",
+        arguments: {
+          repoId: REPO_ID,
+          steps: [
+            {
+              fn: "searchEditPreview",
+              args: {
+                targeting: "text",
+                query: { literal: "Hello", replacement: "Hi", global: true },
+                filters: { include: ["src/greeting.ts"] },
+                editMode: "replacePattern",
+                responseMode: "inline",
+                createBackup: false,
+              },
+            },
+            {
+              fn: "fileWrite",
+              args: {
+                filePath: "src/greeting.ts",
+                content: interveningSource,
+                createBackup: false,
+              },
+            },
+            {
+              fn: "searchEditApply",
+              args: { planHandle: "$0.planHandle" },
+            },
+          ],
+        },
+      })) as ToolEnvelope;
+      const results = (
+        response.structuredContent as {
+          results?: Array<{ status?: string; result?: unknown }>;
+        }
+      )?.results;
+
+      assert.equal(response.isError, true);
+      assert.ok(results?.some((result) => result.status === "error"));
+      assert.equal(
+        readFileSync(join(REPO_ROOT, "src", "greeting.ts"), "utf8"),
+        interveningSource,
+      );
+    } finally {
+      const restore = (await client.callTool({
+        name: "sdl.file.write",
+        arguments: {
+          repoId: REPO_ID,
+          filePath: "src/greeting.ts",
+          content: GREETING_SOURCE,
+          createBackup: false,
+        },
+      })) as ToolEnvelope;
+      assert.notEqual(restore.isError, true);
+    }
+  });
+
+  it("marks a nonzero runtimeExecute workflow step as an MCP error", async () => {
+    const response = (await client.callTool({
+      name: "sdl.workflow",
+      arguments: {
+        repoId: REPO_ID,
+        steps: [
+          {
+            fn: "runtimeExecute",
+            args: {
+              runtime: "node",
+              args: ["-e", "process.exit(7)"],
+              outputMode: "minimal",
+              persistOutput: false,
+            },
+          },
+        ],
+      },
+    })) as ToolEnvelope;
+    const results = (
+      response.structuredContent as {
+        results?: Array<{ status?: string; result?: unknown }>;
+      }
+    )?.results;
+
+    assert.equal(response.isError, true);
+    assert.ok(results?.some((result) => result.status === "error"));
   });
 
   it("returns the exact static no-op checkpoint payload through the SDK wire", async () => {

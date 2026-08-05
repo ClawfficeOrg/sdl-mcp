@@ -228,6 +228,36 @@ describe("visible tool output", () => {
     assert.doesNotMatch(envelope.content[0]?.text ?? "", /etag-sym|etagCache/);
   });
 
+  it("marks workflows with failed steps as MCP errors without dropping results", () => {
+    const failedResults = [
+      { fn: "fileWrite", status: "error", result: { message: "invalid syntax" } },
+      { fn: "searchEditApply", status: "skipped" },
+    ];
+    const failedEnvelope = buildToolResponseEnvelope(
+      { results: failedResults },
+      null,
+      "",
+      "sdl.workflow",
+    );
+
+    assert.equal(failedEnvelope.isError, true);
+    assert.deepEqual(failedEnvelope.structuredContent?.results, failedResults);
+
+    const successfulEnvelope = buildToolResponseEnvelope(
+      {
+        results: [
+          { fn: "repoStatus", status: "ok", result: { repoId: "repo" } },
+          { fn: "searchEditApply", status: "skipped" },
+        ],
+      },
+      null,
+      "",
+      "sdl.workflow",
+    );
+
+    assert.equal(successfulEnvelope.isError, undefined);
+  });
+
   it("keeps requested diagnostics in structured content without adding them to visible text", () => {
     const envelope = buildToolResponseEnvelope(
       {

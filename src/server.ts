@@ -476,7 +476,17 @@ export function buildToolResponseEnvelope(
 
   const isError =
     isRecordValue(primaryPayload)
-    && (primaryPayload.status === "failure" || primaryPayload.status === "denied");
+    && (
+      primaryPayload.status === "failure"
+      || primaryPayload.status === "denied"
+      || (
+        toolName === "sdl.workflow"
+        && Array.isArray(primaryPayload.results)
+        && primaryPayload.results.some(
+          (result) => isRecordValue(result) && result.status === "error",
+        )
+      )
+    );
 
   return visibleFooterText
     ? {
