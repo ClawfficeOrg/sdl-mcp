@@ -82,6 +82,12 @@ interface FixtureSetupResults {
   indexRefresh: unknown;
 }
 
+interface FixtureToolCall {
+  tool: string;
+  args: unknown;
+  expectError?: boolean;
+}
+
 interface Leg {
   toolsCanonical: string;
   results: Map<string, string[]>;
@@ -228,13 +234,33 @@ async function callToolStrict(
   client: Client,
   name: string,
   args: unknown,
+  expectError = false,
 ): Promise<unknown> {
   const response = await client.callTool({
     name,
     arguments: args as Record<string, unknown>,
   });
-  if ((response as { isError?: boolean }).isError) {
-    assert.fail(`${name} failed: ${canonical(response)}`);
+  const structuredContent = (
+    response as {
+      structuredContent?: {
+        isError?: boolean;
+        error?: { code?: unknown };
+      };
+    }
+  ).structuredContent;
+  const isError =
+    (response as { isError?: boolean }).isError === true
+    || structuredContent?.isError === true;
+  if (isError !== expectError) {
+    assert.fail(
+      `${name} ${expectError ? "did not return the expected error" : "failed"}: ${canonical(response)}`,
+    );
+  }
+  if (expectError) {
+    assert.equal(
+      structuredContent?.error?.code,
+      "CONTEXT_FOCUS_PATH_UNAVAILABLE",
+    );
   }
   return response;
 }
@@ -303,7 +329,7 @@ async function runLeg(repeats: number, options: { setup: boolean }): Promise<Leg
     );
     const results = new Map<string, string[]>();
 
-    for (const [ordinal, call] of fixtures.toolCalls.entries()) {
+    for (const [ordinal, call] of (fixtures.toolCalls as FixtureToolCall[]).entries()) {
       const args = materializeArgs(call.args);
       const key = callKey(call.tool, args, ordinal);
       const runs: string[] = [];
@@ -312,7 +338,12 @@ async function runLeg(repeats: number, options: { setup: boolean }): Promise<Leg
           ? args as Record<string, unknown>
           : undefined;
       for (let i = 0; i < repeats; i++) {
-        const response = await callToolStrict(server.client, call.tool, args);
+        const response = await callToolStrict(
+          server.client,
+          call.tool,
+          args,
+          call.expectError,
+        );
         if (
           call.tool === "sdl.action.search"
           && argsObject?.query === "*"

@@ -152,6 +152,51 @@ describe("context-response-projection", () => {
     assert.equal(projected.nextOffset, 1);
   });
 
+  it("preserves focused-path recovery details for context errors", () => {
+    const focusPath = "scripts/run-isolated-mutating-qa.mjs";
+    const args = {
+      repoId: "repo",
+      taskType: "explain",
+      taskText: "Explain parseArgs",
+      budget: { maxTokens: 1_000 },
+      focusPaths: [focusPath],
+      focusSymbols: ["parseArgs"],
+    };
+    const completeError = {
+      isError: true,
+      error: {
+        code: "CONTEXT_FOCUS_PATH_UNAVAILABLE",
+        message: `Exact focus path is indexed but has no available symbols: ${focusPath}`,
+        recovery: [
+          { id: "index.refresh", args: { mode: "incremental" } },
+          { id: "context", args },
+        ],
+      },
+    };
+
+    const projected = projectToolResultForModelContent(
+      "sdl.context",
+      completeError,
+      args,
+    ) as typeof completeError;
+
+    assert.equal(projected.error.code, "CONTEXT_FOCUS_PATH_UNAVAILABLE");
+    assert.match(projected.error.message, new RegExp(focusPath));
+    assert.deepEqual(projected.error.recovery, [
+      { id: "index.refresh", args: { mode: "incremental" } },
+      {
+        id: "context",
+        args: {
+          taskType: "explain",
+          taskText: "Explain parseArgs",
+          budget: { maxTokens: 1_000 },
+          focusPaths: [focusPath],
+          focusSymbols: ["parseArgs"],
+        },
+      },
+    ]);
+  });
+
   it("keeps validation errors out of success-only projectors", () => {
     const error = {
       error: {

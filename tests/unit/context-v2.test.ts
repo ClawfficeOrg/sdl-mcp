@@ -10,6 +10,7 @@ import {
   buildRetrievalState,
   ContextEngineV2,
   type ContextEngineV2Dependencies,
+  FocusPathUnavailableError,
   derivedTierOneMentionsForRequest,
   focusPathTierZeroCapacity,
   identifiersForContextRequest,
@@ -1811,6 +1812,49 @@ describe("ContextEngineV2 orchestration", () => {
       ["repo.status", "context"],
     );
     assert.deepEqual(result.error.recovery[1]?.args, request);
+  });
+
+  it("returns a focused recovery when an exact file has no symbols", async () => {
+    const focusPath = "scripts/run-isolated-mutating-qa.mjs";
+    const request = {
+      repoId: "repo",
+      taskType: "explain" as const,
+      taskText: "Explain parseArgs",
+      budget: { maxTokens: 1_000 },
+      focusPaths: [focusPath],
+      focusSymbols: ["parseArgs"],
+    };
+    let expanded = false;
+    let hydrated = false;
+    const engine = testContextEngine({
+      retrieve: async () => {
+        throw new FocusPathUnavailableError([focusPath]);
+      },
+      expand: async () => {
+        expanded = true;
+        throw new Error("candidate expansion must not run");
+      },
+      hydrate: async () => {
+        hydrated = true;
+        throw new Error("hydration must not run");
+      },
+    });
+
+    const result = await engine.buildContext(request);
+
+    assert.deepEqual(result, {
+      isError: true,
+      error: {
+        code: "CONTEXT_FOCUS_PATH_UNAVAILABLE",
+        message: `Exact focus path is indexed but has no available symbols: ${focusPath}`,
+        recovery: [
+          { id: "index.refresh", args: { mode: "incremental" } },
+          { id: "context", args: request },
+        ],
+      },
+    });
+    assert.equal(expanded, false);
+    assert.equal(hydrated, false);
   });
 
   it("maps the exact graph availability failure to recovery", async () => {

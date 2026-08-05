@@ -115,7 +115,9 @@ export interface ContextPayload {
 export interface ContextRecoveryError {
   isError: true;
   error: {
-    code: "CONTEXT_RETRIEVAL_INSUFFICIENT";
+    code:
+      | "CONTEXT_RETRIEVAL_INSUFFICIENT"
+      | "CONTEXT_FOCUS_PATH_UNAVAILABLE";
     message: string;
     recovery: LogicalAction[];
   };

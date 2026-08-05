@@ -85,6 +85,22 @@
       }
     },
     {
+      "tool": "sdl.context",
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskType": "explain",
+        "taskText": "Explain the unavailable exact focus file",
+        "budget": {
+          "maxTokens": 1000
+        },
+        "focusPaths": ["src/javascript/no-symbols.js"],
+        "refsMode": "off",
+        "responseMode": "inline",
+        "wireFormat": "json"
+      }
+    },
+    {
       "tool": "sdl.repo.status",
       "args": {
         "repoId": "{REPO_ID}",

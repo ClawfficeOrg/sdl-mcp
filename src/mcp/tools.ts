@@ -2817,6 +2817,7 @@ const AgentContextPayloadSchema = z.object({
 const ContextRecoveryErrorSchema = z.object({
   code: z.enum([
     "CONTEXT_RETRIEVAL_INSUFFICIENT",
+    "CONTEXT_FOCUS_PATH_UNAVAILABLE",
     "CONTEXT_RETRIEVAL_BACKEND_FAILED",
   ]),
   message: z.string(),

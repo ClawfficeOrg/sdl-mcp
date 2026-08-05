@@ -116,9 +116,32 @@ describe("resolveFocusPaths", () => {
       exactFileSymbolHits: [
         { path: "src/durable.ts", symbolId: "durable-symbol" },
       ],
+      unavailableExactFiles: [],
       directoryPrefixes: [],
     });
     assert.equal(prefixCalls, 0);
+  });
+
+  it("rejects a durable exact file without symbols", async () => {
+    const { snapshot, file } = durableFixture("scripts/run-isolated-mutating-qa.mjs");
+
+    const result = await resolveFocusPaths(
+      {} as Connection,
+      "repo",
+      ["scripts/run-isolated-mutating-qa.mjs"],
+      snapshot,
+      {
+        getFileByRepoPath: async () => file,
+        getFilesByPrefix: async () => [],
+        getSymbolsByFile: async () => [],
+      },
+    );
+
+    assert.deepEqual(result, {
+      exactFileSymbolHits: [],
+      unavailableExactFiles: ["scripts/run-isolated-mutating-qa.mjs"],
+      directoryPrefixes: [],
+    });
   });
 
   it("classifies a durable directory without loading its symbols", async () => {
@@ -142,6 +165,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: ["tests"],
     });
     assert.equal(symbolCalls, 0);
@@ -172,6 +196,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: [],
     });
     assert.equal(symbolCalls, 0);
@@ -197,6 +222,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: ["src/foo"],
     });
   });
@@ -253,6 +279,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: ["src/foo"],
     });
     assert.equal(symbolCalls, 0);
@@ -275,6 +302,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: [],
     });
   });
@@ -304,6 +332,7 @@ describe("resolveFocusPaths", () => {
       exactFileSymbolHits: [
         { path: "src/overlay-focus.ts", symbolId: "overlay-focus" },
       ],
+      unavailableExactFiles: [],
       directoryPrefixes: [],
     });
   });
@@ -329,6 +358,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: ["src"],
     });
     assert.equal(symbolCalls, 0);
@@ -356,6 +386,7 @@ describe("resolveFocusPaths", () => {
 
     assert.deepEqual(result, {
       exactFileSymbolHits: [],
+      unavailableExactFiles: [],
       directoryPrefixes: [],
     });
     assert.equal(symbolCalls, 0);

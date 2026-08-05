@@ -192,6 +192,23 @@ function canonicalRetryArgs(
   };
 }
 
+function focusPathUnavailableError(
+  request: ContextV2Request,
+  paths: readonly string[],
+): ContextRecoveryError {
+  return {
+    isError: true,
+    error: {
+      code: "CONTEXT_FOCUS_PATH_UNAVAILABLE",
+      message: `Exact focus path is indexed but has no available symbols: ${paths.join(", ")}`,
+      recovery: [
+        catalogAction("index.refresh", { mode: "incremental" }),
+        catalogAction("context", canonicalRetryArgs(request)),
+      ],
+    },
+  };
+}
+
 function retrievalBackendError(
   request: ContextV2Request,
 ): ContextRetrievalBackendError {
@@ -477,7 +494,19 @@ export function resolveOverlayMentionSymbolIds(
 
 interface FocusPathResolution {
   exactFileSymbolHits: FocusPathSymbolHit[];
+  unavailableExactFiles: string[];
   directoryPrefixes: string[];
+}
+
+export class FocusPathUnavailableError extends Error {
+  readonly paths: readonly string[];
+
+  constructor(paths: readonly string[]) {
+    const sortedPaths = [...paths].sort();
+    super(`Exact focus paths are unavailable: ${sortedPaths.join(", ")}`);
+    this.name = "FocusPathUnavailableError";
+    this.paths = Object.freeze(sortedPaths);
+  }
 }
 
 export async function resolveFocusPaths(
@@ -547,6 +576,7 @@ export async function resolveFocusPaths(
   }
 
   const exactFileSymbolHits: FocusPathSymbolHit[] = [];
+  const unavailableExactFiles: string[] = [];
   for (const file of [...exactFiles.values()].sort(
     (left, right) =>
       left.relPath.localeCompare(right.relPath) ||
@@ -561,6 +591,10 @@ export async function resolveFocusPaths(
     )
       .filter((symbol) => symbol.external !== true)
       .sort(compareSymbolRows);
+    if (symbols.length === 0) {
+      unavailableExactFiles.push(file.relPath);
+      continue;
+    }
     for (const symbol of symbols) {
       exactFileSymbolHits.push({
         path: file.relPath,
@@ -571,6 +605,7 @@ export async function resolveFocusPaths(
 
   return {
     exactFileSymbolHits,
+    unavailableExactFiles,
     directoryPrefixes: [...directoryPrefixes].sort(),
   };
 }
@@ -885,6 +920,12 @@ async function defaultRetrieve(
       overlaySnapshot,
     ),
   ]);
+
+  if (pathResolution.unavailableExactFiles.length > 0) {
+    throw new FocusPathUnavailableError(
+      pathResolution.unavailableExactFiles,
+    );
+  }
 
   const explicitTier0Ids = uniqueStrings(
     [
@@ -1223,6 +1264,9 @@ export class ContextEngineV2 {
         },
       );
     } catch (error) {
+      if (error instanceof FocusPathUnavailableError) {
+        return focusPathUnavailableError(request, error.paths);
+      }
       if (error instanceof GraphRetrievalUnavailableError) {
         return recoveryError();
       }
