@@ -18,7 +18,10 @@ import {
 } from "../../dist/gateway/schemas.js";
 import { FileGatewayRequestSchema } from "../../dist/mcp/tools/file-gateway.js";
 import { buildFlatToolDescriptors } from "../../dist/mcp/tools/tool-descriptors.js";
-import { classifyPublicGraphRetrieval } from "../../dist/mcp/public-graph-retrieval-admission.js";
+import {
+  classifyPublicGraphRetrieval,
+  workflowHasRefreshBeforeGraph,
+} from "../../dist/mcp/public-graph-retrieval-admission.js";
 
 const REPO_ID = "repo-admission-contract";
 
@@ -508,6 +511,33 @@ describe("public graph retrieval admission classifier", () => {
       }),
       expected(true),
     );
+  });
+
+  it("identifies only workflows that refresh before graph retrieval", () => {
+    for (const refreshArgs of [{ mode: "incremental" }, { async: true }]) {
+      assert.equal(
+        workflowHasRefreshBeforeGraph({
+          steps: [
+            { fn: "indexRefresh", args: refreshArgs },
+            { fn: "symbolSearch", args: { query: "alpha" } },
+          ],
+        }),
+        true,
+      );
+    }
+
+    for (const args of [
+      {
+        steps: [
+          { fn: "symbolSearch", args: { query: "alpha" } },
+          { fn: "indexRefresh", args: { mode: "incremental" } },
+        ],
+      },
+      { steps: [{ fn: "indexRefresh", args: { mode: "incremental" } }] },
+      { steps: [{ fn: "symbolSearch", args: { query: "alpha" } }] },
+    ]) {
+      assert.equal(workflowHasRefreshBeforeGraph(args), false);
+    }
   });
 
   it("excludes every dry-run workflow before inspecting graph step names", () => {

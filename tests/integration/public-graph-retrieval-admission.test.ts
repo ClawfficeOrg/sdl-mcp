@@ -96,6 +96,18 @@ function assertUnavailable(response: ErrorEnvelope, label: string): void {
   );
 }
 
+function assertSplitWorkflowRecovery(
+  response: ErrorEnvelope,
+  label: string,
+): void {
+  assertUnavailable(response, label);
+  assert.match(
+    response.structuredContent?.error?.message ?? "",
+    /Run indexRefresh in one sdl\.workflow, wait for it to complete, then run graph retrieval in a second sdl\.workflow\./,
+    label,
+  );
+}
+
 function assertRepositoryNotFound(
   response: ErrorEnvelope,
   repoId: string,
@@ -568,6 +580,13 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
     await seedRepo("verified", "verified");
     await seedRepo("verifying", "verifying");
     await seedRepo("failed", "failed");
+    await seedRepo("failed-degraded", "failed");
+    await withWriteConn((conn) =>
+      ladybugDb.deleteGraphIntegrityManifestInTransaction(
+        conn,
+        "failed-degraded",
+      ),
+    );
     await seedRepo("unknown", "unknown");
     await seedRepo("missing-manifest", "verified");
     await withWriteConn((conn) =>
@@ -626,6 +645,70 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
       const response = (await client.callTool(call)) as ErrorEnvelope;
       assertUnavailable(response, `${call.name}:${String(call.arguments.action ?? call.arguments.op ?? "flat")}`);
     }
+  });
+
+  it("rejects refresh-before-graph workflows with split recovery guidance", async () => {
+    let dispatched = 0;
+    server.registerPostDispatchHook(async (toolName, args) => {
+      if (
+        toolName === "sdl.workflow"
+        && typeof args === "object"
+        && args !== null
+        && ["unknown", "failed-degraded"].includes(
+          String((args as { repoId?: unknown }).repoId),
+        )
+      ) {
+        dispatched += 1;
+      }
+    });
+
+    for (const repoId of ["unknown", "failed-degraded"]) {
+      for (const [label, refreshArgs] of [
+        ["synchronous", { mode: "incremental" }],
+        ["asynchronous", { mode: "incremental", async: true }],
+      ] as const) {
+        const response = (await client.callTool({
+          name: "sdl.workflow",
+          arguments: {
+            repoId,
+            steps: [
+              { fn: "indexRefresh", args: refreshArgs },
+              { fn: "symbolSearch", args: { query: "alpha" } },
+            ],
+          },
+        })) as ErrorEnvelope;
+        assertSplitWorkflowRecovery(response, `${repoId}:${label}`);
+      }
+    }
+
+    assert.equal(dispatched, 0, "rejected workflows reached handler dispatch");
+  });
+
+  it("keeps graph-before-refresh recovery unchanged", async () => {
+    const graphOnly = (await client.callTool({
+      name: "sdl.workflow",
+      arguments: {
+        repoId: "unknown",
+        steps: [{ fn: "symbolSearch", args: { query: "alpha" } }],
+      },
+    })) as ErrorEnvelope;
+    const graphBeforeRefresh = (await client.callTool({
+      name: "sdl.workflow",
+      arguments: {
+        repoId: "unknown",
+        steps: [
+          { fn: "symbolSearch", args: { query: "alpha" } },
+          { fn: "indexRefresh", args: { mode: "incremental" } },
+        ],
+      },
+    })) as ErrorEnvelope;
+
+    assertUnavailable(graphOnly, "graph only");
+    assertUnavailable(graphBeforeRefresh, "graph before refresh");
+    assert.equal(
+      graphBeforeRefresh.structuredContent?.error?.message,
+      graphOnly.structuredContent?.error?.message,
+    );
   });
 
   it("preserves handler-owned NOT_FOUND responses for unregistered repositories", async () => {

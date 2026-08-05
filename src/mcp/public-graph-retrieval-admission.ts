@@ -61,6 +61,11 @@ const GRAPH_WORKFLOW_STEPS = new Set([
   "repoOverview",
 ]);
 
+const INDEX_REFRESH_WORKFLOW_STEPS = new Set([
+  "index.refresh",
+  "indexRefresh",
+]);
+
 const CONDITIONAL_FLAT_TOOLS = new Set(["sdl.slice.refresh"]);
 const CONDITIONAL_GATEWAY_ACTIONS = new Set(["slice.refresh"]);
 const CONDITIONAL_WORKFLOW_STEPS = new Set([
@@ -85,6 +90,24 @@ function hasWorkflowStep(
       typeof record?.fn === "string" && admittedSteps.has(record.fn)
     );
   });
+}
+
+/**
+ * Detect an invalid combined recovery workflow without changing its admission.
+ * Graph-before-refresh remains the primary failure and keeps existing guidance.
+ */
+export function workflowHasRefreshBeforeGraph(args: unknown): boolean {
+  const request = asRecord(args);
+  if (!Array.isArray(request?.steps)) return false;
+
+  let refreshSeen = false;
+  for (const step of request.steps) {
+    const fn = asRecord(step)?.fn;
+    if (typeof fn !== "string") continue;
+    if (GRAPH_WORKFLOW_STEPS.has(fn)) return refreshSeen;
+    if (INDEX_REFRESH_WORKFLOW_STEPS.has(fn)) refreshSeen = true;
+  }
+  return false;
 }
 
 /** Exact public-surface allowlist; central calls never infer a repository. */

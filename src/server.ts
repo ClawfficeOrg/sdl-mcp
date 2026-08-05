@@ -8,7 +8,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { getLadybugConn } from "./db/ladybug.js";
-import { IndexError } from "./domain/errors.js";
+import {
+  GraphRetrievalUnavailableError,
+  IndexError,
+} from "./domain/errors.js";
 import { errorToMcpResponse } from "./mcp/errors.js";
 import {
   runIndexRefreshAdmission,
@@ -58,7 +61,10 @@ import {
 } from "./mcp/timing-diagnostics.js";
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "./mcp/server-instructions.js";
 import { markActionArgsParsed } from "./gateway/dispatch-spine.js";
-import { classifyPublicGraphRetrieval } from "./mcp/public-graph-retrieval-admission.js";
+import {
+  classifyPublicGraphRetrieval,
+  workflowHasRefreshBeforeGraph,
+} from "./mcp/public-graph-retrieval-admission.js";
 import { assertGraphRetrievalAvailable } from "./services/graph-retrieval-availability.js";
 import { GATEWAY_ACTION_DEFINITIONS } from "./code-mode/action-catalog.js";
 import {
@@ -733,10 +739,23 @@ export class MCPServer {
                   );
                 }
                 const conn = await getLadybugConn();
-                await assertGraphRetrievalAvailable(
-                  conn,
-                  graphAdmission.repoId,
-                );
+                try {
+                  await assertGraphRetrievalAvailable(
+                    conn,
+                    graphAdmission.repoId,
+                  );
+                } catch (error) {
+                  if (
+                    error instanceof GraphRetrievalUnavailableError
+                    && toolName === "sdl.workflow"
+                    && workflowHasRefreshBeforeGraph(parsedArgs)
+                  ) {
+                    throw new GraphRetrievalUnavailableError(
+                      `${error.message} Run indexRefresh in one sdl.workflow, wait for it to complete, then run graph retrieval in a second sdl.workflow.`,
+                    );
+                  }
+                  throw error;
+                }
               }
               if (toolContext.sessionId && isRecordValue(parsedArgs)) {
                 const referencedSymbolIds =
