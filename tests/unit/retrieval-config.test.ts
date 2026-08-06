@@ -122,6 +122,58 @@ describe("SemanticRetrievalConfigSchema", () => {
     ]);
   });
 
+  for (const testCase of [
+    {
+      name: "rejects a partial Jina override that collides with the effective Nomic default",
+      model: "jina-embeddings-v2-base-code",
+      indexName: "symbol_vec_nomic_embed_v15",
+      conflictingModel: "nomic-embed-text-v1.5",
+    },
+    {
+      name: "rejects a partial Nomic override that collides with the effective Jina default",
+      model: "nomic-embed-text-v1.5",
+      indexName: "symbol_vec_jina_code_v2",
+      conflictingModel: "jina-embeddings-v2-base-code",
+    },
+  ] as const) {
+    it(testCase.name, () => {
+      const result = SemanticRetrievalConfigSchema.safeParse({
+        vector: {
+          indexes: {
+            [testCase.model]: { indexName: testCase.indexName },
+          },
+        },
+      });
+
+      assert.equal(result.success, false);
+      if (result.success) return;
+      assert.deepStrictEqual(result.error.issues, [
+        {
+          code: "custom",
+          message: `Vector index name '${testCase.indexName}' is also configured for model '${testCase.conflictingModel}'`,
+          path: ["vector", "indexes", testCase.model, "indexName"],
+        },
+      ]);
+    });
+  }
+
+  it("accepts a unique one-sided vector index override", () => {
+    const result = SemanticRetrievalConfigSchema.parse({
+      vector: {
+        indexes: {
+          "jina-embeddings-v2-base-code": {
+            indexName: "custom_jina_hnsw",
+          },
+        },
+      },
+    });
+
+    assert.strictEqual(
+      result.vector.indexes["jina-embeddings-v2-base-code"]?.indexName,
+      "custom_jina_hnsw",
+    );
+  });
+
   it("accepts unique custom vector index names", () => {
     const result = SemanticRetrievalConfigSchema.parse({
       vector: {

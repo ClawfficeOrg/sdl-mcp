@@ -1,4 +1,5 @@
 ﻿import { z } from "zod";
+import { EMBEDDING_MODELS } from "../retrieval/model-mapping.js";
 import { RUNTIME_NAMES } from "../runtime/runtimes.js";
 import {
   MAX_FILE_BYTES,
@@ -474,6 +475,13 @@ export const SUPPORTED_EMBEDDING_MODELS = [
   "nomic-embed-text-v1.5",
 ] as const;
 
+const DEFAULT_SEMANTIC_RETRIEVAL_VECTOR_INDEXES = Object.fromEntries(
+  SUPPORTED_EMBEDDING_MODELS.map((model) => [
+    model,
+    { indexName: EMBEDDING_MODELS[model].indexName },
+  ]),
+);
+
 /**
  * Semantic retrieval configuration for hybrid FTS + vector search.
  * Controls the new hybrid retrieval pipeline introduced in v0.10.
@@ -498,25 +506,29 @@ export const SemanticRetrievalVectorConfigSchema = z
     /** Query-time ef_search for HNSW similarity queries. @deprecated Use efs for query-time only. */
     efs: z.number().int().min(1).default(200),
     /** Per-model HNSW index config keyed by model name. */
-    indexes: z.record(z.string(), SemanticRetrievalVectorIndexSchema).default({
-      "jina-embeddings-v2-base-code": {
-        indexName: "symbol_vec_jina_code_v2",
-      },
-      "nomic-embed-text-v1.5": {
-        indexName: "symbol_vec_nomic_embed_v15",
-      },
-    }),
+    indexes: z
+      .record(z.string(), SemanticRetrievalVectorIndexSchema)
+      .default(DEFAULT_SEMANTIC_RETRIEVAL_VECTOR_INDEXES),
   })
   .superRefine(({ indexes }, ctx) => {
+    const effectiveIndexes = {
+      ...DEFAULT_SEMANTIC_RETRIEVAL_VECTOR_INDEXES,
+      ...indexes,
+    };
+    const explicitlyConfiguredModels = new Set(Object.keys(indexes));
     const modelByIndexName = new Map<string, string>();
-    for (const [model, { indexName }] of Object.entries(indexes)) {
+    for (const [model, { indexName }] of Object.entries(effectiveIndexes)) {
       if (indexName.length === 0) continue;
       const existingModel = modelByIndexName.get(indexName);
       if (existingModel !== undefined) {
+        const issueModel = explicitlyConfiguredModels.has(model)
+          ? model
+          : existingModel;
+        const conflictingModel = issueModel === model ? existingModel : model;
         ctx.addIssue({
           code: "custom",
-          message: `Vector index name '${indexName}' is also configured for model '${existingModel}'`,
-          path: ["indexes", model, "indexName"],
+          message: `Vector index name '${indexName}' is also configured for model '${conflictingModel}'`,
+          path: ["indexes", issueModel, "indexName"],
         });
         continue;
       }
