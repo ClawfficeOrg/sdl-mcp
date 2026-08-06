@@ -41,10 +41,10 @@ import {
   type RuntimeIdentity,
 } from "../../util/runtime-identity.js";
 import { normalizePath } from "../../util/paths.js";
+import type { ReopenedJinaHnswFinalizationResult } from "../../indexer/jina-hnsw-finalization.js";
 import {
   runSafeRebuild,
   validateSafeRebuildRequest,
-  type ReopenedHnswCanaryResult,
 } from "./index-safe-rebuild.js";
 
 // ---------------------------------------------------------------------------
@@ -1794,10 +1794,11 @@ export function formatIndexTimingLines(
 }
 
 export function formatReopenedHnswCanaryLines(
-  canary: ReopenedHnswCanaryResult,
+  canary: ReopenedJinaHnswFinalizationResult,
 ): string[] {
   return [
-    `  Post-reopen Jina HNSW build: ${canary.model} (${canary.indexName}, efc=${canary.efc})`,
+    `  Post-reopen Jina HNSW finalization: ${canary.outcome}`,
+    `    ${canary.model} (${canary.indexName}, efc=${canary.efc})`,
     `    create=${canary.createMs}ms query=${canary.queryMs}ms checkpoint=${canary.checkpointMs}ms`,
   ];
 }

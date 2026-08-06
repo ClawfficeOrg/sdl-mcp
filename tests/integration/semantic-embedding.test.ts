@@ -17,7 +17,10 @@ import {
 } from "../../dist/indexer/embeddings.js";
 import { refreshFileSummaryEmbeddings } from "../../dist/indexer/file-summary-embeddings.js";
 import { AppConfigSchema } from "../../dist/config/types.js";
-import { validateColdReopenedJinaHnsw } from "../../dist/cli/commands/index-safe-rebuild.js";
+import {
+  resolveConfiguredJinaHnswSpec,
+  validateReopenedJinaHnsw,
+} from "../../dist/indexer/jina-hnsw-finalization.js";
 import {
   readDeterministicSymbolVectorProbe,
   readRepoSymbolVectorProbe,
@@ -799,7 +802,9 @@ describe("Semantic Embedding Pipeline", () => {
         retrieval: { vector: { enabled: true } },
       },
     });
-    assert.ok((await validateColdReopenedJinaHnsw(config)) >= 0);
+    const spec = resolveConfiguredJinaHnswSpec(config);
+    assert.ok(spec);
+    assert.ok((await validateReopenedJinaHnsw({ spec, probe })) >= 0);
 
     const unrelated = new Array<number>(768).fill(0);
     unrelated[767] = 1;

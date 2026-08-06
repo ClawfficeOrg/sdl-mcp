@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { Connection } from "kuzu";
 import type { AppConfig } from "../../config/types.js";
-import { resolveSemanticEmbeddingModelPlan } from "../../config/semantic-embedding-model-plan.js";
 import {
   closeAndPublishSafeRebuildLadybugDb,
   closeLadybugDb,
@@ -30,10 +29,6 @@ import {
   readSafeRebuildSymbolPointLookupSample,
   validateSafeRebuildCanonicalStrings,
 } from "../../db/ladybug-safe-rebuild.js";
-import {
-  readDeterministicSymbolVectorProbe,
-  readSymbolNumericVector,
-} from "../../db/ladybug-symbol-embeddings.js";
 import { SafeRebuildValidationError } from "../../domain/errors.js";
 import {
   disableDerivedRefreshQueue,
@@ -45,8 +40,12 @@ import {
   type IndexProgress,
   type IndexResult,
 } from "../../indexer/indexer.js";
-import { runHnswRebuildCycle } from "../../indexer/hnsw-rebuild-cycle.js";
-import { resolveConfiguredJinaHnswSpec } from "../../indexer/jina-hnsw-finalization.js";
+import {
+  prepareReopenedJinaHnsw,
+  resolveConfiguredJinaHnswSpec,
+  validateReopenedJinaHnsw,
+  type ReopenedJinaHnswFinalizationResult,
+} from "../../indexer/jina-hnsw-finalization.js";
 import {
   waitForGraphIntegrityVerifier,
 } from "../../indexer/provider-first/background-graph-integrity-verifier.js";
@@ -56,12 +55,9 @@ import {
   createGraphIntegrityExpectationFromManifest,
 } from "../../indexer/provider-first/persisted-graph-integrity.js";
 import {
-  createVectorIndex,
   indexExistsForTable,
-  queryVectorIndexProbe,
   showIndexesStrict,
 } from "../../retrieval/index-lifecycle.js";
-import { EMBEDDING_MODELS } from "../../retrieval/model-mapping.js";
 import { buildFtsStoredProcQuery } from "../../retrieval/orchestrator.js";
 import { loadConfiguredAdapterPlugins } from "../../startup/plugins.js";
 import { getCurrentTimestamp } from "../../util/time.js";
@@ -74,7 +70,6 @@ import { normalizePath } from "../../util/paths.js";
 
 const EXTERNAL_OWNER_WARNING =
   "Precondition: no unsupported external LadybugDB owner may have the active database open; only SDL-MCP pidfile owners can be detected automatically.";
-const JINA_CODE_MODEL = "jina-embeddings-v2-base-code";
 
 export interface SafeRebuildRequest {
   options: IndexOptions;
@@ -100,16 +95,7 @@ export interface SafeRebuildResult {
   targetGraphDbPath: string;
   repoResults: Array<{ repoId: string; stats: IndexResult }>;
   validation: SafeRebuildCandidateValidation;
-  reopenedHnswCanary?: ReopenedHnswCanaryResult;
-}
-
-export interface ReopenedHnswCanaryResult {
-  model: string;
-  indexName: string;
-  efc: number;
-  createMs: number;
-  queryMs: number;
-  checkpointMs: number;
+  reopenedHnswCanary?: ReopenedJinaHnswFinalizationResult;
 }
 
 export type SafeRebuildLifecycleEvent =
@@ -146,10 +132,10 @@ export interface RunSafeRebuildParams {
   _beforeLineagePublicationForTesting?: () => void;
   /** @internal deterministic post-reopen failure seam. */
   _validateCandidateForTesting?: typeof validateSafeRebuildCandidate;
-  /** @internal deterministic post-reopen Jina HNSW build seam. */
-  _runReopenedHnswCanaryForTesting?: typeof runReopenedHnswCanary;
+  /** @internal deterministic post-reopen Jina HNSW preparation seam. */
+  _prepareReopenedJinaHnswForTesting?: typeof prepareReopenedJinaHnsw;
   /** @internal deterministic cold-reopen HNSW query-validation seam. */
-  _validateColdReopenedJinaHnswForTesting?: typeof validateColdReopenedJinaHnsw;
+  _validateReopenedJinaHnswForTesting?: typeof validateReopenedJinaHnsw;
   /** @internal deterministic per-repository storage failure seam. */
   _validateStorageAfterRepoForTesting?: (
     repoId: string,
@@ -233,20 +219,6 @@ function failCandidateValidation(message: string): never {
   throw new SafeRebuildValidationError(
     `Safe rebuild candidate validation failed: ${message}`,
   );
-}
-
-function cosineDistance(a: readonly number[], b: readonly number[]): number {
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  return normA > 0 && normB > 0
-    ? 1 - dot / Math.sqrt(normA * normB)
-    : Number.POSITIVE_INFINITY;
 }
 
 function configuredFtsIndexName(config: AppConfig): string | undefined {
@@ -411,192 +383,6 @@ async function validateFts(
   return indexName;
 }
 
-export function resolveSafeRebuildJinaVectorIndexName(
-  config: AppConfig,
-): string {
-  return (
-    config.semantic?.retrieval?.vector.indexes?.[JINA_CODE_MODEL]?.indexName ??
-    EMBEDDING_MODELS[JINA_CODE_MODEL].indexName
-  );
-}
-
-async function runReopenedHnswCanary(
-  config: AppConfig,
-): Promise<ReopenedHnswCanaryResult | undefined> {
-  const modelPlan = resolveSemanticEmbeddingModelPlan(config.semantic);
-  if (
-    !config.semantic?.enabled ||
-    config.semantic.retrieval?.vector.enabled === false ||
-    !modelPlan.symbolEmbeddingModels.includes(JINA_CODE_MODEL)
-  ) {
-    return undefined;
-  }
-
-  const modelInfo = EMBEDDING_MODELS[JINA_CODE_MODEL];
-  const indexName = resolveSafeRebuildJinaVectorIndexName(config);
-  const efc = config.semantic.retrieval?.vector.efc ?? 200;
-  let createMs = 0;
-  let checkpointMs = 0;
-  let ranCanary = false;
-
-  await runHnswRebuildCycle(
-    "safe-rebuild-reopened-jina-hnsw-build-pre",
-    "safe-rebuild-reopened-jina-hnsw-build-post",
-    () =>
-      withWriteConn(async (conn) => {
-        const probe = await readDeterministicSymbolVectorProbe(
-          conn,
-          JINA_CODE_MODEL,
-        );
-        if (probe === null) {
-          const symbols = await ladybugDb.assertPhysicalSymbolUniqueness(conn);
-          if (symbols.physicalTotal > 0) {
-            failCandidateValidation(
-              `non-empty candidate has ${symbols.physicalTotal} Symbol rows but no valid Jina vectors`,
-            );
-          }
-          return;
-        }
-        ranCanary = true;
-        const requireExpectedIndex = async (): Promise<void> => {
-          const index = (await showIndexesStrict(conn)).find(
-            (candidate) =>
-              candidate.tableName === "Symbol" &&
-              candidate.name === indexName &&
-              candidate.type === "vector",
-          );
-          if (
-            !index ||
-            index.property !== modelInfo.vecProperty ||
-            index.status !== "healthy" ||
-            index.extensionLoaded === false
-          ) {
-            failCandidateValidation(
-              `required healthy Symbol vector index ${indexName} on ${modelInfo.vecProperty} is absent`,
-            );
-          }
-        };
-
-        const existingIndex = (await showIndexesStrict(conn)).find(
-          (candidate) =>
-            candidate.tableName === "Symbol" &&
-            candidate.name === indexName,
-        );
-        if (existingIndex) {
-          failCandidateValidation(
-            `Jina HNSW deferral failed: ${indexName} already exists after reopen`,
-          );
-        }
-
-        const startedAt = Date.now();
-        const created = await createVectorIndex(
-          conn,
-          "Symbol",
-          modelInfo.vecProperty,
-          indexName,
-          modelInfo.dimension,
-          efc,
-        );
-        createMs = Date.now() - startedAt;
-        if (!created) {
-          failCandidateValidation(
-            `Post-reopen Jina HNSW build could not create ${indexName}`,
-          );
-        }
-        await requireExpectedIndex();
-
-      }),
-    undefined,
-    (_phaseName, durationMs) => {
-      checkpointMs += durationMs;
-    },
-  );
-
-  // An all-empty candidate has no vector to probe and no HNSW mutation to time.
-  if (!ranCanary) return undefined;
-
-  return {
-    model: JINA_CODE_MODEL,
-    indexName,
-    efc,
-    createMs,
-    queryMs: 0,
-    checkpointMs,
-  };
-}
-
-export async function validateColdReopenedJinaHnsw(
-  config: AppConfig,
-): Promise<number | undefined> {
-  const modelPlan = resolveSemanticEmbeddingModelPlan(config.semantic);
-  if (
-    !config.semantic?.enabled ||
-    config.semantic.retrieval?.vector.enabled === false ||
-    !modelPlan.symbolEmbeddingModels.includes(JINA_CODE_MODEL)
-  ) {
-    return undefined;
-  }
-
-  const modelInfo = EMBEDDING_MODELS[JINA_CODE_MODEL];
-  const indexName = resolveSafeRebuildJinaVectorIndexName(config);
-  const conn = await getLadybugConn();
-  const probe = await readDeterministicSymbolVectorProbe(conn, JINA_CODE_MODEL);
-  if (!probe) {
-    failCandidateValidation(
-      `Cold-reopened Jina HNSW validation found no valid ${modelInfo.vecProperty} probe vector`,
-    );
-  }
-  const index = (await showIndexesStrict(conn)).find(
-    (candidate) =>
-      candidate.tableName === "Symbol" &&
-      candidate.name === indexName &&
-      candidate.type === "vector",
-  );
-  if (
-    !index ||
-    index.property !== modelInfo.vecProperty ||
-    index.status !== "healthy" ||
-    index.extensionLoaded === false
-  ) {
-    failCandidateValidation(
-      `cold-reopened Symbol vector index ${indexName} is not healthy`,
-    );
-  }
-
-  const startedAt = Date.now();
-  const rows = await queryVectorIndexProbe(conn, indexName, probe.vector);
-  const queryMs = Date.now() - startedAt;
-  if (rows.length === 0) {
-    failCandidateValidation(
-      `Cold-reopened Jina HNSW query returned no rows from ${indexName}`,
-    );
-  }
-  let matchedPersistedVector = false;
-  for (const row of rows) {
-    if (Math.abs(row.distance) > 1e-6) continue;
-    const persisted = await readSymbolNumericVector(
-      conn,
-      row.symbolId,
-      JINA_CODE_MODEL,
-    );
-    if (
-      persisted &&
-      persisted.length === probe.vector.length &&
-      persisted.every(Number.isFinite) &&
-      Math.abs(cosineDistance(probe.vector, persisted)) <= 1e-6
-    ) {
-      matchedPersistedVector = true;
-      break;
-    }
-  }
-  if (!matchedPersistedVector) {
-    failCandidateValidation(
-      `Cold-reopened Jina HNSW query returned no persisted vector matching its probe`,
-    );
-  }
-  return queryMs;
-}
-
 /**
  * Validate a candidate through the currently open, freshly reopened pool.
  * Callers must close the build pool before invoking this function.
@@ -707,11 +493,10 @@ export async function runSafeRebuild(
   const validateStorageAfterRepo =
     params._validateStorageAfterRepoForTesting ??
     validateSafeRebuildStorageAfterRepo;
-  const runReopenedCanary =
-    params._runReopenedHnswCanaryForTesting ?? runReopenedHnswCanary;
-  const validateColdReopenedJinaHnswImpl =
-    params._validateColdReopenedJinaHnswForTesting ??
-    validateColdReopenedJinaHnsw;
+  const prepareReopenedJinaHnswImpl =
+    params._prepareReopenedJinaHnswForTesting ?? prepareReopenedJinaHnsw;
+  const validateReopenedJinaHnswImpl =
+    params._validateReopenedJinaHnswForTesting ?? validateReopenedJinaHnsw;
   const repoResults: SafeRebuildResult["repoResults"] = [];
   let candidateOpen = false;
   let safeRebuildSession: SafeRebuildLadybugSession | null = null;
@@ -787,8 +572,19 @@ export async function runSafeRebuild(
     );
     await params._afterCandidateOpenForTesting?.("reopen");
     params.onLifecycleEvent?.("candidate:reopened");
-    const reopenedHnswCanary = await runReopenedCanary(params.config);
-    if (reopenedHnswCanary) {
+    const reopenedHnswCanary = jinaHnswSpec
+      ? await prepareReopenedJinaHnswImpl({
+          spec: jinaHnswSpec,
+          selectedFullRepoIds: params.config.repos.map((repo) => repo.repoId),
+          requireAbsent: true,
+        })
+      : undefined;
+    if (reopenedHnswCanary?.catalogMutated) {
+      if (!reopenedHnswCanary.probe) {
+        throw new Error(
+          "Created Jina HNSW finalization result is missing its validation probe",
+        );
+      }
       await closeSafeRebuildBeforeReopen(safeRebuildSession);
       candidateOpen = false;
       params.onLifecycleEvent?.("candidate:closed-after-canary");
@@ -799,10 +595,10 @@ export async function runSafeRebuild(
         safeRebuildSession,
       );
       params.onLifecycleEvent?.("candidate:reopened-after-canary");
-      const coldQueryMs = await validateColdReopenedJinaHnswImpl(params.config);
-      if (coldQueryMs !== undefined) {
-        reopenedHnswCanary.queryMs = coldQueryMs;
-      }
+      reopenedHnswCanary.queryMs = await validateReopenedJinaHnswImpl({
+        spec: reopenedHnswCanary,
+        probe: reopenedHnswCanary.probe,
+      });
     }
     const validation = await validateCandidate(params.config);
     params.onLifecycleEvent?.("candidate:validated");

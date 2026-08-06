@@ -30,7 +30,6 @@ import {
   runSafeRebuild,
   validateSafeRebuildCandidate,
 } from "../../dist/cli/commands/index-safe-rebuild.js";
-import * as safeRebuildModule from "../../dist/cli/commands/index-safe-rebuild.js";
 import { indexRepo } from "../../dist/indexer/indexer.js";
 import {
   getDerivedState,
@@ -122,44 +121,12 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     return { activePath, candidatePath, configPath, sentinel };
   }
 
-  it("uses the configured Jina vector index name with the model default as fallback", () => {
-    const resolver = (
-      safeRebuildModule as unknown as {
-        resolveSafeRebuildJinaVectorIndexName?: (config: unknown) => string;
-      }
-    ).resolveSafeRebuildJinaVectorIndexName;
-    assert.equal(typeof resolver, "function");
-    if (!resolver) return;
-
-    assert.equal(
-      resolver({
-        semantic: {
-          retrieval: {
-            vector: {
-              indexes: {
-                "jina-embeddings-v2-base-code": {
-                  indexName: "custom_jina_index",
-                },
-              },
-            },
-          },
-        },
-      }),
-      "custom_jina_index",
-    );
-    assert.equal(
-      resolver({ semantic: { retrieval: { vector: { indexes: {} } } } }),
-      "symbol_vec_jina_code_v2",
-    );
-  });
-
   it("builds every configured repo and validates only after close/reopen", async () => {
     const fixture = createFixture();
     const events: string[] = [];
     const markerStates: boolean[] = [];
     const repoValidationOrder: string[] = [];
     const indexOptions: Array<Record<string, unknown> | undefined> = [];
-    let postReopenBuildCalls = 0;
     const config = loadConfig(fixture.configPath);
     const result = await runSafeRebuild({
       options: {
@@ -182,10 +149,6 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       _indexRepoForTesting: async (...args) => {
         indexOptions.push(args[4]);
         return indexRepo(...args);
-      },
-      _runReopenedHnswCanaryForTesting: async () => {
-        postReopenBuildCalls++;
-        return undefined;
       },
       onRepoComplete: (repoId) => {
         repoValidationOrder.push(`complete:${repoId}`);
@@ -231,7 +194,6 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       "complete:safe-rebuild-empty",
     ]);
     assert.ok(indexOptions.length > 0);
-    assert.equal(postReopenBuildCalls, 1);
     assert.ok(
       indexOptions.every(
         (options) => options?.jinaHnswFinalization === undefined,
@@ -356,7 +318,15 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         finalizations.push(args[4]?.jinaHnswFinalization);
         return indexRepo(...args);
       },
-      _runReopenedHnswCanaryForTesting: async () => undefined,
+      _prepareReopenedJinaHnswForTesting: async ({ spec }) => ({
+        ...spec,
+        outcome: "skipped-empty" as const,
+        catalogMutated: false,
+        probe: null,
+        createMs: 0,
+        queryMs: 0,
+        checkpointMs: 0,
+      }),
       _validateCandidateForTesting: async () => ({
         repoIds: config.repos.map((repo) => repo.repoId).sort(),
         physicalSymbolTotal: 1,
@@ -624,10 +594,18 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     );
   });
 
-  it("abandons the candidate when the post-reopen Jina HNSW build fails", async () => {
+  it("abandons the candidate when post-reopen Jina HNSW finalization fails", async () => {
     const fixture = createFixture();
     const events: string[] = [];
     let validationStarted = false;
+    const config = {
+      ...loadConfig(fixture.configPath),
+      semantic: {
+        enabled: true,
+        provider: "mock" as const,
+        generateSummaries: false,
+      },
+    };
 
     await assert.rejects(
       runSafeRebuild({
@@ -637,19 +615,19 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
           force: true,
           safeRebuildPath: fixture.candidatePath,
         },
-        config: loadConfig(fixture.configPath),
+        config,
         configPath: fixture.configPath,
         activeGraphDbPath: fixture.activePath,
         onLifecycleEvent: (event) => events.push(event),
-        _runReopenedHnswCanaryForTesting: async () => {
-          throw new Error("injected post-reopen Jina HNSW build failure");
+        _prepareReopenedJinaHnswForTesting: async () => {
+          throw new Error("injected post-reopen Jina HNSW finalization failure");
         },
         _validateCandidateForTesting: async (config) => {
           validationStarted = true;
           return validateSafeRebuildCandidate(config);
         },
       }),
-      /injected post-reopen Jina HNSW build failure/,
+      /injected post-reopen Jina HNSW finalization failure/,
     );
 
     assert.equal(validationStarted, false);
@@ -688,7 +666,7 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         configPath: fixture.configPath,
         activeGraphDbPath: fixture.activePath,
       }),
-      /non-empty candidate.*no valid Jina vectors/i,
+      /non-empty selected full repository safe-rebuild-source.*no valid Jina vector/i,
     );
     assert.equal(
       existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
@@ -699,7 +677,14 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
   it("reopens a post-reopen HNSW-mutated candidate again before validation", async () => {
     const fixture = createFixture();
     const events: string[] = [];
-    const config = loadConfig(fixture.configPath);
+    const config = {
+      ...loadConfig(fixture.configPath),
+      semantic: {
+        enabled: true,
+        provider: "mock" as const,
+        generateSummaries: false,
+      },
+    };
     const result = await runSafeRebuild({
       options: {
         config: fixture.configPath,
@@ -711,21 +696,31 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       configPath: fixture.configPath,
       activeGraphDbPath: fixture.activePath,
       onLifecycleEvent: (event) => events.push(event),
-      _runReopenedHnswCanaryForTesting: async () => ({
+      _prepareReopenedJinaHnswForTesting: async () => ({
         model: "jina-embeddings-v2-base-code",
         indexName: "symbol_vec_jina_code_v2",
+        vectorProperty: "embeddingJinaCodeVec",
+        dimension: 768,
         efc: 100,
+        outcome: "created",
+        catalogMutated: true,
+        probe: { repoId: "repo", symbolId: "symbol", vector: [1, 0] },
         createMs: 2,
-        queryMs: 3,
+        queryMs: 0,
         checkpointMs: 4,
       }),
-      _validateColdReopenedJinaHnswForTesting: async () => 5,
+      _validateReopenedJinaHnswForTesting: async () => 5,
     });
 
     assert.deepEqual(result.reopenedHnswCanary, {
       model: "jina-embeddings-v2-base-code",
       indexName: "symbol_vec_jina_code_v2",
+      vectorProperty: "embeddingJinaCodeVec",
+      dimension: 768,
       efc: 100,
+      outcome: "created",
+      catalogMutated: true,
+      probe: { repoId: "repo", symbolId: "symbol", vector: [1, 0] },
       createMs: 2,
       queryMs: 5,
       checkpointMs: 4,
