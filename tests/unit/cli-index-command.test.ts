@@ -306,6 +306,57 @@ describe("CLI index command", () => {
   });
 
   describe("one-shot lifecycle", () => {
+    it("enables Jina HNSW deferral only for local one-shot commands with an effective full repo", async () => {
+      const indexModule = await import("../../dist/cli/commands/index.js");
+      const isEligible = (
+        indexModule as typeof indexModule & {
+          isJinaHnswDeferralEligible?: (params: {
+            canDelegate: boolean;
+            isOneShot: boolean;
+            hasJinaHnswSpec: boolean;
+            effectiveModes: ReadonlyMap<string, "full" | "incremental">;
+          }) => boolean;
+        }
+      ).isJinaHnswDeferralEligible;
+
+      assert.strictEqual(
+        typeof isEligible,
+        "function",
+        "the command should expose its single eligibility decision for regression coverage",
+      );
+
+      const full = new Map([["repo", "full" as const]]);
+      const incremental = new Map([["repo", "incremental" as const]]);
+      const mixed = new Map([
+        ["full-repo", "full" as const],
+        ["incremental-repo", "incremental" as const],
+      ]);
+      const base = {
+        canDelegate: false,
+        isOneShot: true,
+        hasJinaHnswSpec: true,
+      };
+
+      assert.strictEqual(isEligible!({ ...base, effectiveModes: full }), true);
+      assert.strictEqual(
+        isEligible!({ ...base, effectiveModes: incremental }),
+        false,
+      );
+      assert.strictEqual(isEligible!({ ...base, effectiveModes: mixed }), true);
+      assert.strictEqual(
+        isEligible!({ ...base, canDelegate: true, effectiveModes: full }),
+        false,
+      );
+      assert.strictEqual(
+        isEligible!({ ...base, isOneShot: false, effectiveModes: full }),
+        false,
+      );
+      assert.strictEqual(
+        isEligible!({ ...base, hasJinaHnswSpec: false, effectiveModes: full }),
+        false,
+      );
+    });
+
     it("preflights direct indexing before repository registration writes", () => {
       const source = readFileSync("src/cli/commands/index.ts", "utf-8");
       const directPathStart = source.indexOf(
@@ -320,7 +371,7 @@ describe("CLI index command", () => {
         directPathStart,
       );
       const indexCall = source.indexOf(
-        "const stats: IndexResult = await indexRepo(",
+        "const stats: IndexResult = await dependencies.indexRepo(",
         directPathStart,
       );
 
@@ -380,6 +431,59 @@ describe("CLI index command", () => {
 
       originalExit = process.exit;
     });
+
+    function clearGraphPathEnvironment(): () => void {
+      const previous = new Map(
+        ["SDL_GRAPH_DB_PATH", "SDL_GRAPH_DB_DIR", "SDL_DB_PATH"].map(
+          (name) => [name, process.env[name]] as const,
+        ),
+      );
+      for (const name of previous.keys()) delete process.env[name];
+      return () => {
+        for (const [name, value] of previous) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      };
+    }
+
+    function emptyIndexResult() {
+      return {
+        versionId: "test-version",
+        filesProcessed: 0,
+        changedFiles: 0,
+        removedFiles: 0,
+        symbolsIndexed: 0,
+        edgesCreated: 0,
+        clustersComputed: 0,
+        processesTraced: 0,
+        durationMs: 1,
+      };
+    }
+
+    async function assertDerivedQueueRestored(
+      ladybugPath: string,
+      repoId: string,
+    ): Promise<void> {
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const queue = await import("../../dist/indexer/derived-refresh-queue.js");
+      let refreshCalls = 0;
+      await ladybug.initLadybugDb(ladybugPath);
+      queue._setDerivedRefreshHooksForTesting({
+        refresh: async () => {
+          refreshCalls += 1;
+        },
+      });
+      try {
+        queue.enqueueDerivedRefresh(repoId, "v1");
+        await queue.waitForDerivedRefreshIdle(repoId, 5_000, 10);
+        assert.strictEqual(refreshCalls, 1);
+      } finally {
+        queue._setDerivedRefreshHooksForTesting(null);
+        queue.enableDerivedRefreshQueue();
+        await ladybug.closeLadybugDb();
+      }
+    }
 
     after(() => {
       process.exit = originalExit;
@@ -568,6 +672,389 @@ describe("CLI index command", () => {
           thrownError !== undefined,
           "Command should have either logged or thrown",
         );
+      }
+    });
+
+    it("restores queue and closes the local DB when plugin initialization fails", async () => {
+      const dir = join(tempDir, "plugin-init-failure");
+      mkdirSync(dir, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "plugin-failure", rootPath: join(dir, "missing") }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: false },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const origError = console.error;
+      const origLog = console.log;
+      let errorOutput = "";
+      let closeCalls = 0;
+      let indexCalls = 0;
+      console.error = (...args: unknown[]) => {
+        errorOutput += args.map(String).join(" ") + "\n";
+      };
+      console.log = () => {};
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+
+      try {
+        await assert.rejects(
+          indexCommand(
+            { config: configPath },
+            {
+              loadConfiguredAdapterPlugins: async () => {
+                throw new Error("injected plugin init failure");
+              },
+              closeLadybugDb: async () => {
+                closeCalls += 1;
+                await ladybug.closeLadybugDb();
+              },
+              indexRepo: async () => {
+                indexCalls += 1;
+                return emptyIndexResult();
+              },
+            },
+          ),
+          /process\.exit:1/,
+        );
+
+        assert.match(errorOutput, /injected plugin init failure/);
+        assert.strictEqual(closeCalls, 1);
+        assert.strictEqual(indexCalls, 0);
+        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+
+        await assertDerivedQueueRestored(ladybugPath, "plugin-queue-restored");
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
+      }
+    });
+
+    it("attempts cleanup when local DB initialization opens then rejects", async () => {
+      const dir = join(tempDir, "db-init-rejects-after-open");
+      const repoRoot = join(dir, "repo");
+      mkdirSync(repoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "init-failure", rootPath: repoRoot }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: false },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const queue = await import("../../dist/indexer/derived-refresh-queue.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const origError = console.error;
+      const origLog = console.log;
+      let errorOutput = "";
+      let closeCalls = 0;
+      let indexCalls = 0;
+      console.error = (...args: unknown[]) => {
+        errorOutput += args.map(String).join(" ") + "\n";
+      };
+      console.log = () => {};
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+
+      try {
+        await assert.rejects(
+          indexCommand(
+            { config: configPath },
+            {
+              initGraphDb: async () => {
+                await ladybug.initLadybugDb(ladybugPath);
+                throw new Error("injected init failure after open");
+              },
+              closeLadybugDb: async () => {
+                closeCalls += 1;
+                await ladybug.closeLadybugDb();
+              },
+              indexRepo: async () => {
+                indexCalls += 1;
+                return emptyIndexResult();
+              },
+            },
+          ),
+          /process\.exit:1/,
+        );
+
+        assert.match(errorOutput, /injected init failure after open/);
+        assert.strictEqual(closeCalls, 1);
+        assert.strictEqual(indexCalls, 0);
+        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+        await assertDerivedQueueRestored(ladybugPath, "init-queue-restored");
+      } finally {
+        queue.enableDerivedRefreshQueue();
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
+      }
+    });
+
+    it("cleans up when effective-mode resolution rejects after initialization", async () => {
+      const dir = join(tempDir, "mode-resolution-failure");
+      const repoRoot = join(dir, "repo");
+      mkdirSync(repoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "mode-failure", rootPath: repoRoot }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: false },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const queue = await import("../../dist/indexer/derived-refresh-queue.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const origError = console.error;
+      const origLog = console.log;
+      let errorOutput = "";
+      let closeCalls = 0;
+      let indexCalls = 0;
+      console.error = (...args: unknown[]) => {
+        errorOutput += args.map(String).join(" ") + "\n";
+      };
+      console.log = () => {};
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+
+      try {
+        await assert.rejects(
+          indexCommand(
+            { config: configPath },
+            {
+              resolveEffectiveIndexMode: async () => {
+                throw new Error("injected mode planning failure");
+              },
+              closeLadybugDb: async () => {
+                closeCalls += 1;
+                await ladybug.closeLadybugDb();
+              },
+              indexRepo: async () => {
+                indexCalls += 1;
+                return emptyIndexResult();
+              },
+            },
+          ),
+          /process\.exit:1/,
+        );
+
+        assert.match(errorOutput, /injected mode planning failure/);
+        assert.strictEqual(closeCalls, 1);
+        assert.strictEqual(indexCalls, 0);
+        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+        await assertDerivedQueueRestored(ladybugPath, "mode-queue-restored");
+      } finally {
+        queue.enableDerivedRefreshQueue();
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
+      }
+    });
+
+    it("delegates without local DB initialization or close", async () => {
+      const dir = join(tempDir, "delegated-ownership");
+      mkdirSync(dir, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "delegated", rootPath: join(dir, "repo") }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          httpAuth: { enabled: false, token: null },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const { removePidfile, resolvePidfilePath, writePidfile } = await import(
+        "../../dist/util/pidfile.js"
+      );
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const origError = console.error;
+      const origLog = console.log;
+      let initCalls = 0;
+      let closeCalls = 0;
+      let indexCalls = 0;
+      let delegateCalls = 0;
+      console.error = () => {};
+      console.log = () => {};
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+      writePidfile(ladybugPath, "http", 65_530);
+
+      try {
+        await indexCommand(
+          { config: configPath, repoId: "delegated" },
+          {
+            initGraphDb: async () => {
+              initCalls += 1;
+            },
+            closeLadybugDb: async () => {
+              closeCalls += 1;
+            },
+            indexRepo: async () => {
+              indexCalls += 1;
+              return emptyIndexResult();
+            },
+            delegateIndexToServer: async () => {
+              delegateCalls += 1;
+              return { ok: true };
+            },
+          },
+        );
+
+        assert.strictEqual(delegateCalls, 1);
+        assert.strictEqual(initCalls, 0);
+        assert.strictEqual(closeCalls, 0);
+        assert.strictEqual(indexCalls, 0);
+      } finally {
+        removePidfile(resolvePidfilePath(ladybugPath));
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
+      }
+    });
+
+    it("shares one finalization object across mixed full and incremental index calls", async () => {
+      const dir = join(tempDir, "mixed-finalization");
+      const fullRoot = join(dir, "full-root");
+      const incrementalRoot = join(dir, "incremental-root");
+      mkdirSync(fullRoot, { recursive: true });
+      mkdirSync(incrementalRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [
+            { repoId: "full-repo", rootPath: fullRoot },
+            { repoId: "incremental-repo", rootPath: incrementalRoot },
+          ],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { retrieval: {} },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const queries = await import("../../dist/db/ladybug-queries.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const calls: Array<{
+        repoId: string;
+        mode: "full" | "incremental";
+        finalization: unknown;
+        effectiveModeAlreadyResolved: unknown;
+      }> = [];
+      const resolverCalls: string[] = [];
+      const origError = console.error;
+      const origLog = console.log;
+      console.error = () => {};
+      console.log = () => {};
+
+      try {
+        await ladybug.closeLadybugDb();
+        await ladybug.initLadybugDb(ladybugPath);
+        const conn = await ladybug.getLadybugConn();
+        const createdAt = new Date().toISOString();
+        await queries.upsertRepo(conn, {
+          repoId: "incremental-repo",
+          rootPath: incrementalRoot,
+          configJson: "{}",
+          createdAt,
+        });
+        await queries.upsertFile(conn, {
+          fileId: "incremental:file.ts",
+          repoId: "incremental-repo",
+          relPath: "file.ts",
+          contentHash: "hash",
+          language: "typescript",
+          byteSize: 1,
+          lastIndexedAt: createdAt,
+        });
+        await ladybug.closeLadybugDb();
+
+        await indexCommand(
+          { config: configPath },
+          {
+            resolveEffectiveIndexMode: async (repoId) => {
+              resolverCalls.push(repoId);
+              return repoId === "full-repo" ? "full" : "incremental";
+            },
+            indexRepo: async (repoId, mode, _progress, _signal, options) => {
+              calls.push({
+                repoId,
+                mode,
+                finalization: options?.jinaHnswFinalization,
+                effectiveModeAlreadyResolved:
+                  options?.effectiveModeAlreadyResolved,
+              });
+              return emptyIndexResult();
+            },
+          },
+        );
+
+        assert.deepStrictEqual(
+          resolverCalls,
+          ["full-repo", "incremental-repo"],
+        );
+        assert.deepStrictEqual(
+          calls.map(({ repoId, mode }) => [repoId, mode]),
+          [
+            ["full-repo", "full"],
+            ["incremental-repo", "incremental"],
+          ],
+        );
+        assert.ok(calls[0]?.finalization);
+        assert.strictEqual(calls[0]?.finalization, calls[1]?.finalization);
+        assert.ok(
+          calls.every(
+            ({ effectiveModeAlreadyResolved }) =>
+              effectiveModeAlreadyResolved === true,
+          ),
+        );
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
       }
     });
 

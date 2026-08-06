@@ -5,6 +5,7 @@ import {
   watchRepository,
   IndexWatchHandle,
   IndexResult,
+  type IndexRepoOptions,
 } from "../../indexer/indexer.js";
 import type {
   ProviderFirstCoverageSummary,
@@ -22,6 +23,7 @@ import type {
   IndexProgressSubstage,
 } from "../../indexer/indexer.js";
 import { assertIndexStoragePreflight } from "../../indexer/index-storage-preflight.js";
+import { resolveEffectiveIndexMode } from "../../indexer/index-mode.js";
 import { initGraphDb, resolveGraphDbPath } from "../../db/initGraphDb.js";
 import {
   getLadybugConn,
@@ -41,7 +43,10 @@ import {
   type RuntimeIdentity,
 } from "../../util/runtime-identity.js";
 import { normalizePath } from "../../util/paths.js";
-import type { ReopenedJinaHnswFinalizationResult } from "../../indexer/jina-hnsw-finalization.js";
+import {
+  resolveConfiguredJinaHnswSpec,
+  type ReopenedJinaHnswFinalizationResult,
+} from "../../indexer/jina-hnsw-finalization.js";
 import {
   runSafeRebuild,
   validateSafeRebuildRequest,
@@ -2252,13 +2257,14 @@ async function delegateIndexToServer(
 }
 
 async function cleanupOneShotIndexing(
-  dbInitialized: boolean,
+  dbCleanupOwned: boolean,
   derivedRefreshDisabled: boolean,
+  closeDb: typeof closeLadybugDb = closeLadybugDb,
 ): Promise<void> {
   try {
     await shutdownDerivedRefreshQueue();
-    if (dbInitialized) {
-      await closeLadybugDb();
+    if (dbCleanupOwned) {
+      await closeDb();
     }
   } finally {
     if (derivedRefreshDisabled) {
@@ -2286,6 +2292,21 @@ export function canDelegateIndexToServer(
   );
 }
 
+/** @internal exported for focused command-planning tests. */
+export function isJinaHnswDeferralEligible(params: {
+  canDelegate: boolean;
+  isOneShot: boolean;
+  hasJinaHnswSpec: boolean;
+  effectiveModes: ReadonlyMap<string, "full" | "incremental">;
+}): boolean {
+  return (
+    !params.canDelegate &&
+    params.isOneShot &&
+    params.hasJinaHnswSpec &&
+    [...params.effectiveModes.values()].some((mode) => mode === "full")
+  );
+}
+
 export function formatIndexStartupLines(params: {
   repoCount: number;
   runtimeIdentity: RuntimeIdentity;
@@ -2298,7 +2319,33 @@ export function formatIndexStartupLines(params: {
   ];
 }
 
-export async function indexCommand(options: IndexOptions): Promise<void> {
+/** @internal Dependency seam for command-level lifecycle tests. */
+interface IndexCommandDependencies {
+  initGraphDb: typeof initGraphDb;
+  loadConfiguredAdapterPlugins: typeof loadConfiguredAdapterPlugins;
+  closeLadybugDb: typeof closeLadybugDb;
+  delegateIndexToServer: typeof delegateIndexToServer;
+  indexRepo: typeof indexRepo;
+  resolveEffectiveIndexMode: typeof resolveEffectiveIndexMode;
+}
+
+const DEFAULT_INDEX_COMMAND_DEPENDENCIES: IndexCommandDependencies = {
+  initGraphDb,
+  loadConfiguredAdapterPlugins,
+  closeLadybugDb,
+  delegateIndexToServer,
+  indexRepo,
+  resolveEffectiveIndexMode,
+};
+
+export async function indexCommand(
+  options: IndexOptions,
+  _dependenciesForTesting?: Partial<IndexCommandDependencies>,
+): Promise<void> {
+  const dependencies = {
+    ...DEFAULT_INDEX_COMMAND_DEPENDENCIES,
+    ..._dependenciesForTesting,
+  };
   printBanner();
 
   const configPath = activateCliConfigPath(options.config);
@@ -2412,19 +2459,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     console.log(line);
   }
 
-  // If we cannot delegate, initialize the DB for direct indexing. When a live
-  // HTTP server owns the graph DB, failed delegation remains a retryable
-  // server-side error instead of falling through to local DB initialization.
-  let dbInitialized = false;
-  if (!canDelegate) {
-    await initGraphDb(config, configPath);
-    await loadConfiguredAdapterPlugins(config, configPath, (message) => {
-      console.log(message);
-    });
-    dbInitialized = true;
-  }
-
-  const errors: Array<{ repoId: string; error: string }> = [];
+  let dbCleanupOwned = false;
   const isOneShot = !options.watch;
   let derivedRefreshDisabled = false;
   if (isOneShot) {
@@ -2434,9 +2469,73 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     derivedRefreshDisabled = true;
   }
 
-  for (const repo of reposToIndex) {
-    const requestedMode = options.force ? "full" : "incremental";
+  const requestedMode = options.force ? "full" : "incremental";
+  let jinaHnswMayBeAbsent = false;
+  let jinaHnswFinalization: IndexRepoOptions["jinaHnswFinalization"];
 
+  const effectiveModes = new Map<string, "full" | "incremental">();
+
+  // A live HTTP server owns both mode resolution and LadybugDB lifecycle.
+  // Direct commands resolve every effective mode before any repo writes so
+  // one full repo can defer the global Symbol Jina index for the whole loop.
+  if (!canDelegate) {
+    try {
+      // Claim cleanup before initialization: native setup can open the family
+      // and still reject before returning control to this caller.
+      dbCleanupOwned = true;
+      await dependencies.initGraphDb(config, configPath);
+      await dependencies.loadConfiguredAdapterPlugins(config, configPath, (message) => {
+        console.log(message);
+      });
+      await withWriteConn(async (conn) => {
+        for (const repo of reposToIndex) {
+          effectiveModes.set(
+            repo.repoId,
+            await dependencies.resolveEffectiveIndexMode(
+              repo.repoId,
+              requestedMode,
+              conn,
+            ),
+          );
+        }
+      });
+
+      const jinaHnswSpec = resolveConfiguredJinaHnswSpec(config);
+      if (
+        isJinaHnswDeferralEligible({
+          canDelegate,
+          isOneShot,
+          hasJinaHnswSpec: jinaHnswSpec !== undefined,
+          effectiveModes,
+        })
+      ) {
+        jinaHnswFinalization = {
+          spec: jinaHnswSpec!,
+          deferCreate: true,
+          onMayBeAbsent: () => {
+            jinaHnswMayBeAbsent = true;
+          },
+        };
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to prepare direct indexing: ${msg}`);
+      await cleanupOneShotIndexing(
+        dbCleanupOwned,
+        derivedRefreshDisabled,
+        dependencies.closeLadybugDb,
+      );
+      process.exit(1);
+    }
+  }
+
+  // Task 6 consumes this state after the repository loop to decide whether a
+  // cold-reopen repair is required. Keep the callback monotonic meanwhile.
+  void jinaHnswMayBeAbsent;
+
+  const errors: Array<{ repoId: string; error: string }> = [];
+
+  for (const repo of reposToIndex) {
     // Try delegating to the running server first. The server auto-upgrades
     // 'incremental' → 'full' when the repo has no indexed files (see
     // indexRepoImpl), so we display the requested mode and trust the server
@@ -2445,7 +2544,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       console.log(
         `\nIndexing ${repo.repoId} (${repo.rootPath}) [mode=${requestedMode}]...`,
       );
-      const delegated = await delegateIndexToServer(
+      const delegated = await dependencies.delegateIndexToServer(
         existing,
         repo.repoId,
         requestedMode,
@@ -2478,7 +2577,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     const conn = await getLadybugConn();
 
     const existingRepo = await ladybugDb.getRepo(conn, repo.repoId);
-    const directMode = options.force || !existingRepo ? "full" : "incremental";
+    const effectiveMode = effectiveModes.get(repo.repoId)!;
 
     // Direct-path display reflects the actual mode that will run — fresh
     // repos correctly show `[mode=full]` even without --force. If we got
@@ -2486,7 +2585,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     // printed; otherwise this is the first per-repo banner.
     if (!canDelegate) {
       console.log(
-        `\nIndexing ${repo.repoId} (${repo.rootPath}) [mode=${directMode}]...`,
+        `\nIndexing ${repo.repoId} (${repo.rootPath}) [mode=${effectiveMode}]...`,
       );
     }
     if (!existingRepo) {
@@ -2497,7 +2596,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       // Keep the CLI's registration write behind the same fail-closed gate as
       // indexRepo. The indexer repeats this check after admission so a state
       // change between registration and provider work still fails safely.
-      await assertIndexStoragePreflight(conn, repo.repoId, directMode);
+      await assertIndexStoragePreflight(conn, repo.repoId, effectiveMode);
       await withWriteConn(async (wConn) => {
         await ladybugDb.upsertRepo(wConn, {
           repoId: repo.repoId,
@@ -2512,14 +2611,18 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       // newline boundary in TTY mode.
       const progressState = createProgressState();
       const wallStartedAt = Date.now();
-      const stats: IndexResult = await indexRepo(
+      const stats: IndexResult = await dependencies.indexRepo(
         repo.repoId,
-        directMode,
+        effectiveMode,
         (progress) => {
           renderIndexProgress(progressState, progress);
         },
         undefined,
-        { includeTimings: Boolean(options.diagnostics) },
+        {
+          includeTimings: Boolean(options.diagnostics),
+          jinaHnswFinalization,
+          effectiveModeAlreadyResolved: true,
+        },
       );
       // Finalize the last indexer stage line before printing summary lines.
       finishProgress(progressState);
@@ -2622,7 +2725,11 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
     for (const e of errors) {
       console.error(`  - ${e.repoId}: ${e.error}`);
     }
-    await cleanupOneShotIndexing(dbInitialized, derivedRefreshDisabled);
+    await cleanupOneShotIndexing(
+      dbCleanupOwned,
+      derivedRefreshDisabled,
+      dependencies.closeLadybugDb,
+    );
     process.exit(1);
   }
 
@@ -2665,7 +2772,7 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
         await watcher.close();
       }
       await shutdownDerivedRefreshQueue();
-      await closeLadybugDb();
+      await dependencies.closeLadybugDb();
       process.exit(0);
     };
 
@@ -2687,7 +2794,11 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
   }
 
   if (!options.watch) {
-    await cleanupOneShotIndexing(dbInitialized, derivedRefreshDisabled);
+    await cleanupOneShotIndexing(
+      dbCleanupOwned,
+      derivedRefreshDisabled,
+      dependencies.closeLadybugDb,
+    );
   }
 
   console.log("\n✓ Indexing complete");

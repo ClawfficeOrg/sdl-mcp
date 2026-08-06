@@ -498,6 +498,8 @@ export interface IndexRepoOptions {
     deferCreate: true;
     onMayBeAbsent?: () => void;
   };
+  /** @internal The caller already applied resolveEffectiveIndexMode. */
+  effectiveModeAlreadyResolved?: true;
   /** @internal Keeps compatibility benchmarks on the TypeScript-only pipeline. */
   forceLegacyPipeline?: boolean;
 }
@@ -2001,7 +2003,9 @@ export async function indexRepo(
       );
     }
 
-    const effectiveMode = await resolveEffectiveIndexMode(repoId, mode);
+    const effectiveMode = options?.effectiveModeAlreadyResolved
+      ? mode
+      : await resolveEffectiveIndexMode(repoId, mode);
     const preflightConn = await getLadybugConn();
     await assertIndexStoragePreflight(preflightConn, repoId, mode, options);
     const runEffectiveIndex = async (): Promise<IndexResult> => {

@@ -1,3 +1,5 @@
+import type { Connection } from "kuzu";
+
 import type { RepoConfig } from "../config/types.js";
 import { withWriteConn } from "../db/ladybug.js";
 import { getFileCount } from "../db/ladybug-queries.js";
@@ -19,12 +21,15 @@ export function resolvePostIndexSessionTimeoutMs(
 export async function resolveEffectiveIndexMode(
   repoId: string,
   requestedMode: "full" | "incremental",
+  conn?: Connection,
 ): Promise<"full" | "incremental"> {
   if (requestedMode === "full") return "full";
 
   // Use the pre-index writer for this one probe so a long-lived verifier read
   // cannot serialize mode resolution behind an occupied round-robin pool slot.
-  const fileCount = await withWriteConn((conn) => getFileCount(conn, repoId));
+  const fileCount = conn
+    ? await getFileCount(conn, repoId)
+    : await withWriteConn((writeConn) => getFileCount(writeConn, repoId));
   if (fileCount > 0) return "incremental";
 
   logger.info(
