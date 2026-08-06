@@ -22,7 +22,7 @@ import {
   type FileSummaryEmbeddingRefreshResult,
 } from "./file-summary-embeddings.js";
 import type { CallResolutionTelemetry } from "./edge-builder.js";
-import type { IndexProgress } from "./indexer.js";
+import type { IndexProgress, IndexRepoOptions } from "./indexer.js";
 import {
   generateSummariesForRepo,
   type SummaryBatchResult,
@@ -44,8 +44,7 @@ export interface FinalizeIndexingParams {
   includeTimings?: boolean;
   callResolutionTelemetry: CallResolutionTelemetry;
   deferSemanticRefresh?: boolean;
-  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
-  deferJinaVectorIndexCreate?: boolean;
+  jinaHnswFinalization?: IndexRepoOptions["jinaHnswFinalization"];
   preFinalize?: () => Promise<void>;
   postIndexSessionTimeoutMs?: number;
   prepareGraphIntegrityPlaceholderPruning?: (
@@ -89,7 +88,7 @@ export async function finalizeIndexing({
   includeTimings,
   callResolutionTelemetry,
   deferSemanticRefresh = false,
-  deferJinaVectorIndexCreate = false,
+  jinaHnswFinalization,
   preFinalize,
   postIndexSessionTimeoutMs,
   prepareGraphIntegrityPlaceholderPruning,
@@ -358,6 +357,10 @@ export async function finalizeIndexing({
 
     const runOneModel = async (embModel: string): Promise<void> => {
       try {
+        const matchingJinaFinalization =
+          jinaHnswFinalization?.spec.model === embModel
+            ? jinaHnswFinalization
+            : undefined;
         const embResult = await measureSubphase(
           `semanticEmbeddings:${embModel}`,
           () =>
@@ -370,9 +373,15 @@ export async function finalizeIndexing({
               concurrency: semanticConfig.embeddingConcurrency,
               batchSize: semanticConfig.embeddingBatchSize,
               postIndexSessionTimeoutMs,
-              deferVectorIndexCreate:
-                deferJinaVectorIndexCreate &&
-                embModel === "jina-embeddings-v2-base-code",
+              ...(matchingJinaFinalization
+                ? {
+                    jinaHnswSpec: matchingJinaFinalization.spec,
+                    deferVectorIndexCreate:
+                      matchingJinaFinalization.deferCreate,
+                    onVectorIndexMayBeAbsent:
+                      matchingJinaFinalization.onMayBeAbsent,
+                  }
+                : {}),
             }),
         );
         logger.info(

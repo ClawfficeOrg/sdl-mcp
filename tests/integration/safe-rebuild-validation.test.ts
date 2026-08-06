@@ -234,7 +234,7 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     assert.equal(postReopenBuildCalls, 1);
     assert.ok(
       indexOptions.every(
-        (options) => options?.deferJinaVectorIndexCreate === true,
+        (options) => options?.jinaHnswFinalization === undefined,
       ),
     );
 
@@ -318,6 +318,68 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     );
     await closeLadybugDb();
     assert.equal(getLadybugDbPath(), null);
+  });
+
+  it("passes one configured Jina HNSW finalization object to every repo", async () => {
+    const fixture = createFixture();
+    const config = {
+      ...loadConfig(fixture.configPath),
+      semantic: {
+        enabled: true,
+        provider: "mock" as const,
+        generateSummaries: false,
+        retrieval: {
+          vector: {
+            enabled: true,
+            efc: 321,
+            indexes: {
+              "jina-embeddings-v2-base-code": {
+                indexName: "configured_jina_hnsw",
+              },
+            },
+          },
+        },
+      },
+    };
+    const finalizations: unknown[] = [];
+
+    await runSafeRebuild({
+      options: {
+        config: fixture.configPath,
+        force: true,
+        safeRebuildPath: fixture.candidatePath,
+      },
+      config,
+      configPath: fixture.configPath,
+      activeGraphDbPath: fixture.activePath,
+      _indexRepoForTesting: async (...args) => {
+        finalizations.push(args[4]?.jinaHnswFinalization);
+        return indexRepo(...args);
+      },
+      _runReopenedHnswCanaryForTesting: async () => undefined,
+      _validateCandidateForTesting: async () => ({
+        repoIds: config.repos.map((repo) => repo.repoId).sort(),
+        physicalSymbolTotal: 1,
+        distinctSymbolTotal: 1,
+        sampledSymbolIds: [],
+      }),
+    });
+
+    assert.equal(finalizations.length, config.repos.length);
+    assert.ok(finalizations[0]);
+    assert.ok(
+      finalizations.every((finalization) => finalization === finalizations[0]),
+    );
+    assert.deepEqual(finalizations[0], {
+      spec: {
+        model: "jina-embeddings-v2-base-code",
+        indexName: "configured_jina_hnsw",
+        vectorProperty: "embeddingJinaCodeVec",
+        dimension: 768,
+        efc: 321,
+      },
+      deferCreate: true,
+    });
   });
 
   it("revalidates earlier repository manifests after each later repository checkpoint", async () => {

@@ -120,6 +120,36 @@ describe("semantic pipeline regressions", () => {
       "metrics and summaries stay session-serialized before semantic model cycles",
     );
   });
+
+  it("threads one Jina HNSW finalization contract through every indexer path", () => {
+    const indexer = readSource("src/indexer/indexer.ts");
+    assert.match(
+      indexer,
+      /jinaHnswFinalization\?:\s*\{[\s\S]*spec:\s*ConfiguredJinaHnswSpec;[\s\S]*deferCreate:\s*true;[\s\S]*onMayBeAbsent\?:\s*\(\)\s*=>\s*void;[\s\S]*\}/,
+    );
+    assert.doesNotMatch(indexer, /deferJinaVectorIndexCreate/);
+    assert.equal(
+      indexer.match(/jinaHnswFinalization,/g)?.length,
+      3,
+      "legacy finalize and provider-first readiness call sites share the option object",
+    );
+  });
+
+  it("uses configured HNSW catalog fields when a matching spec is passed", () => {
+    const embeddings = readSource("src/indexer/embeddings.ts");
+    const fnStart = embeddings.indexOf(
+      "export async function refreshSymbolEmbeddings(",
+    );
+    const nextFnStart = embeddings.indexOf("\nexport ", fnStart + 1);
+    const fnBody = embeddings.slice(
+      fnStart,
+      nextFnStart === -1 ? embeddings.length : nextFnStart,
+    );
+    assert.match(fnBody, /params\.jinaHnswSpec\?\.model === modelName/);
+    assert.match(fnBody, /jinaHnswSpec\?\.indexName/);
+    assert.match(fnBody, /jinaHnswSpec\?\.vectorProperty/);
+    assert.match(fnBody, /jinaHnswSpec\?\.dimension/);
+  });
   it("uses the unified retrieval path instead of a legacy rerank", () => {
     const source = readSource("src/mcp/tools/symbol.ts");
     const fnStart = source.indexOf("export async function handleSymbolSearch(");

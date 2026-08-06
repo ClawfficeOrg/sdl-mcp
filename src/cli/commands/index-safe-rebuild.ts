@@ -43,6 +43,7 @@ import {
   type IndexResult,
 } from "../../indexer/indexer.js";
 import { runHnswRebuildCycle } from "../../indexer/hnsw-rebuild-cycle.js";
+import { resolveConfiguredJinaHnswSpec } from "../../indexer/jina-hnsw-finalization.js";
 import {
   waitForGraphIntegrityVerifier,
 } from "../../indexer/provider-first/background-graph-integrity-verifier.js";
@@ -676,6 +677,10 @@ export async function runSafeRebuild(
   params._beforeCandidateInitForTesting?.();
   const savedEnvironment = setCandidateGraphPath(request.targetGraphDbPath);
   const indexRepoImpl = params._indexRepoForTesting ?? indexRepo;
+  const jinaHnswSpec = resolveConfiguredJinaHnswSpec(params.config);
+  const jinaHnswFinalization = jinaHnswSpec
+    ? { spec: jinaHnswSpec, deferCreate: true as const }
+    : undefined;
   const validateCandidate =
     params._validateCandidateForTesting ?? validateSafeRebuildCandidate;
   const validateStorageAfterRepo =
@@ -727,7 +732,7 @@ export async function runSafeRebuild(
         {
           includeTimings: Boolean(params.options.diagnostics),
           isolatedRebuild: true,
-          deferJinaVectorIndexCreate: true,
+          jinaHnswFinalization,
         },
       );
       // A COPY-built LadybugDB 0.18.1 Symbol table can lose earlier STRING

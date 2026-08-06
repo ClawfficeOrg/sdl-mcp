@@ -21,6 +21,10 @@ import {
   queryVectorIndexProbe,
   showIndexesStrict,
 } from "../../dist/retrieval/index-lifecycle.js";
+import {
+  getLoggerDiagnostics,
+  setConsoleMirroring,
+} from "../../dist/util/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -380,6 +384,13 @@ describe("Semantic Embedding Pipeline", () => {
       symbols,
       rebuildMinUncachedRows: 1,
       embeddingProvider: provider,
+      jinaHnswSpec: {
+        model: jinaModel,
+        indexName: "configured_jina_hnsw",
+        vectorProperty: "embeddingJinaCodeVec",
+        dimension: 768,
+        efc: 321,
+      },
       batchSize: 1,
       concurrency: 2,
       onProgress: ({ substage }) => progressSubstages.push(substage),
@@ -397,7 +408,21 @@ describe("Semantic Embedding Pipeline", () => {
         snapshot: Record<string, number>,
       ) => void;
     };
-    const result = await refreshSymbolEmbeddings(refreshParams);
+    const previousConsoleMirroring = getLoggerDiagnostics().consoleMirroring;
+    const originalStderrWrite = process.stderr.write;
+    const createLogs: string[] = [];
+    process.stderr.write = ((data: string | Uint8Array) => {
+      createLogs.push(String(data));
+      return true;
+    }) as typeof process.stderr.write;
+    setConsoleMirroring(true);
+    let result: Awaited<ReturnType<typeof refreshSymbolEmbeddings>>;
+    try {
+      result = await refreshSymbolEmbeddings(refreshParams);
+    } finally {
+      setConsoleMirroring(previousConsoleMirroring);
+      process.stderr.write = originalStderrWrite;
+    }
 
     assert.deepStrictEqual(result, {
       embedded: symbols.length,
@@ -406,6 +431,11 @@ describe("Semantic Embedding Pipeline", () => {
     assert.ok(
       progressSubstages.includes("symbolVectorIndex"),
       "the rebuild must expose HNSW construction after embedding progress",
+    );
+    assert.match(
+      createLogs.join(""),
+      /Vector index 'configured_jina_hnsw' created[\s\S]*efc=321/,
+      "the configured efc must reach the real createVectorIndex boundary",
     );
 
     const conn = await getLadybugConn();
@@ -470,6 +500,13 @@ describe("Semantic Embedding Pipeline", () => {
       symbols,
       rebuildMinUncachedRows: 1,
       embeddingProvider: provider,
+      jinaHnswSpec: {
+        model: jinaModel,
+        indexName: "symbol_vec_jina_code_v2",
+        vectorProperty: "embeddingJinaCodeVec",
+        dimension: 768,
+        efc: 200,
+      },
       deferVectorIndexCreate: true,
       recordTiming: (phaseName) => timings.push(phaseName),
       onProgress: ({ message }) => progressMessages.push(message),
@@ -485,6 +522,10 @@ describe("Semantic Embedding Pipeline", () => {
     );
     assert.equal(timings.includes("hnsw.create"), false);
     assert.equal(progressMessages.includes("ready"), false);
+    assert.equal(
+      progressMessages.includes("deferred until cold reopen"),
+      true,
+    );
     for (const symbol of symbols) {
       assert.ok(
         await ladybugDb.getSymbolEmbeddingFromNode(
@@ -494,6 +535,105 @@ describe("Semantic Embedding Pipeline", () => {
         ),
       );
     }
+  });
+
+  it("reports the configured index may be absent before inference failure", async () => {
+    const { provider } = createRecordingProvider();
+    await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+    });
+    const events: string[] = [];
+    const changedSymbols = symbols.map((symbol) => ({
+      ...symbol,
+      astFingerprint: `${symbol.astFingerprint}-changed`,
+    }));
+
+    await assert.rejects(
+      refreshSymbolEmbeddings({
+        repoId,
+        provider: "local",
+        model: jinaModel,
+        symbols: changedSymbols,
+        rebuildMinUncachedRows: 1,
+        embeddingProvider: {
+          ...provider,
+          async embed(): Promise<number[][]> {
+            events.push("inference");
+            throw new Error("injected inference failure");
+          },
+        },
+        jinaHnswSpec: {
+          model: jinaModel,
+          indexName: "configured_jina_hnsw",
+          vectorProperty: "embeddingJinaCodeVec",
+          dimension: 768,
+          efc: 321,
+        },
+        deferVectorIndexCreate: true,
+        onVectorIndexMayBeAbsent: () => events.push("may-be-absent"),
+      }),
+      /Embedding failure rate exceeds 50%/,
+    );
+
+    assert.deepEqual(events, ["may-be-absent", "inference"]);
+    const conn = await getLadybugConn();
+    assert.equal(
+      (await showIndexesStrict(conn)).some(
+        (index) => index.name === "symbol_vec_jina_code_v2",
+      ),
+      true,
+      "the configured absent index must not fall back to dropping the mapping default",
+    );
+  });
+
+  it("keeps indexed writes and skips the callback when configured drop fails", async () => {
+    const { provider } = createRecordingProvider();
+    await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+    });
+    const events: string[] = [];
+    const changedSymbols = symbols.map((symbol) => ({
+      ...symbol,
+      astFingerprint: `${symbol.astFingerprint}-changed`,
+    }));
+
+    const result = await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols: changedSymbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+      jinaHnswSpec: {
+        model: jinaModel,
+        indexName: "invalid-index-name",
+        vectorProperty: "embeddingJinaCodeVec",
+        dimension: 768,
+        efc: 321,
+      },
+      deferVectorIndexCreate: true,
+      onVectorIndexMayBeAbsent: () => events.push("may-be-absent"),
+    });
+
+    assert.deepEqual(result, { embedded: symbols.length, skipped: 0 });
+    assert.deepEqual(events, []);
+    const conn = await getLadybugConn();
+    assert.equal(
+      (await showIndexesStrict(conn)).some(
+        (index) => index.name === "symbol_vec_jina_code_v2",
+      ),
+      true,
+    );
   });
 
   it("rejects an HNSW probe that cannot recover a near-zero neighbor", async () => {

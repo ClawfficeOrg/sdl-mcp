@@ -355,12 +355,26 @@ describe("provider-first indexing foundation", () => {
     const calls: string[] = [];
     const timings: string[] = [];
     const memoryPhases: string[] = [];
+    const mayBeAbsentEvents: string[] = [];
+    const jinaHnswSpec = {
+      model: "jina-embeddings-v2-base-code",
+      indexName: "configured_jina_hnsw",
+      vectorProperty: "embeddingJinaCodeVec",
+      dimension: 768,
+      efc: 321,
+    } as const;
+    const onMayBeAbsent = () => mayBeAbsentEvents.push("may-be-absent");
+    const symbolParams: Array<Record<string, unknown>> = [];
     const result = await runProviderFirstSemanticReadinessRefresh({
       recordTiming: (phaseName) => timings.push(phaseName),
       recordMemorySnapshot: (phaseName) => memoryPhases.push(phaseName),
       repoId: "repo-semantic-refresh",
       versionId: "v-semantic-refresh",
-      deferJinaVectorIndexCreate: true,
+      jinaHnswFinalization: {
+        spec: jinaHnswSpec,
+        deferCreate: true,
+        onMayBeAbsent,
+      },
       appConfig: {
         semantic: {
           enabled: true,
@@ -388,6 +402,7 @@ describe("provider-first indexing foundation", () => {
           };
         },
         refreshSymbolEmbeddings: async (params) => {
+          symbolParams.push(params);
           calls.push(
             `symbol:${params.model}:${String(params.deferVectorIndexCreate)}`,
           );
@@ -434,6 +449,74 @@ describe("provider-first indexing foundation", () => {
     assert.deepEqual(memoryPhases, [
       "semanticReadiness.symbolEmbeddings:jina-embeddings-v2-base-code.beforeHnsw",
     ]);
+    assert.strictEqual(symbolParams[0]?.jinaHnswSpec, jinaHnswSpec);
+    assert.strictEqual(
+      symbolParams[0]?.onVectorIndexMayBeAbsent,
+      onMayBeAbsent,
+    );
+    assert.deepEqual(mayBeAbsentEvents, []);
+  });
+
+  it("leaves the Jina finalization contract off the Nomic lane", async () => {
+    const symbolParams: Array<Record<string, unknown>> = [];
+    const jinaHnswSpec = {
+      model: "jina-embeddings-v2-base-code",
+      indexName: "configured_jina_hnsw",
+      vectorProperty: "embeddingJinaCodeVec",
+      dimension: 768,
+      efc: 321,
+    } as const;
+
+    await runProviderFirstSemanticReadinessRefresh({
+      repoId: "repo-semantic-max-recall",
+      versionId: "v-semantic-max-recall",
+      appConfig: {
+        semantic: {
+          enabled: true,
+          provider: "mock",
+          embeddingProfile: "max-recall",
+          generateSummaries: false,
+        },
+      } as AppConfig,
+      jinaHnswFinalization: {
+        spec: jinaHnswSpec,
+        deferCreate: true,
+        onMayBeAbsent: () => {},
+      },
+      deps: {
+        refreshFileSummaryEmbeddings: async () => ({
+          embedded: 1,
+          skipped: 0,
+          missing: 0,
+          degraded: false,
+        }),
+        refreshSymbolEmbeddings: async (params) => {
+          symbolParams.push(params);
+          return { embedded: 1, skipped: 0 };
+        },
+        buildDeferredIndexes: async () => {},
+        markDerivedStateComputed: async () => {},
+        recordDerivedStateError: async () => {},
+      },
+    });
+
+    const jinaParams = symbolParams.find(
+      (params) => params.model === "jina-embeddings-v2-base-code",
+    );
+    const nomicParams = symbolParams.find(
+      (params) => params.model === "nomic-embed-text-v1.5",
+    );
+    assert.strictEqual(jinaParams?.jinaHnswSpec, jinaHnswSpec);
+    assert.equal(jinaParams?.deferVectorIndexCreate, true);
+    assert.equal(Object.hasOwn(nomicParams ?? {}, "jinaHnswSpec"), false);
+    assert.equal(
+      Object.hasOwn(nomicParams ?? {}, "deferVectorIndexCreate"),
+      false,
+    );
+    assert.equal(
+      Object.hasOwn(nomicParams ?? {}, "onVectorIndexMayBeAbsent"),
+      false,
+    );
   });
 
   it("keeps semantic readiness deferred when either embedding lane is incomplete", async () => {
