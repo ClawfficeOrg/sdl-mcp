@@ -29,6 +29,7 @@ import {
   readSymbolNumericVector,
 } from "../../dist/db/ladybug-symbol-embeddings.js";
 import {
+  createVectorIndex,
   dropVectorIndex,
   queryVectorIndexProbe,
   showIndexesStrict,
@@ -795,6 +796,94 @@ describe("Semantic Embedding Pipeline", () => {
       ),
       true,
     );
+  });
+
+  it("refuses a configured Symbol vector index name owned by another property before DROP", async () => {
+    const { provider: nomicProvider } = createRecordingProvider();
+    const nomicModel = "nomic-embed-text-v1.5";
+    const collidingIndexName = "configured_jina_hnsw";
+    await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: nomicModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: nomicProvider,
+    });
+
+    const conn = await getLadybugConn();
+    assert.deepStrictEqual(
+      await dropVectorIndex(conn, "Symbol", "symbol_vec_nomic_embed_v15"),
+      { status: "dropped" },
+    );
+    assert.equal(
+      await createVectorIndex(
+        conn,
+        "Symbol",
+        "embeddingNomicVec",
+        collidingIndexName,
+        768,
+        200,
+      ),
+      true,
+    );
+
+    const events: string[] = [];
+    const { provider: jinaProvider } = createRecordingProvider();
+    await assert.rejects(
+      refreshSymbolEmbeddings({
+        repoId,
+        provider: "local",
+        model: jinaModel,
+        symbols,
+        rebuildMinUncachedRows: 1,
+        embeddingProvider: {
+          ...jinaProvider,
+          async embed(texts): Promise<number[][]> {
+            events.push("inference");
+            return jinaProvider.embed(texts);
+          },
+        },
+        jinaHnswSpec: {
+          model: jinaModel,
+          indexName: collidingIndexName,
+          vectorProperty: "embeddingJinaCodeVec",
+          dimension: 768,
+          efc: 321,
+        },
+        deferVectorIndexCreate: true,
+        onVectorIndexMayBeAbsent: () => events.push("may-be-absent"),
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.strictEqual(error.name, "IndexError");
+        assert.match(
+          error.message,
+          /configured_jina_hnsw.*Symbol\.embeddingNomicVec.*Symbol\.embeddingJinaCodeVec/,
+        );
+        return true;
+      },
+    );
+
+    assert.deepStrictEqual(events, []);
+    const preservedIndexes = (await showIndexesStrict(conn)).filter(
+      (index) => index.name === collidingIndexName,
+    );
+    assert.strictEqual(preservedIndexes.length, 1);
+    assert.strictEqual(preservedIndexes[0]?.type, "vector");
+    assert.strictEqual(preservedIndexes[0]?.tableName, "Symbol");
+    assert.strictEqual(preservedIndexes[0]?.property, "embeddingNomicVec");
+    for (const symbol of symbols) {
+      assert.strictEqual(
+        await ladybugDb.getSymbolEmbeddingFromNode(
+          conn,
+          symbol.symbolId,
+          jinaModel,
+        ),
+        null,
+        `${symbol.symbolId} must not receive a fallback Jina write`,
+      );
+    }
   });
 
   it("selects deterministic model-aware Symbol vector probes", async () => {

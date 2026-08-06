@@ -33,6 +33,7 @@ import {
 import {
   createVectorIndex,
   dropVectorIndex,
+  showIndexesStrict,
 } from "../retrieval/index-lifecycle.js";
 import {
   EMBEDDING_MODELS,
@@ -556,7 +557,21 @@ export async function refreshSymbolEmbeddings(params: {
     if (useRebuildPath) {
       // The outer HNSW lifecycle checkpoints before this session starts.
       const dropResult = await measure("hnsw.drop", () =>
-        withWriteConn((wConn) => dropVectorIndex(wConn, "Symbol", indexName)),
+        withWriteConn(async (wConn) => {
+          const conflictingIndex = (await showIndexesStrict(wConn)).find(
+            (index) =>
+              index.name === indexName &&
+              (index.type !== "vector" ||
+                index.tableName !== "Symbol" ||
+                index.property !== vecProp),
+          );
+          if (conflictingIndex !== undefined) {
+            throw new IndexError(
+              `Refusing to drop vector index '${indexName}': catalog owns it as a ${conflictingIndex.type} index on ${conflictingIndex.tableName ?? "<unknown>"}.${conflictingIndex.property}; expected a vector index on Symbol.${vecProp}`,
+            );
+          }
+          return dropVectorIndex(wConn, "Symbol", indexName);
+        }),
       );
       indexDropped = dropResult.status !== "failed";
       if (indexDropped) {
@@ -827,8 +842,8 @@ export async function refreshSymbolEmbeddings(params: {
       }
 
       // P2: normal refreshes rebuild the dropped index regardless of write
-      // outcome. Safe rebuilds explicitly leave Jina absent for the cold-
-      // reopened finalizer below the indexing lifecycle.
+      // outcome. Lifecycle-owned deferrals leave the matching model index
+      // absent for finalization after a cold reopen.
       if (
         indexDropped &&
         vecProp !== null &&

@@ -489,19 +489,40 @@ export const SemanticRetrievalVectorIndexSchema = z.object({
   indexName: z.string(),
 });
 
-export const SemanticRetrievalVectorConfigSchema = z.object({
-  enabled: z.boolean().default(true),
-  topK: z.number().int().min(1).default(75),
-  /** Build-time ef_construction for HNSW index creation. */
-  efc: z.number().int().min(1).default(200),
-  /** Query-time ef_search for HNSW similarity queries. @deprecated Use efs for query-time only. */
-  efs: z.number().int().min(1).default(200),
-  /** Per-model HNSW index config keyed by model name. */
-  indexes: z.record(z.string(), SemanticRetrievalVectorIndexSchema).default({
-    "jina-embeddings-v2-base-code": { indexName: "symbol_vec_jina_code_v2" },
-    "nomic-embed-text-v1.5": { indexName: "symbol_vec_nomic_embed_v15" },
-  }),
-});
+export const SemanticRetrievalVectorConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    topK: z.number().int().min(1).default(75),
+    /** Build-time ef_construction for HNSW index creation. */
+    efc: z.number().int().min(1).default(200),
+    /** Query-time ef_search for HNSW similarity queries. @deprecated Use efs for query-time only. */
+    efs: z.number().int().min(1).default(200),
+    /** Per-model HNSW index config keyed by model name. */
+    indexes: z.record(z.string(), SemanticRetrievalVectorIndexSchema).default({
+      "jina-embeddings-v2-base-code": {
+        indexName: "symbol_vec_jina_code_v2",
+      },
+      "nomic-embed-text-v1.5": {
+        indexName: "symbol_vec_nomic_embed_v15",
+      },
+    }),
+  })
+  .superRefine(({ indexes }, ctx) => {
+    const modelByIndexName = new Map<string, string>();
+    for (const [model, { indexName }] of Object.entries(indexes)) {
+      if (indexName.length === 0) continue;
+      const existingModel = modelByIndexName.get(indexName);
+      if (existingModel !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          message: `Vector index name '${indexName}' is also configured for model '${existingModel}'`,
+          path: ["indexes", model, "indexName"],
+        });
+        continue;
+      }
+      modelByIndexName.set(indexName, model);
+    }
+  });
 
 export const SemanticRetrievalFusionConfigSchema = z
   .object({

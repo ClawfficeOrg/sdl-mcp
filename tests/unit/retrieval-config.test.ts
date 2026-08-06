@@ -95,6 +95,53 @@ describe("SemanticRetrievalConfigSchema", () => {
     assert.strictEqual(nomic.indexName, "symbol_vec_nomic_embed_v15");
   });
 
+  it("rejects duplicate nonempty vector index names with a model-specific issue", () => {
+    const result = SemanticRetrievalConfigSchema.safeParse({
+      vector: {
+        indexes: {
+          "jina-embeddings-v2-base-code": { indexName: "shared_symbol_hnsw" },
+          "nomic-embed-text-v1.5": { indexName: "shared_symbol_hnsw" },
+        },
+      },
+    });
+
+    assert.equal(result.success, false);
+    if (result.success) return;
+    assert.deepStrictEqual(result.error.issues, [
+      {
+        code: "custom",
+        message:
+          "Vector index name 'shared_symbol_hnsw' is also configured for model 'jina-embeddings-v2-base-code'",
+        path: [
+          "vector",
+          "indexes",
+          "nomic-embed-text-v1.5",
+          "indexName",
+        ],
+      },
+    ]);
+  });
+
+  it("accepts unique custom vector index names", () => {
+    const result = SemanticRetrievalConfigSchema.parse({
+      vector: {
+        indexes: {
+          "jina-embeddings-v2-base-code": { indexName: "custom_jina_hnsw" },
+          "nomic-embed-text-v1.5": { indexName: "custom_nomic_hnsw" },
+        },
+      },
+    });
+
+    assert.strictEqual(
+      result.vector.indexes["jina-embeddings-v2-base-code"]?.indexName,
+      "custom_jina_hnsw",
+    );
+    assert.strictEqual(
+      result.vector.indexes["nomic-embed-text-v1.5"]?.indexName,
+      "custom_nomic_hnsw",
+    );
+  });
+
   it("fusion sub-schema defaults: strategy='rrf', rrfK=60", () => {
     const result = SemanticRetrievalConfigSchema.parse({});
     const fusion = result.fusion!;
