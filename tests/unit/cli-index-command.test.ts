@@ -530,8 +530,20 @@ describe("CLI index command", () => {
         assert.strictEqual(state.getPrepareCalls(), 1);
         assert.strictEqual(state.getValidateCalls(), 1);
         assert.deepStrictEqual(state.getInitOptions(), [
-          { deferSemanticVectorIndexes: true },
-          { deferSemanticVectorIndexes: true },
+          {
+            deferredVectorIndex: {
+              tableName: "Symbol",
+              indexName: spec.indexName,
+              property: spec.vectorProperty,
+            },
+          },
+          {
+            deferredVectorIndex: {
+              tableName: "Symbol",
+              indexName: spec.indexName,
+              property: spec.vectorProperty,
+            },
+          },
         ]);
         assert.strictEqual(state.getOpenPath(), null);
       });
@@ -1804,9 +1816,12 @@ describe("CLI index command", () => {
       const restoreGraphEnv = clearGraphPathEnvironment();
       let closeCalls = 0;
       let prepareCalls = 0;
+      const stderr: string[] = [];
       const origError = console.error;
       const origLog = console.log;
-      console.error = () => {};
+      console.error = (...args: unknown[]) => {
+        stderr.push(args.map(String).join(" "));
+      };
       console.log = () => {};
       process.exit = ((code?: string | number | null) => {
         throw new Error(`process.exit:${code ?? ""}`);
@@ -1822,6 +1837,7 @@ describe("CLI index command", () => {
                 closeCalls++;
                 assert.notStrictEqual(options?.strict, true);
                 await ladybug.closeLadybugDb(options);
+                throw new Error("cleanup close failure");
               },
               resolveEffectiveIndexMode: async () => "full",
               indexRepo: async () => {
@@ -1838,6 +1854,11 @@ describe("CLI index command", () => {
 
         assert.strictEqual(closeCalls, 1);
         assert.strictEqual(prepareCalls, 0);
+        const output = stderr.join("\n");
+        const primaryAt = output.indexOf("primary repository failure");
+        const cleanupAt = output.indexOf("cleanup close failure");
+        assert.ok(primaryAt >= 0 && primaryAt < cleanupAt);
+        assert.match(output, /\n    Cleanup: cleanup close failure/);
       } finally {
         await ladybug.closeLadybugDb();
         restoreGraphEnv();

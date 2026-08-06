@@ -569,7 +569,15 @@ export async function runSafeRebuild(
       params.config,
       params.configPath,
       safeRebuildSession,
-      { deferSemanticVectorIndexes: true },
+      jinaHnswSpec
+        ? {
+            deferredVectorIndex: {
+              tableName: "Symbol",
+              indexName: jinaHnswSpec.indexName,
+              property: jinaHnswSpec.vectorProperty,
+            },
+          }
+        : undefined,
     );
     await params._afterCandidateOpenForTesting?.("reopen");
     params.onLifecycleEvent?.("candidate:reopened");
@@ -594,7 +602,15 @@ export async function runSafeRebuild(
         params.config,
         params.configPath,
         safeRebuildSession,
-        { deferSemanticVectorIndexes: true },
+        jinaHnswSpec
+          ? {
+              deferredVectorIndex: {
+                tableName: "Symbol",
+                indexName: jinaHnswSpec.indexName,
+                property: jinaHnswSpec.vectorProperty,
+              },
+            }
+          : undefined,
       );
       params.onLifecycleEvent?.("candidate:reopened-after-canary");
       reopenedHnswCanary.queryMs = await validateReopenedJinaHnswImpl({

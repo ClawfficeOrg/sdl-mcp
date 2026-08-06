@@ -2347,7 +2347,11 @@ export async function runDirectJinaHnswLifecycle(
   const reopen = async (): Promise<void> => {
     try {
       await dependencies.initGraphDb(params.config, params.configPath, {
-        deferSemanticVectorIndexes: true,
+        deferredVectorIndex: {
+          tableName: "Symbol",
+          indexName: params.spec.indexName,
+          property: params.spec.vectorProperty,
+        },
       });
       dbInitialized = true;
     } catch (initError) {
@@ -2933,19 +2937,28 @@ export async function indexCommand(
   }
 
   if (errors.length > 0) {
+    if (dbCleanupOwned || derivedRefreshDisabled) {
+      try {
+        await cleanupOneShotIndexing(
+          dbCleanupOwned,
+          derivedRefreshDisabled,
+          dependencies.closeLadybugDb,
+        );
+      } catch (cleanupError) {
+        errors[0].secondary = [
+          ...(errors[0].secondary ?? []),
+          ...flattenIndexErrorMessages(cleanupError).map(
+            (message) => `Cleanup: ${message}`,
+          ),
+        ];
+      }
+    }
     console.error(`\nFailed to index ${errors.length} repo(s):`);
     for (const e of errors) {
       console.error(`  - ${e.repoId}: ${e.error}`);
       for (const secondary of e.secondary ?? []) {
         console.error(`    ${secondary}`);
       }
-    }
-    if (dbCleanupOwned || derivedRefreshDisabled) {
-      await cleanupOneShotIndexing(
-        dbCleanupOwned,
-        derivedRefreshDisabled,
-        dependencies.closeLadybugDb,
-      );
     }
     process.exit(1);
   }

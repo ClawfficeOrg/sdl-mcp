@@ -220,8 +220,15 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
     await measure("semanticReadiness.deferredIndexes", () =>
       deps.buildDeferredIndexes({
-        deferSemanticVectorIndexes:
-          jinaHnswFinalization?.deferCreate === true,
+        deferSemanticVectorIndexes: false,
+        deferredVectorIndex:
+          jinaHnswFinalization?.deferCreate === true
+            ? {
+                tableName: "Symbol",
+                indexName: jinaHnswFinalization.spec.indexName,
+                property: jinaHnswFinalization.spec.vectorProperty,
+              }
+            : undefined,
         deferSemanticTextIndexes: false,
         recordTiming: (phaseName, durationMs) =>
           params.recordTiming?.(

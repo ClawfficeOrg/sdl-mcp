@@ -2467,8 +2467,15 @@ async function indexRepoImpl(
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
             deferSemanticVectorIndexes:
-              finalizeResult.semanticDeferred ||
-              jinaHnswFinalization?.deferCreate === true,
+              finalizeResult.semanticDeferred,
+            deferredVectorIndex:
+              jinaHnswFinalization?.deferCreate === true
+                ? {
+                    tableName: "Symbol",
+                    indexName: jinaHnswFinalization.spec.indexName,
+                    property: jinaHnswFinalization.spec.vectorProperty,
+                  }
+                : undefined,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });
@@ -4372,10 +4379,17 @@ async function indexRepoImpl(
         // --- Phase: build deferred indexes (fresh DB only) ---
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
-            // The safe-rebuild Jina index is created after a cold reopen.
+            // The lifecycle-owned Jina index is created after a cold reopen.
             deferSemanticVectorIndexes:
-              finalizeResult.semanticDeferred ||
-              jinaHnswFinalization?.deferCreate === true,
+              finalizeResult.semanticDeferred,
+            deferredVectorIndex:
+              jinaHnswFinalization?.deferCreate === true
+                ? {
+                    tableName: "Symbol",
+                    indexName: jinaHnswFinalization.spec.indexName,
+                    property: jinaHnswFinalization.spec.vectorProperty,
+                  }
+                : undefined,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });

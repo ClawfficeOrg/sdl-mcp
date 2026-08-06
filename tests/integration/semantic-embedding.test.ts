@@ -29,6 +29,8 @@ import {
   readSymbolNumericVector,
 } from "../../dist/db/ladybug-symbol-embeddings.js";
 import {
+  AGENTFEEDBACK_VECTOR_INDEX_NAMES,
+  FILESUMMARY_VECTOR_INDEX_NAMES,
   createVectorIndex,
   dropVectorIndex,
   queryVectorIndexProbe,
@@ -552,6 +554,7 @@ describe("Semantic Embedding Pipeline", () => {
 
   it("finalizes configured Jina HNSW through real normal-family cold reopens", async () => {
     const { provider } = createRecordingProvider();
+    const nomicModel = "nomic-embed-text-v1.5";
     const config = AppConfigSchema.parse({
       repos: [{ repoId, rootPath: "/fake/embed-repo" }],
       graphDatabase: { path: graphDbPath },
@@ -566,6 +569,7 @@ describe("Semantic Embedding Pipeline", () => {
             efc: 321,
             indexes: {
               [jinaModel]: { indexName: "configured_jina_hnsw" },
+              [nomicModel]: { indexName: "configured_nomic_hnsw" },
             },
           },
         },
@@ -576,6 +580,44 @@ describe("Semantic Embedding Pipeline", () => {
     assert.ok(spec);
     const configPath = join(testDir, "sdlmcp.config.json");
     writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+    let conn = await getLadybugConn();
+    const vector = makeDeterministicVector("non-jina bootstrap", 1, 0);
+    await upsertStandardFileSummaries(conn);
+    await ladybugDb.upsertAgentFeedback(conn, {
+      feedbackId: "feedback-bootstrap",
+      repoId,
+      versionId: "version-bootstrap",
+      sliceHandle: "slice-bootstrap",
+      usefulSymbolsJson: "[]",
+      missingSymbolsJson: "[]",
+      taskTagsJson: null,
+      taskType: "review",
+      taskText: "verify exact vector index deferral",
+      createdAt: "2026-08-06T00:00:00.000Z",
+    });
+    await ladybugDb.setSymbolEmbeddingOnNode(
+      conn,
+      symbols[0]!.symbolId,
+      nomicModel,
+      JSON.stringify(vector),
+      "nomic-card",
+      vector,
+    );
+    await ladybugDb.exec(
+      conn,
+      `MATCH (f:FileSummary {fileId: $fileId})
+       SET f.embeddingJinaCodeVec = $vector,
+           f.embeddingNomicVec = $vector`,
+      { fileId: "file1", vector },
+    );
+    await ladybugDb.exec(
+      conn,
+      `MATCH (f:AgentFeedback {feedbackId: $feedbackId})
+       SET f.embeddingJinaCodeVec = $vector,
+           f.embeddingNomicVec = $vector`,
+      { feedbackId: "feedback-bootstrap", vector },
+    );
 
     await refreshSymbolEmbeddings({
       repoId,
@@ -607,18 +649,38 @@ describe("Semantic Embedding Pipeline", () => {
       const graphInit = await import("../../dist/db/initGraphDb.js");
       await closeLadybugDb({ strict: true });
       await graphInit.initGraphDb(config, configPath);
-      let conn = await getLadybugConn();
-      assert.equal(
-        (await showIndexesStrict(conn)).some(
-          (index) => index.name === spec.indexName,
-        ),
-        true,
-        "default cold reopen must preserve semantic vector-index bootstrap",
-      );
-      assert.deepStrictEqual(
-        await dropVectorIndex(conn, "Symbol", spec.indexName),
-        { status: "dropped" },
-      );
+      conn = await getLadybugConn();
+      const expectedVectorIndexes = [
+        { table: "Symbol", name: spec.indexName },
+        { table: "Symbol", name: "configured_nomic_hnsw" },
+        {
+          table: "FileSummary",
+          name: FILESUMMARY_VECTOR_INDEX_NAMES.jinaCode,
+        },
+        { table: "FileSummary", name: FILESUMMARY_VECTOR_INDEX_NAMES.nomic },
+        {
+          table: "AgentFeedback",
+          name: AGENTFEEDBACK_VECTOR_INDEX_NAMES.jinaCode,
+        },
+        {
+          table: "AgentFeedback",
+          name: AGENTFEEDBACK_VECTOR_INDEX_NAMES.nomic,
+        },
+      ] as const;
+      const defaultIndexes = await showIndexesStrict(conn);
+      for (const expected of expectedVectorIndexes) {
+        const actual = defaultIndexes.find(
+          (index) =>
+            index.name === expected.name && index.tableName === expected.table,
+        );
+        assert.equal(actual?.type, "vector");
+        assert.equal(actual?.status, "healthy");
+        assert.equal(actual?.extensionLoaded, true);
+        assert.deepStrictEqual(
+          await dropVectorIndex(conn, expected.table, expected.name),
+          { status: "dropped" },
+        );
+      }
 
       const indexModule = await import("../../dist/cli/commands/index.js");
       const lifecycle = (
@@ -669,6 +731,21 @@ describe("Semantic Embedding Pipeline", () => {
               false,
               "finalizer-owned cold reopen must suppress semantic vector bootstrap",
             );
+            const reopenedIndexes = await showIndexesStrict(conn);
+            for (const expected of expectedVectorIndexes.slice(1)) {
+              const actual = reopenedIndexes.find(
+                (index) =>
+                  index.name === expected.name &&
+                  index.tableName === expected.table,
+              );
+              assert.equal(
+                actual?.type,
+                "vector",
+                `${expected.name} must still be ensured during Jina deferral`,
+              );
+              assert.equal(actual?.status, "healthy");
+              assert.equal(actual?.extensionLoaded, true);
+            }
             observedSuppressedReopen = true;
             return prepareReopenedJinaHnsw(params);
           },

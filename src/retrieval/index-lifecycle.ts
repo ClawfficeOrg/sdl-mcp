@@ -74,9 +74,17 @@ export type IndexLifecycleTimingRecorder = (
   durationMs: number,
 ) => void;
 
+/** One vector index whose creation is owned by an external finalizer. */
+export interface DeferredVectorIndexIdentity {
+  tableName: string;
+  indexName: string;
+  property: string;
+}
+
 export interface EnsureIndexesOptions {
   includeFtsIndex?: boolean;
   includeVectorIndexes?: boolean;
+  deferredVectorIndex?: DeferredVectorIndexIdentity;
   recordTiming?: IndexLifecycleTimingRecorder;
 }
 
@@ -905,6 +913,18 @@ export async function ensureIndexes(
               configuredEntry?.indexName ??
               getVectorIndexName(model) ??
               `symbol_vec_${propName.toLowerCase()}`;
+
+            if (
+              options.deferredVectorIndex?.tableName === "Symbol" &&
+              options.deferredVectorIndex.indexName === indexName &&
+              options.deferredVectorIndex.property === propName
+            ) {
+              logger.debug(
+                `[index-lifecycle] Skipping finalizer-owned Symbol vector index '${indexName}'`,
+              );
+              result.skipped.push(indexName);
+              continue;
+            }
 
             if (indexExistsForTable(existing, "Symbol", indexName, "vector")) {
               logger.debug(

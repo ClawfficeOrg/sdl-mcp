@@ -418,8 +418,13 @@ describe("provider-first indexing foundation", () => {
           return { embedded: 5, skipped: 6 };
         },
         buildDeferredIndexes: async (params) => {
+          const deferredVectorIndex = (
+            params as typeof params & {
+              deferredVectorIndex?: unknown;
+            }
+          ).deferredVectorIndex;
           calls.push(
-            `indexes:${String(params.deferSemanticVectorIndexes)}:${String(params.deferSemanticTextIndexes)}`,
+            `indexes:${String(params.deferSemanticVectorIndexes)}:${String(params.deferSemanticTextIndexes)}:${JSON.stringify(deferredVectorIndex)}`,
           );
         },
         markDerivedStateComputed: async (_repoId, _versionId, flags) => {
@@ -438,7 +443,7 @@ describe("provider-first indexing foundation", () => {
       "summaries",
       "file:nomic-embed-text-v1.5",
       "symbol:jina-embeddings-v2-base-code:true",
-      "indexes:true:false",
+      'indexes:false:false:{"tableName":"Symbol","indexName":"configured_jina_hnsw","property":"embeddingJinaCodeVec"}',
       "computed:true:true",
     ]);
     assert.ok(
