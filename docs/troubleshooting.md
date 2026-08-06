@@ -99,11 +99,14 @@ stale symbol deletion, file upsert, symbol reference insert, symbol upsert, and
 `DEPENDS_ON` edge insert costs.
 
 If provider-first indexing pauses after `Symbol Embeddings` reaches 100%, that
-progress tick marks completed inference, not the end of persistence. With
-`--diagnostics`, compare the wall-clock `.inference`, `.persistence.flush`,
-`.persistence.finalFlush`, `.hnsw.drop`, `.hnsw.create`, `.checkpoint.pre`, and
-`.checkpoint.post` subphases under
-`semanticReadiness.symbolEmbeddings:<model>` to identify the remaining work.
+progress tick marks completed inference, not the end of persistence. On inline
+HNSW paths, use `--diagnostics` to compare the wall-clock `.inference`,
+`.persistence.flush`, `.persistence.finalFlush`, `.hnsw.drop`, `.hnsw.create`,
+`.checkpoint.pre`, and `.checkpoint.post` subphases under
+`semanticReadiness.symbolEmbeddings:<model>`. For local one-shot effective-full
+Jina indexing, inspect the
+[post-reopen finalizer diagnostic](#symbol-embeddings-reach-100-but-indexing-continues)
+instead.
 
 ### Indexing or Tool Queue Timeouts
 
@@ -483,20 +486,29 @@ live outside those defaults.
 #### Symbol embeddings reach 100% but indexing continues
 
 - Symptom: `Symbol Embeddings` reaches 100%, then indexing appears idle for several minutes.
-- Cause: embedding inference is complete, but LadybugDB must still build the Symbol HNSW vector index. Current builds report this separately as `Symbol Vector Index: <model>: building HNSW` and then `ready`.
+- Cause: embedding inference is complete, but LadybugDB must still build or validate the Symbol HNSW vector index. Local one-shot effective-full indexing defers the Jina build to a cold-reopened database, while incremental-only, HTTP-delegated, and `--watch` paths retain their existing lifecycle.
 - Resolution:
-  - use `index --diagnostics` and inspect the `semanticReadiness.symbolEmbeddings:<model>.hnsw.create` timing
-  - the same diagnostics report captures process RSS, heap, external memory, array buffers, and system free memory before/after inference and HNSW construction
-  - do not drop or rebuild the active graph's vector index manually
-  - to evaluate a lower construction setting without mutating the source graph, stop SDL-MCP and run `npm run bench:hnsw-efc -- --source <absolute-lbug-path> --efc 200,100 --queries 20 --k 10`
-  - the default `--load-mode create` streams Jina vectors from the source opened read-only into fresh rows; add `--load-mode update` to first create every row with a null vector and then update the existing rows in production-sized batches
-  - if both synthetic modes remain much faster than production, use `--load-mode clone` to copy and validate the complete stopped LadybugDB family before discovering and rebuilding its unique Jina index only on the temporary clone; use `--index-name <name>` only when an indexless clone should use a non-default name
-  - a slow clone rebuild implicates persistent graph shape or storage state; a fast clone rebuild implicates fresh-index session state or memory pressure
-  - safe rebuilds persist Jina vectors without creating HNSW in the long-lived indexing session; after the candidate is closed and reopened, SDL-MCP proves the index is absent, creates it once with `semantic.retrieval.vector.efc`, cold-reopens again, then query-validates it before publication
-  - when Jina vector retrieval is configured, a non-empty candidate with no valid Jina vectors fails validation instead of publishing without HNSW
-  - with `--diagnostics`, this post-reopen work is reported as `Post-reopen Jina HNSW build` with the effective `efc` and create/query/checkpoint timings
-  - compare both load modes before tuning `efc`; the benchmark builds each candidate in a temporary database, excludes null vectors from exact-cosine ground truth, compares logical symbol IDs, and deletes the temporary database afterward
-  - repeat once with `--efc 100,200` to reverse warm-cache ordering before changing the production setting; require recall parity as well as a meaningful build-time reduction
+  - For a local one-shot command with any effective-full repository, wait for every selected repository to finish before SDL-MCP handles the one global Symbol Jina index. This includes initial repositories and `--force` runs.
+  - Direct local one-shot indexing and safe rebuild use shared preparation on the first cold reopen to determine the outcome.
+  - `created` creates and checkpoints the index, then performs a second strict close and cold reopen before query validation. `validated-existing` validates the healthy existing index on the first cold reopen without creating or reopening again. `skipped-empty` creates nothing and skips query validation.
+  - Successful direct local one-shot effective-full Jina indexing prints the post-reopen finalizer diagnostic after the final strict close. Safe rebuild prints the same diagnostic only with `--diagnostics`.
+  - Read the diagnostic using this exact template:
+
+    ```text
+    Post-reopen Jina HNSW finalization: <created|validated-existing|skipped-empty>
+      jina-embeddings-v2-base-code (<index-name>, efc=<effective-efc>)
+      create=<ms>ms query=<ms>ms checkpoint=<ms>ms
+    ```
+  - Treat incremental-only, HTTP-delegated, and `--watch` runs as exclusions from this deferral. Nomic remains inline and is not part of the Jina optimization.
+  - When Jina vector retrieval is configured, a non-empty candidate with no valid Jina vectors fails validation instead of publishing without HNSW.
+  - On an inline path, use `index --diagnostics` and inspect the `semanticReadiness.symbolEmbeddings:<model>.hnsw.create` timing. The same diagnostics report captures process RSS, heap, external memory, array buffers, and system free memory before and after inference and HNSW construction.
+  - Do not drop or rebuild the active graph's vector index manually.
+  - To evaluate a lower construction setting without mutating the source graph, stop SDL-MCP and run `npm run bench:hnsw-efc -- --source <absolute-lbug-path> --efc 200,100 --queries 20 --k 10`.
+  - The default `--load-mode create` streams Jina vectors from the read-only source into fresh rows. Add `--load-mode update` to create every row with a null vector before updating existing rows in production-sized batches.
+  - If both synthetic modes remain much faster than production, use `--load-mode clone` to copy and validate the complete stopped LadybugDB family before rebuilding its unique Jina index only on the temporary clone. Use `--index-name <name>` only when an indexless clone should use a non-default name.
+  - A slow clone rebuild implicates persistent graph shape or storage state. A fast clone rebuild implicates fresh-index session state or memory pressure.
+  - Compare both load modes before tuning `efc`. The benchmark builds each candidate in a temporary database, excludes null vectors from exact-cosine ground truth, compares logical symbol IDs, and deletes the temporary database afterward.
+  - Repeat once with `--efc 100,200` to reverse warm-cache ordering before changing the production setting. Require recall parity and a meaningful build-time reduction.
 
 #### ONNX Runtime not loading
 

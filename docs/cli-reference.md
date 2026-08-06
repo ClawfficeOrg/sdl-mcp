@@ -140,6 +140,30 @@ Key options:
 - `-f, --force` (requests a full index)
 - `--safe-rebuild <PATH>` (requires `--force`; builds every configured repository in a new database)
 
+Local one-shot indexing automatically defers the configured Jina Symbol HNSW
+index when at least one selected repository resolves to effective `full` mode.
+This covers initial repositories and `--force`; SDL-MCP waits for every selected
+repository, including incremental companions, before it handles the single
+global Symbol Jina index. Incremental-only commands, HTTP-delegated commands,
+and `--watch` retain their existing index lifecycle.
+
+After the first strict close and cold reopen, shared preparation determines the
+outcome. `created` creates and checkpoints the index, then performs a second
+strict close and cold reopen before query validation. `validated-existing`
+validates the healthy existing index on the first cold reopen without creating
+or reopening again; `skipped-empty` creates nothing and skips query validation.
+Every outcome finishes with a final strict close before the CLI prints it.
+
+The builder honors `semantic.retrieval.vector.efc`. Nomic remains inline and
+outside this optimization.
+
+Successful direct local one-shot commands without `--safe-rebuild` retain a
+`Duration` line for each selected repository and print one `Wall time` line
+after finalization and cleanup. The outside-indexed-phases value subtracts the
+sum of successful repository durations. Safe rebuild does not print these
+command timing lines, and HTTP-delegated event timing remains server-owned and
+unchanged.
+
 SDL-MCP refuses an in-place full refresh when a populated repository already
 exists in the active graph. Use `--safe-rebuild` with a new absolute path
 instead. The command requires a stopped SDL-MCP owner, rejects `--watch` and
@@ -151,7 +175,11 @@ database is never opened or changed.
 A successful safe rebuild waits for graph-integrity verification, checkpoints
 and closes the candidate, reopens it, and validates repository membership,
 physical Symbol identity, canonical string columns, dependency endpoints, and
-enabled Symbol FTS. After the final close it rechecks the complete family and
+enabled Symbol FTS. It also defers the configured Jina Symbol HNSW build until
+all repositories finish, then cold-validates that global index before
+publication.
+
+After the final close it rechecks the complete family and
 atomically publishes the exact driver/storage, identity, and SHA-256 receipt
 while retaining the family lease. It leaves the candidate closed and does not
 update your configuration. Keep SDL-MCP stopped while you switch

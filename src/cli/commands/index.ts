@@ -1807,9 +1807,9 @@ export function formatReopenedHnswCanaryLines(
   canary: ReopenedJinaHnswFinalizationResult,
 ): string[] {
   return [
-    `  Post-reopen Jina HNSW finalization: ${canary.outcome}`,
-    `    ${canary.model} (${canary.indexName}, efc=${canary.efc})`,
-    `    create=${canary.createMs}ms query=${canary.queryMs}ms checkpoint=${canary.checkpointMs}ms`,
+    `Post-reopen Jina HNSW finalization: ${canary.outcome}`,
+    `  ${canary.model} (${canary.indexName}, efc=${canary.efc})`,
+    `  create=${canary.createMs}ms query=${canary.queryMs}ms checkpoint=${canary.checkpointMs}ms`,
   ];
 }
 
@@ -2493,6 +2493,7 @@ export async function indexCommand(
   options: IndexOptions,
   _dependenciesForTesting?: Partial<IndexCommandDependencies>,
 ): Promise<void> {
+  const commandWallStartedAt = Date.now();
   const dependencies = {
     ...DEFAULT_INDEX_COMMAND_DEPENDENCIES,
     ..._dependenciesForTesting,
@@ -2686,6 +2687,7 @@ export async function indexCommand(
     error: string;
     secondary?: string[];
   }> = [];
+  let successfulRepoDurationMs = 0;
 
   for (const repo of reposToIndex) {
     // Try delegating to the running server first. The server auto-upgrades
@@ -2762,7 +2764,6 @@ export async function indexCommand(
       // between them (e.g. embeddings -> SCIP externals) produce a clean
       // newline boundary in TTY mode.
       const progressState = createProgressState();
-      const wallStartedAt = Date.now();
       const stats: IndexResult = await dependencies.indexRepo(
         repo.repoId,
         effectiveMode,
@@ -2798,9 +2799,6 @@ export async function indexCommand(
       );
       console.log(`  Edges: ${stats.edgesCreated} new (${totalEdges} total)`);
       console.log(`  Duration: ${stats.durationMs}ms`);
-      console.log(
-        formatIndexWallTimeLine(Date.now() - wallStartedAt, stats.durationMs),
-      );
       const cacheLine = formatScipGeneratorCacheLine(
         stats.scip?.generatorCache,
       );
@@ -2858,6 +2856,7 @@ export async function indexCommand(
       // The CLI does not run a post-refresh SCIP block; doing so would
       // reintroduce legacy overlay ingestion outside the provider-first
       // ownership boundary.
+      successfulRepoDurationMs += stats.durationMs;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       console.error(`  Error indexing: ${msg}`);
@@ -3016,6 +3015,15 @@ export async function indexCommand(
       dbCleanupOwned,
       derivedRefreshDisabled,
       dependencies.closeLadybugDb,
+    );
+  }
+
+  if (!options.watch && !canDelegate) {
+    console.log(
+      formatIndexWallTimeLine(
+        Date.now() - commandWallStartedAt,
+        successfulRepoDurationMs,
+      ),
     );
   }
 

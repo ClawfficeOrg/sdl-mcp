@@ -79,25 +79,34 @@ describe("provider-first CLI output", () => {
     );
   });
 
-  it("formats the post-reopen Jina HNSW finalization outcome and timings", () => {
-    assert.deepEqual(
-      formatReopenedHnswCanaryLines({
-        model: "jina-embeddings-v2-base-code",
-        indexName: "symbol_vec_jina_code_v2",
-        efc: 100,
-        outcome: "created",
-        catalogMutated: true,
-        probe: { repoId: "repo", symbolId: "symbol", vector: [1, 0] },
-        createMs: 7_123,
-        queryMs: 21,
-        checkpointMs: 8,
-      }),
-      [
-        "  Post-reopen Jina HNSW finalization: created",
-        "    jina-embeddings-v2-base-code (symbol_vec_jina_code_v2, efc=100)",
-        "    create=7123ms query=21ms checkpoint=8ms",
-      ],
-    );
+  it("formats every post-reopen Jina HNSW finalization outcome exactly", () => {
+    for (const outcome of [
+      "created",
+      "validated-existing",
+      "skipped-empty",
+    ] as const) {
+      assert.deepEqual(
+        formatReopenedHnswCanaryLines({
+          model: "jina-embeddings-v2-base-code",
+          indexName: "symbol_vec_jina_code_v2",
+          efc: 100,
+          outcome,
+          catalogMutated: outcome === "created",
+          probe:
+            outcome === "skipped-empty"
+              ? null
+              : { repoId: "repo", symbolId: "symbol", vector: [1, 0] },
+          createMs: 7_123,
+          queryMs: 21,
+          checkpointMs: 8,
+        }),
+        [
+          `Post-reopen Jina HNSW finalization: ${outcome}`,
+          "  jina-embeddings-v2-base-code (symbol_vec_jina_code_v2, efc=100)",
+          "  create=7123ms query=21ms checkpoint=8ms",
+        ],
+      );
+    }
   });
 
   it("prints summary cost only for API summary providers", () => {
@@ -137,7 +146,7 @@ describe("provider-first CLI output", () => {
     );
   });
 
-  it("reports repo wall time separately from index duration", () => {
+  it("formats command wall time separately from indexed durations", () => {
     assert.equal(
       formatIndexWallTimeLine(406_700, 69_775),
       "  Wall time: 406700ms (includes 336925ms outside indexed phases)",

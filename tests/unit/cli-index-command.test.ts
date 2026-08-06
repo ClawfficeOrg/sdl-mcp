@@ -306,6 +306,15 @@ describe("CLI index command", () => {
   });
 
   describe("one-shot lifecycle", () => {
+    it("starts the command wall timer at the first executable line", () => {
+      const source = readFileSync("src/cli/commands/index.ts", "utf-8");
+
+      assert.match(
+        source,
+        /export async function indexCommand\([\s\S]*?\): Promise<void> \{\s*const commandWallStartedAt = Date\.now\(\);/,
+      );
+    });
+
     it("enables Jina HNSW deferral only for local one-shot commands with an effective full repo", async () => {
       const indexModule = await import("../../dist/cli/commands/index.js");
       const isEligible = (
@@ -1437,6 +1446,149 @@ describe("CLI index command", () => {
 
     it("runs the required direct finalizer once and does not double-close after success", async () => {
       const dir = join(tempDir, "direct-finalization-success");
+      const firstRepoRoot = join(dir, "first-repo");
+      const secondRepoRoot = join(dir, "second-repo");
+      mkdirSync(firstRepoRoot, { recursive: true });
+      mkdirSync(secondRepoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [
+            { repoId: "full-a", rootPath: firstRepoRoot },
+            { repoId: "full-b", rootPath: secondRepoRoot },
+          ],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: {
+            enabled: true,
+            retrieval: { vector: { efc: 321 } },
+          },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const graphInit = await import("../../dist/db/initGraphDb.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const events: string[] = [];
+      const stdout: string[] = [];
+      let strictCloseCalls = 0;
+      let now = 1_000;
+      const origError = console.error;
+      const origLog = console.log;
+      const originalDateNow = Date.now;
+      console.error = () => {};
+      console.log = (...args: unknown[]) => {
+        const line = args.map(String).join(" ");
+        stdout.push(line);
+        if (line.startsWith("Post-reopen Jina HNSW finalization:")) {
+          events.push("output:finalization");
+        } else if (line.startsWith("  Wall time:")) {
+          events.push("output:wall");
+        } else if (line.includes("Indexing complete")) {
+          events.push("output:complete");
+        }
+      };
+      Date.now = () => now;
+
+      try {
+        await ladybug.closeLadybugDb();
+        await indexCommand(
+          { config: configPath, force: true },
+          {
+            initGraphDb: async (...args) => {
+              events.push("db:init");
+              return graphInit.initGraphDb(...args);
+            },
+            closeLadybugDb: async (options) => {
+              events.push(`db:close:${options?.strict === true ? "strict" : "best"}`);
+              if (options?.strict === true) {
+                strictCloseCalls += 1;
+                if (strictCloseCalls === 3) now = 21_000;
+              }
+              await ladybug.closeLadybugDb(options);
+            },
+            getLadybugDbPath: ladybug.getLadybugDbPath,
+            resolveEffectiveIndexMode: async () => "full",
+            indexRepo: async (repoId, _mode, _progress, _signal, options) => {
+              events.push(`repo:index:${repoId}`);
+              options?.jinaHnswFinalization?.onMayBeAbsent?.();
+              return {
+                ...emptyIndexResult(),
+                durationMs: repoId === "full-a" ? 2_500 : 3_500,
+              };
+            },
+            prepareReopenedJinaHnsw: async (params) => {
+              events.push(
+                `hnsw:prepare:${params.selectedFullRepoIds.join(",")}:${params.requireAbsent}`,
+              );
+              return {
+                ...params.spec,
+                outcome: "created",
+                catalogMutated: true,
+                probe: {
+                  repoId: "full-a",
+                  symbolId: "probe",
+                  vector: [1, 0],
+                },
+                createMs: 2,
+                queryMs: 0,
+                checkpointMs: 3,
+              };
+            },
+            validateReopenedJinaHnsw: async () => {
+              events.push("hnsw:validate");
+              return 4;
+            },
+          },
+        );
+
+        assert.deepStrictEqual(events, [
+          "db:init",
+          "repo:index:full-a",
+          "repo:index:full-b",
+          "db:close:strict",
+          "db:init",
+          "hnsw:prepare:full-a,full-b:true",
+          "db:close:strict",
+          "db:init",
+          "hnsw:validate",
+          "db:close:strict",
+          "output:finalization",
+          "output:wall",
+          "output:complete",
+        ]);
+        const finalizationAt = stdout.indexOf(
+          "Post-reopen Jina HNSW finalization: created",
+        );
+        assert.deepStrictEqual(stdout.slice(finalizationAt, finalizationAt + 3), [
+          "Post-reopen Jina HNSW finalization: created",
+          "  jina-embeddings-v2-base-code (symbol_vec_jina_code_v2, efc=321)",
+          "  create=2ms query=4ms checkpoint=3ms",
+        ]);
+        assert.deepStrictEqual(
+          stdout.filter((line) => line.startsWith("  Duration:")),
+          ["  Duration: 2500ms", "  Duration: 3500ms"],
+        );
+        assert.deepStrictEqual(
+          stdout.filter((line) => line.startsWith("  Wall time:")),
+          ["  Wall time: 20000ms (includes 14000ms outside indexed phases)"],
+        );
+        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        Date.now = originalDateNow;
+        console.error = origError;
+        console.log = origLog;
+      }
+    });
+
+    it("does not print finalization, wall, or completion after the final strict close fails", async () => {
+      const dir = join(tempDir, "direct-finalization-close-failure");
       const repoRoot = join(dir, "repo");
       mkdirSync(repoRoot, { recursive: true });
       const configPath = join(dir, "sdlmcp.config.json");
@@ -1456,37 +1608,41 @@ describe("CLI index command", () => {
       const graphInit = await import("../../dist/db/initGraphDb.js");
       const ladybug = await import("../../dist/db/ladybug.js");
       const restoreGraphEnv = clearGraphPathEnvironment();
-      const events: string[] = [];
+      const stdout: string[] = [];
+      let strictCloseCalls = 0;
       const origError = console.error;
       const origLog = console.log;
       console.error = () => {};
-      console.log = () => {};
+      console.log = (...args: unknown[]) => {
+        stdout.push(args.map(String).join(" "));
+      };
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
 
       try {
         await ladybug.closeLadybugDb();
-        await indexCommand(
-          { config: configPath, force: true },
-          {
-            initGraphDb: async (...args) => {
-              events.push("db:init");
-              return graphInit.initGraphDb(...args);
-            },
-            closeLadybugDb: async (options) => {
-              events.push(`db:close:${options?.strict === true ? "strict" : "best"}`);
-              await ladybug.closeLadybugDb(options);
-            },
-            getLadybugDbPath: ladybug.getLadybugDbPath,
-            resolveEffectiveIndexMode: async () => "full",
-            indexRepo: async (_repoId, _mode, _progress, _signal, options) => {
-              events.push("repo:index");
-              options?.jinaHnswFinalization?.onMayBeAbsent?.();
-              return emptyIndexResult();
-            },
-            prepareReopenedJinaHnsw: async (params) => {
-              events.push(
-                `hnsw:prepare:${params.selectedFullRepoIds.join(",")}:${params.requireAbsent}`,
-              );
-              return {
+        await assert.rejects(
+          indexCommand(
+            { config: configPath, force: true },
+            {
+              initGraphDb: graphInit.initGraphDb,
+              closeLadybugDb: async (options) => {
+                await ladybug.closeLadybugDb(options);
+                if (options?.strict === true) {
+                  strictCloseCalls += 1;
+                  if (strictCloseCalls === 3) {
+                    throw new Error("injected final strict close failure");
+                  }
+                }
+              },
+              getLadybugDbPath: ladybug.getLadybugDbPath,
+              resolveEffectiveIndexMode: async () => "full",
+              indexRepo: async (_repoId, _mode, _progress, _signal, options) => {
+                options?.jinaHnswFinalization?.onMayBeAbsent?.();
+                return emptyIndexResult();
+              },
+              prepareReopenedJinaHnsw: async (params) => ({
                 ...params.spec,
                 outcome: "created",
                 catalogMutated: true,
@@ -1498,32 +1654,24 @@ describe("CLI index command", () => {
                 createMs: 2,
                 queryMs: 0,
                 checkpointMs: 3,
-              };
+              }),
+              validateReopenedJinaHnsw: async () => 4,
             },
-            validateReopenedJinaHnsw: async () => {
-              events.push("hnsw:validate");
-              return 4;
-            },
-          },
+          ),
+          /process\.exit:1/,
         );
 
-        assert.deepStrictEqual(events, [
-          "db:init",
-          "repo:index",
-          "db:close:strict",
-          "db:init",
-          "hnsw:prepare:full-repo:true",
-          "db:close:strict",
-          "db:init",
-          "hnsw:validate",
-          "db:close:strict",
-        ]);
-        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+        const output = stdout.join("\n");
+        assert.strictEqual(strictCloseCalls, 3);
+        assert.doesNotMatch(output, /Post-reopen Jina HNSW finalization:/);
+        assert.doesNotMatch(output, /Wall time:/);
+        assert.doesNotMatch(output, /Indexing complete/);
       } finally {
         await ladybug.closeLadybugDb();
         restoreGraphEnv();
         console.error = origError;
         console.log = origLog;
+        process.exit = originalExit;
       }
     });
 
