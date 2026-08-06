@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, it } from "node:test";
 import assert from "node:assert";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, rmSync, mkdirSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 
 import {
   initLadybugDb,
@@ -17,7 +17,9 @@ import {
 } from "../../dist/indexer/embeddings.js";
 import { refreshFileSummaryEmbeddings } from "../../dist/indexer/file-summary-embeddings.js";
 import { AppConfigSchema } from "../../dist/config/types.js";
+import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import {
+  prepareReopenedJinaHnsw,
   resolveConfiguredJinaHnswSpec,
   validateReopenedJinaHnsw,
 } from "../../dist/indexer/jina-hnsw-finalization.js";
@@ -27,6 +29,7 @@ import {
   readSymbolNumericVector,
 } from "../../dist/db/ladybug-symbol-embeddings.js";
 import {
+  dropVectorIndex,
   queryVectorIndexProbe,
   showIndexesStrict,
 } from "../../dist/retrieval/index-lifecycle.js";
@@ -543,6 +546,155 @@ describe("Semantic Embedding Pipeline", () => {
           jinaModel,
         ),
       );
+    }
+  });
+
+  it("finalizes configured Jina HNSW through real normal-family cold reopens", async () => {
+    const { provider } = createRecordingProvider();
+    const config = AppConfigSchema.parse({
+      repos: [{ repoId, rootPath: "/fake/embed-repo" }],
+      graphDatabase: { path: graphDbPath },
+      policy: {},
+      semantic: {
+        enabled: true,
+        provider: "local",
+        model: jinaModel,
+        retrieval: {
+          vector: {
+            enabled: true,
+            efc: 321,
+            indexes: {
+              [jinaModel]: { indexName: "configured_jina_hnsw" },
+            },
+          },
+        },
+      },
+      scip: { enabled: false },
+    });
+    const spec = resolveConfiguredJinaHnswSpec(config);
+    assert.ok(spec);
+    const configPath = join(testDir, "sdlmcp.config.json");
+    writeFileSync(configPath, JSON.stringify(config), "utf8");
+
+    await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+      jinaHnswSpec: spec,
+      deferVectorIndexCreate: true,
+    });
+
+    const previousGraphEnv = new Map(
+      [
+        "SDL_CONFIG",
+        "SDL_CONFIG_PATH",
+        "SDL_GRAPH_DB_PATH",
+        "SDL_GRAPH_DB_DIR",
+        "SDL_DB_PATH",
+      ].map(
+        (name) => [name, process.env[name]] as const,
+      ),
+    );
+    for (const name of previousGraphEnv.keys()) delete process.env[name];
+    process.env.SDL_CONFIG = configPath;
+    invalidateConfigCache();
+
+    try {
+      const graphInit = await import("../../dist/db/initGraphDb.js");
+      await closeLadybugDb({ strict: true });
+      await graphInit.initGraphDb(config, configPath);
+      let conn = await getLadybugConn();
+      assert.equal(
+        (await showIndexesStrict(conn)).some(
+          (index) => index.name === spec.indexName,
+        ),
+        true,
+        "default cold reopen must preserve semantic vector-index bootstrap",
+      );
+      assert.deepStrictEqual(
+        await dropVectorIndex(conn, "Symbol", spec.indexName),
+        { status: "dropped" },
+      );
+
+      const indexModule = await import("../../dist/cli/commands/index.js");
+      const lifecycle = (
+        indexModule as typeof indexModule & {
+          runDirectJinaHnswLifecycle?: (
+            params: {
+              config: typeof config;
+              configPath: string;
+              spec: typeof spec;
+              selectedFullRepoIds: readonly string[];
+              requireAbsent: boolean;
+            },
+            dependencies?: {
+              prepareReopenedJinaHnsw: typeof prepareReopenedJinaHnsw;
+            },
+          ) => Promise<{
+            outcome: string;
+            probe: Awaited<
+              ReturnType<typeof readDeterministicSymbolVectorProbe>
+            >;
+            queryMs: number;
+          }>;
+        }
+      ).runDirectJinaHnswLifecycle;
+      assert.strictEqual(typeof lifecycle, "function");
+      let observedSuppressedReopen = false;
+
+      const result = await lifecycle!(
+        {
+          config,
+          configPath,
+          spec,
+          selectedFullRepoIds: [repoId],
+          requireAbsent: true,
+        },
+        {
+          prepareReopenedJinaHnsw: async (params) => {
+            conn = await getLadybugConn();
+            const configuredIndexPresent = (
+              await showIndexesStrict(conn)
+            ).some((index) => index.name === spec.indexName);
+            if (configuredIndexPresent) {
+              // Exercise the real finalizer diagnostic if absence is violated.
+              return prepareReopenedJinaHnsw(params);
+            }
+            assert.equal(
+              configuredIndexPresent,
+              false,
+              "finalizer-owned cold reopen must suppress semantic vector bootstrap",
+            );
+            observedSuppressedReopen = true;
+            return prepareReopenedJinaHnsw(params);
+          },
+        },
+      );
+
+      assert.strictEqual(result.outcome, "created");
+      assert.ok(result.probe);
+      assert.ok(result.queryMs >= 0);
+      assert.equal(observedSuppressedReopen, true);
+
+      const ladybug = await import("../../dist/db/ladybug.js");
+      assert.strictEqual(ladybug.getLadybugDbPath(), null);
+      await graphInit.initGraphDb(config, configPath);
+      assert.ok(
+        (await validateReopenedJinaHnsw({
+          spec,
+          probe: result.probe,
+        })) >= 0,
+      );
+    } finally {
+      await closeLadybugDb({ strict: true });
+      for (const [name, value] of previousGraphEnv) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      invalidateConfigCache();
     }
   });
 

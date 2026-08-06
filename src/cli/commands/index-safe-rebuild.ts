@@ -569,6 +569,7 @@ export async function runSafeRebuild(
       params.config,
       params.configPath,
       safeRebuildSession,
+      { deferSemanticVectorIndexes: true },
     );
     await params._afterCandidateOpenForTesting?.("reopen");
     params.onLifecycleEvent?.("candidate:reopened");
@@ -593,6 +594,7 @@ export async function runSafeRebuild(
         params.config,
         params.configPath,
         safeRebuildSession,
+        { deferSemanticVectorIndexes: true },
       );
       params.onLifecycleEvent?.("candidate:reopened-after-canary");
       reopenedHnswCanary.queryMs = await validateReopenedJinaHnswImpl({

@@ -35,6 +35,7 @@ import {
   getDerivedState,
   markCurrentGraphIntegrityRevisionFailed,
 } from "../../dist/db/ladybug-derived-state.js";
+import { showIndexesStrict } from "../../dist/retrieval/index-lifecycle.js";
 
 describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
   const previousEnv = {
@@ -284,25 +285,28 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
 
   it("passes one configured Jina HNSW finalization object to every repo", async () => {
     const fixture = createFixture();
-    const config = {
-      ...loadConfig(fixture.configPath),
-      semantic: {
-        enabled: true,
-        provider: "mock" as const,
-        generateSummaries: false,
-        retrieval: {
-          vector: {
-            enabled: true,
-            efc: 321,
-            indexes: {
-              "jina-embeddings-v2-base-code": {
-                indexName: "configured_jina_hnsw",
-              },
+    const rawConfig = JSON.parse(readFileSync(fixture.configPath, "utf8")) as {
+      semantic: unknown;
+    };
+    rawConfig.semantic = {
+      enabled: true,
+      provider: "mock",
+      generateSummaries: false,
+      retrieval: {
+        vector: {
+          enabled: true,
+          efc: 321,
+          indexes: {
+            "jina-embeddings-v2-base-code": {
+              indexName: "configured_jina_hnsw",
             },
           },
         },
       },
     };
+    writeFileSync(fixture.configPath, JSON.stringify(rawConfig), "utf8");
+    invalidateConfigCache();
+    const config = loadConfig(fixture.configPath);
     const finalizations: unknown[] = [];
 
     await runSafeRebuild({
@@ -318,15 +322,25 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
         finalizations.push(args[4]?.jinaHnswFinalization);
         return indexRepo(...args);
       },
-      _prepareReopenedJinaHnswForTesting: async ({ spec }) => ({
-        ...spec,
-        outcome: "skipped-empty" as const,
-        catalogMutated: false,
-        probe: null,
-        createMs: 0,
-        queryMs: 0,
-        checkpointMs: 0,
-      }),
+      _prepareReopenedJinaHnswForTesting: async ({ spec }) => {
+        const conn = await getLadybugConn();
+        assert.equal(
+          (await showIndexesStrict(conn)).some(
+            (index) => index.name === spec.indexName,
+          ),
+          false,
+          "safe finalizer-owned reopen must suppress semantic vector bootstrap",
+        );
+        return {
+          ...spec,
+          outcome: "skipped-empty" as const,
+          catalogMutated: false,
+          probe: null,
+          createMs: 0,
+          queryMs: 0,
+          checkpointMs: 0,
+        };
+      },
       _validateCandidateForTesting: async () => ({
         repoIds: config.repos.map((repo) => repo.repoId).sort(),
         physicalSymbolTotal: 1,

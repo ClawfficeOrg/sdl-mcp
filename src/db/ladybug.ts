@@ -206,6 +206,8 @@ const CHECKPOINT_THRESHOLD_ENV = "SDL_MCP_LADYBUG_CHECKPOINT_THRESHOLD_BYTES";
 export interface LadybugDbInitOptions {
   bufferPoolBytes?: number | null;
   checkpointThresholdBytes?: number | null;
+  /** Leave semantic vector indexes absent for a lifecycle-owned finalizer. */
+  deferSemanticVectorIndexes?: boolean;
 }
 
 /** @internal exported for focused config/env tests. */
@@ -1521,11 +1523,21 @@ async function initLadybugDbInternal(
           // Dynamic import to break circular dependency (ladybug ↔ index-lifecycle).
           const { ensureIndexes, ensureEntityIndexes } =
             await import("../retrieval/index-lifecycle.js");
+          const includeSemanticVectorIndexes =
+            options?.deferSemanticVectorIndexes !== true;
           const indexResult = await ensureIndexes(
             indexConn,
             semanticConfig.retrieval,
+            {
+              includeVectorIndexes: includeSemanticVectorIndexes,
+            },
           );
-          const entityResult = await ensureEntityIndexes(indexConn);
+          const entityResult = await ensureEntityIndexes(indexConn, {
+            includeFileSummaryVectorIndexes:
+              includeSemanticVectorIndexes,
+            includeAgentFeedbackVectorIndexes:
+              includeSemanticVectorIndexes,
+          });
           logger.info("Retrieval indexes bootstrapped", {
             created: [...indexResult.created, ...entityResult.created],
             skipped: [...indexResult.skipped, ...entityResult.skipped],

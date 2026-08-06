@@ -357,6 +357,383 @@ describe("CLI index command", () => {
       );
     });
 
+    describe("direct Jina HNSW cold-reopen lifecycle", () => {
+      const spec = {
+        model: "jina-embeddings-v2-base-code" as const,
+        indexName: "configured_jina_hnsw",
+        vectorProperty: "embeddingJinaCodeVec",
+        dimension: 2,
+        efc: 321,
+      };
+      const probe = {
+        repoId: "full-a",
+        symbolId: "probe",
+        vector: [1, 0],
+      };
+
+      type LifecycleResult = typeof spec & {
+        outcome: "created" | "validated-existing" | "skipped-empty";
+        catalogMutated: boolean;
+        probe: typeof probe | null;
+        createMs: number;
+        queryMs: number;
+        checkpointMs: number;
+      };
+      type Lifecycle = (
+        params: {
+          config: never;
+          configPath: string;
+          spec: typeof spec;
+          selectedFullRepoIds: readonly string[];
+          requireAbsent: boolean;
+        },
+        dependencies: Record<string, unknown>,
+      ) => Promise<LifecycleResult>;
+
+      function result(
+        outcome: LifecycleResult["outcome"],
+      ): LifecycleResult {
+        return {
+          ...spec,
+          outcome,
+          catalogMutated: outcome === "created",
+          probe: outcome === "skipped-empty" ? null : probe,
+          createMs: outcome === "created" ? 2 : 0,
+          queryMs: outcome === "validated-existing" ? 3 : 0,
+          checkpointMs: outcome === "created" ? 5 : 0,
+        };
+      }
+
+      async function loadLifecycle(): Promise<Lifecycle> {
+        const indexModule = await import("../../dist/cli/commands/index.js");
+        const lifecycle = (
+          indexModule as typeof indexModule & {
+            runDirectJinaHnswLifecycle?: Lifecycle;
+          }
+        ).runDirectJinaHnswLifecycle;
+        assert.strictEqual(
+          typeof lifecycle,
+          "function",
+          "the direct normal-family lifecycle should be exposed for focused tests",
+        );
+        return lifecycle!;
+      }
+
+      function messages(error: unknown): string[] {
+        if (error instanceof AggregateError) {
+          return [
+            ...error.errors.flatMap(messages),
+            ...(error.message ? [error.message] : []),
+          ];
+        }
+        return [error instanceof Error ? error.message : String(error)];
+      }
+
+      function harness(
+        outcome: LifecycleResult["outcome"],
+        overrides: Record<string, unknown> = {},
+      ) {
+        const events: string[] = [];
+        const initOptions: unknown[] = [];
+        let openPath: string | null = "F:/normal/graph.lbug";
+        let prepareCalls = 0;
+        let validateCalls = 0;
+        const dependencies = {
+          shutdownDerivedRefreshQueue: async () => {
+            events.push("queue:shutdown");
+          },
+          enableDerivedRefreshQueue: () => {
+            events.push("queue:enable");
+          },
+          closeLadybugDb: async (options: { strict?: boolean }) => {
+            assert.deepStrictEqual(options, { strict: true });
+            events.push("db:close");
+            openPath = null;
+          },
+          initGraphDb: async (
+            _config: unknown,
+            _configPath: string,
+            options?: unknown,
+          ) => {
+            initOptions.push(options);
+            events.push("db:init");
+            openPath = "F:/normal/graph.lbug";
+            return openPath;
+          },
+          getLadybugDbPath: () => openPath,
+          prepareReopenedJinaHnsw: async (params: {
+            selectedFullRepoIds: readonly string[];
+            requireAbsent: boolean;
+          }) => {
+            prepareCalls++;
+            events.push(
+              `hnsw:prepare:${params.selectedFullRepoIds.join(",")}:${params.requireAbsent}`,
+            );
+            return result(outcome);
+          },
+          validateReopenedJinaHnsw: async () => {
+            validateCalls++;
+            events.push("hnsw:validate");
+            return 7;
+          },
+          ...overrides,
+        };
+        return {
+          dependencies,
+          events,
+          getOpenPath: () => openPath,
+          setOpenPath: (value: string | null) => {
+            openPath = value;
+          },
+          getPrepareCalls: () => prepareCalls,
+          getValidateCalls: () => validateCalls,
+          getInitOptions: () => initOptions,
+        };
+      }
+
+      const params = {
+        config: {} as never,
+        configPath: "F:/normal/sdlmcp.config.json",
+        spec,
+        selectedFullRepoIds: ["full-a", "full-b"],
+        requireAbsent: true,
+      } as const;
+
+      it("closes, cold-reopens, creates, cold-reopens, validates, and closes", async () => {
+        const lifecycle = await loadLifecycle();
+        const state = harness("created");
+
+        const actual = await lifecycle(params, state.dependencies);
+
+        assert.deepStrictEqual(state.events, [
+          "queue:shutdown",
+          "db:close",
+          "db:init",
+          "hnsw:prepare:full-a,full-b:true",
+          "db:close",
+          "db:init",
+          "hnsw:validate",
+          "db:close",
+          "queue:enable",
+        ]);
+        assert.strictEqual(actual.outcome, "created");
+        assert.strictEqual(actual.queryMs, 7);
+        assert.strictEqual(state.getPrepareCalls(), 1);
+        assert.strictEqual(state.getValidateCalls(), 1);
+        assert.deepStrictEqual(state.getInitOptions(), [
+          { deferSemanticVectorIndexes: true },
+          { deferSemanticVectorIndexes: true },
+        ]);
+        assert.strictEqual(state.getOpenPath(), null);
+      });
+
+      it("validates an existing index on the first cold reopen without reopening twice", async () => {
+        const lifecycle = await loadLifecycle();
+        const state = harness("validated-existing");
+
+        const actual = await lifecycle(params, state.dependencies);
+
+        assert.deepStrictEqual(state.events, [
+          "queue:shutdown",
+          "db:close",
+          "db:init",
+          "hnsw:prepare:full-a,full-b:true",
+          "db:close",
+          "queue:enable",
+        ]);
+        assert.strictEqual(actual.outcome, "validated-existing");
+        assert.strictEqual(state.getPrepareCalls(), 1);
+        assert.strictEqual(
+          state.getValidateCalls(),
+          0,
+          "shared preparation owns existing-index query validation",
+        );
+      });
+
+      it("closes an empty family without a create or query-validation reopen", async () => {
+        const lifecycle = await loadLifecycle();
+        const state = harness("skipped-empty");
+
+        const actual = await lifecycle(params, state.dependencies);
+
+        assert.deepStrictEqual(state.events, [
+          "queue:shutdown",
+          "db:close",
+          "db:init",
+          "hnsw:prepare:full-a,full-b:true",
+          "db:close",
+          "queue:enable",
+        ]);
+        assert.strictEqual(actual.outcome, "skipped-empty");
+        assert.strictEqual(state.getValidateCalls(), 0);
+      });
+
+      for (const [name, retainedPath] of [
+        ["retained ownership", "F:/normal/graph.lbug"],
+        ["closed native ownership", null],
+      ] as const) {
+        it(`does not reopen after the first strict close fails with ${name}`, async () => {
+          const lifecycle = await loadLifecycle();
+          const state = harness("created", {
+            closeLadybugDb: async () => {
+              state.events.push("db:close-failed");
+              state.setOpenPath(retainedPath);
+              throw new Error("injected close failure");
+            },
+          });
+
+          const error = await lifecycle(params, state.dependencies).then(
+            () => undefined,
+            (caught) => caught,
+          );
+
+          assert.ok(error);
+          assert.match(messages(error).join("\n"), /injected close failure/);
+          assert.match(
+            messages(error).join("\n"),
+            retainedPath
+              ? /ownership.*retained|retained.*ownership/i
+              : /native ownership.*closed.*cleanup failed/i,
+          );
+          assert.deepStrictEqual(state.events, [
+            "queue:shutdown",
+            "db:close-failed",
+            "queue:enable",
+          ]);
+        });
+      }
+
+      it("cleans up one partial reopen and preserves init then cleanup diagnostics", async () => {
+        const lifecycle = await loadLifecycle();
+        let closeCalls = 0;
+        const state = harness("created", {
+          closeLadybugDb: async () => {
+            closeCalls++;
+            if (closeCalls === 1) {
+              state.events.push("db:close");
+              state.setOpenPath(null);
+              return;
+            }
+            state.events.push("db:partial-cleanup-failed");
+            state.setOpenPath("F:/normal/poisoned.lbug");
+            throw new Error("injected partial cleanup failure");
+          },
+          initGraphDb: async () => {
+            state.events.push("db:init-partial-failed");
+            state.setOpenPath("F:/normal/poisoned.lbug");
+            throw new Error("injected init failure after open");
+          },
+        });
+
+        const error = await lifecycle(params, state.dependencies).then(
+          () => undefined,
+          (caught) => caught,
+        );
+
+        assert.ok(error);
+        const flattened = messages(error);
+        assert.ok(
+          flattened.findIndex((message) => /init failure/.test(message)) <
+            flattened.findIndex((message) => /cleanup failure/.test(message)),
+        );
+        assert.match(flattened.join("\n"), /retained|poisoned/i);
+        assert.deepStrictEqual(state.events, [
+          "queue:shutdown",
+          "db:close",
+          "db:init-partial-failed",
+          "db:partial-cleanup-failed",
+          "queue:enable",
+        ]);
+        assert.strictEqual(closeCalls, 2);
+      });
+
+      for (const [name, overrides, expectedLastEvent] of [
+        [
+          "reopen",
+          {
+            initGraphDb: async () => {
+              throw new Error("reopen failed");
+            },
+            getLadybugDbPath: () => null,
+          },
+          "db:close",
+        ],
+        [
+          "checkpoint/create preparation",
+          {
+            prepareReopenedJinaHnsw: async () => {
+              throw new Error("prepare failed");
+            },
+          },
+          "db:close",
+        ],
+        [
+          "post-create query validation",
+          {
+            validateReopenedJinaHnsw: async () => {
+              throw new Error("query failed");
+            },
+          },
+          "db:close",
+        ],
+      ] as const) {
+        it(`rejects without completion after ${name} fails`, async () => {
+          const lifecycle = await loadLifecycle();
+          const state = harness("created", overrides);
+
+          await assert.rejects(
+            lifecycle(params, state.dependencies),
+            /reopen failed|prepare failed|query failed/,
+          );
+          assert.strictEqual(state.events.at(-2), expectedLastEvent);
+          assert.strictEqual(state.events.at(-1), "queue:enable");
+        });
+      }
+
+      it("rejects a final strict close failure without retrying it", async () => {
+        const lifecycle = await loadLifecycle();
+        let closeCalls = 0;
+        const state = harness("skipped-empty", {
+          closeLadybugDb: async () => {
+            closeCalls++;
+            state.events.push(`db:close:${closeCalls}`);
+            if (closeCalls === 1) {
+              state.setOpenPath(null);
+              return;
+            }
+            state.setOpenPath("F:/normal/graph.lbug");
+            throw new Error("final close failed");
+          },
+        });
+
+        await assert.rejects(
+          lifecycle(params, state.dependencies),
+          /final close failed|strict close/i,
+        );
+        assert.strictEqual(closeCalls, 2);
+        assert.deepStrictEqual(state.events, [
+          "queue:shutdown",
+          "db:close:1",
+          "db:init",
+          "hnsw:prepare:full-a,full-b:true",
+          "db:close:2",
+          "queue:enable",
+        ]);
+      });
+
+      it("passes every selected full repository to one shared preparation", async () => {
+        const lifecycle = await loadLifecycle();
+        const state = harness("validated-existing");
+
+        await lifecycle(params, state.dependencies);
+
+        assert.strictEqual(state.getPrepareCalls(), 1);
+        assert.ok(
+          state.events.includes("hnsw:prepare:full-a,full-b:true"),
+        );
+      });
+    });
+
     it("preflights direct indexing before repository registration writes", () => {
       const source = readFileSync("src/cli/commands/index.ts", "utf-8");
       const directPathStart = source.indexOf(
@@ -391,7 +768,7 @@ describe("CLI index command", () => {
 
       assert.match(
         source,
-        /if \(!options\.watch\) \{[\s\S]*?await cleanupOneShotIndexing\(/,
+        /if \(!options\.watch && \(dbCleanupOwned \|\| derivedRefreshDisabled\)\) \{[\s\S]*?await cleanupOneShotIndexing\(/,
       );
       assert.match(
         source,
@@ -1055,6 +1432,349 @@ describe("CLI index command", () => {
         restoreGraphEnv();
         console.error = origError;
         console.log = origLog;
+      }
+    });
+
+    it("runs the required direct finalizer once and does not double-close after success", async () => {
+      const dir = join(tempDir, "direct-finalization-success");
+      const repoRoot = join(dir, "repo");
+      mkdirSync(repoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "full-repo", rootPath: repoRoot }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: true, retrieval: {} },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const graphInit = await import("../../dist/db/initGraphDb.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const events: string[] = [];
+      const origError = console.error;
+      const origLog = console.log;
+      console.error = () => {};
+      console.log = () => {};
+
+      try {
+        await ladybug.closeLadybugDb();
+        await indexCommand(
+          { config: configPath, force: true },
+          {
+            initGraphDb: async (...args) => {
+              events.push("db:init");
+              return graphInit.initGraphDb(...args);
+            },
+            closeLadybugDb: async (options) => {
+              events.push(`db:close:${options?.strict === true ? "strict" : "best"}`);
+              await ladybug.closeLadybugDb(options);
+            },
+            getLadybugDbPath: ladybug.getLadybugDbPath,
+            resolveEffectiveIndexMode: async () => "full",
+            indexRepo: async (_repoId, _mode, _progress, _signal, options) => {
+              events.push("repo:index");
+              options?.jinaHnswFinalization?.onMayBeAbsent?.();
+              return emptyIndexResult();
+            },
+            prepareReopenedJinaHnsw: async (params) => {
+              events.push(
+                `hnsw:prepare:${params.selectedFullRepoIds.join(",")}:${params.requireAbsent}`,
+              );
+              return {
+                ...params.spec,
+                outcome: "created",
+                catalogMutated: true,
+                probe: {
+                  repoId: "full-repo",
+                  symbolId: "probe",
+                  vector: [1, 0],
+                },
+                createMs: 2,
+                queryMs: 0,
+                checkpointMs: 3,
+              };
+            },
+            validateReopenedJinaHnsw: async () => {
+              events.push("hnsw:validate");
+              return 4;
+            },
+          },
+        );
+
+        assert.deepStrictEqual(events, [
+          "db:init",
+          "repo:index",
+          "db:close:strict",
+          "db:init",
+          "hnsw:prepare:full-repo:true",
+          "db:close:strict",
+          "db:init",
+          "hnsw:validate",
+          "db:close:strict",
+        ]);
+        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+      }
+    });
+
+    it("repairs a possibly absent global index after a repo error but still fails the command", async () => {
+      const dir = join(tempDir, "direct-finalization-repair");
+      const repoRoot = join(dir, "repo");
+      mkdirSync(repoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "failed-full-repo", rootPath: repoRoot }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: true, retrieval: {} },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const graphInit = await import("../../dist/db/initGraphDb.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const events: string[] = [];
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const origError = console.error;
+      const origLog = console.log;
+      console.error = (...args: unknown[]) => {
+        stderr.push(args.map(String).join(" "));
+      };
+      console.log = (...args: unknown[]) => {
+        stdout.push(args.map(String).join(" "));
+      };
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+
+      try {
+        await ladybug.closeLadybugDb();
+        await assert.rejects(
+          indexCommand(
+            { config: configPath, force: true },
+            {
+              initGraphDb: async (...args) => {
+                events.push("db:init");
+                return graphInit.initGraphDb(...args);
+              },
+              closeLadybugDb: async (options) => {
+                events.push("db:close");
+                await ladybug.closeLadybugDb(options);
+              },
+              getLadybugDbPath: ladybug.getLadybugDbPath,
+              resolveEffectiveIndexMode: async () => "full",
+              indexRepo: async (_repoId, _mode, _progress, _signal, options) => {
+                events.push("repo:error");
+                options?.jinaHnswFinalization?.onMayBeAbsent?.();
+                throw new Error("primary repository failure");
+              },
+              prepareReopenedJinaHnsw: async (params) => {
+                events.push(
+                  `hnsw:repair:${params.selectedFullRepoIds.join(",")}:${params.requireAbsent}`,
+                );
+                return {
+                  ...params.spec,
+                  outcome: "created",
+                  catalogMutated: true,
+                  probe: {
+                    repoId: "failed-full-repo",
+                    symbolId: "probe",
+                    vector: [1, 0],
+                  },
+                  createMs: 2,
+                  queryMs: 0,
+                  checkpointMs: 3,
+                };
+              },
+              validateReopenedJinaHnsw: async () => {
+                events.push("hnsw:validate");
+                return 4;
+              },
+            },
+          ),
+          /process\.exit:1/,
+        );
+
+        assert.deepStrictEqual(events, [
+          "db:init",
+          "repo:error",
+          "db:close",
+          "db:init",
+          "hnsw:repair::true",
+          "db:close",
+          "db:init",
+          "hnsw:validate",
+          "db:close",
+        ]);
+        assert.match(stderr.join("\n"), /primary repository failure/);
+        assert.doesNotMatch(stdout.join("\n"), /Indexing complete/);
+        assert.strictEqual(ladybug.getLadybugDbPath(), null);
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
+      }
+    });
+
+    it("uses existing cleanup after a repo error when deferral never made the index absent", async () => {
+      const dir = join(tempDir, "direct-finalization-no-repair");
+      const repoRoot = join(dir, "repo");
+      mkdirSync(repoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "failed-full-repo", rootPath: repoRoot }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: true, retrieval: {} },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      let closeCalls = 0;
+      let prepareCalls = 0;
+      const origError = console.error;
+      const origLog = console.log;
+      console.error = () => {};
+      console.log = () => {};
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+
+      try {
+        await ladybug.closeLadybugDb();
+        await assert.rejects(
+          indexCommand(
+            { config: configPath, force: true },
+            {
+              closeLadybugDb: async (options) => {
+                closeCalls++;
+                assert.notStrictEqual(options?.strict, true);
+                await ladybug.closeLadybugDb(options);
+              },
+              resolveEffectiveIndexMode: async () => "full",
+              indexRepo: async () => {
+                throw new Error("primary repository failure");
+              },
+              prepareReopenedJinaHnsw: async () => {
+                prepareCalls++;
+                throw new Error("must not repair");
+              },
+            },
+          ),
+          /process\.exit:1/,
+        );
+
+        assert.strictEqual(closeCalls, 1);
+        assert.strictEqual(prepareCalls, 0);
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
+      }
+    });
+
+    it("prints the repo failure before indented repair and teardown failures", async () => {
+      const dir = join(tempDir, "direct-finalization-repair-failure");
+      const repoRoot = join(dir, "repo");
+      mkdirSync(repoRoot, { recursive: true });
+      const configPath = join(dir, "sdlmcp.config.json");
+      const ladybugPath = join(dir, "sdl-mcp-graph.lbug");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          repos: [{ repoId: "failed-full-repo", rootPath: repoRoot }],
+          graphDatabase: { path: ladybugPath },
+          policy: {},
+          semantic: { enabled: true, retrieval: {} },
+          scip: { enabled: false },
+        }),
+      );
+
+      const { indexCommand } = await import("../../dist/cli/commands/index.js");
+      const graphInit = await import("../../dist/db/initGraphDb.js");
+      const ladybug = await import("../../dist/db/ladybug.js");
+      const restoreGraphEnv = clearGraphPathEnvironment();
+      const stderr: string[] = [];
+      let closeCalls = 0;
+      const origError = console.error;
+      const origLog = console.log;
+      console.error = (...args: unknown[]) => {
+        stderr.push(args.map(String).join(" "));
+      };
+      console.log = () => {};
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit:${code ?? ""}`);
+      }) as typeof process.exit;
+
+      try {
+        await ladybug.closeLadybugDb();
+        await assert.rejects(
+          indexCommand(
+            { config: configPath, force: true },
+            {
+              initGraphDb: graphInit.initGraphDb,
+              closeLadybugDb: async (options) => {
+                closeCalls++;
+                await ladybug.closeLadybugDb(options);
+                if (closeCalls === 2) {
+                  throw new Error("repair teardown failure");
+                }
+              },
+              getLadybugDbPath: ladybug.getLadybugDbPath,
+              resolveEffectiveIndexMode: async () => "full",
+              indexRepo: async (_repoId, _mode, _progress, _signal, options) => {
+                options?.jinaHnswFinalization?.onMayBeAbsent?.();
+                throw new Error("primary repository failure");
+              },
+              prepareReopenedJinaHnsw: async () => {
+                throw new Error("repair preparation failure");
+              },
+            },
+          ),
+          /process\.exit:1/,
+        );
+
+        const output = stderr.join("\n");
+        const primaryAt = output.indexOf("primary repository failure");
+        const repairAt = output.indexOf("repair preparation failure");
+        const teardownAt = output.indexOf("repair teardown failure");
+        assert.ok(primaryAt >= 0 && primaryAt < repairAt);
+        assert.ok(repairAt < teardownAt);
+        assert.match(output, /\n    Jina HNSW repair:/);
+        assert.match(output, /native ownership.*closed.*cleanup failed/i);
+        assert.strictEqual(closeCalls, 2);
+      } finally {
+        await ladybug.closeLadybugDb();
+        restoreGraphEnv();
+        console.error = origError;
+        console.log = origLog;
+        process.exit = originalExit;
       }
     });
 

@@ -1,5 +1,6 @@
 import { IndexOptions } from "../types.js";
 import { loadConfig } from "../../config/loadConfig.js";
+import type { AppConfig } from "../../config/types.js";
 import {
   indexRepo,
   watchRepository,
@@ -29,6 +30,7 @@ import {
   getLadybugConn,
   withWriteConn,
   closeLadybugDb,
+  getLadybugDbPath,
 } from "../../db/ladybug.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import { getCurrentTimestamp } from "../../util/time.js";
@@ -44,7 +46,10 @@ import {
 } from "../../util/runtime-identity.js";
 import { normalizePath } from "../../util/paths.js";
 import {
+  prepareReopenedJinaHnsw,
   resolveConfiguredJinaHnswSpec,
+  validateReopenedJinaHnsw,
+  type ConfiguredJinaHnswSpec,
   type ReopenedJinaHnswFinalizationResult,
 } from "../../indexer/jina-hnsw-finalization.js";
 import {
@@ -2273,6 +2278,146 @@ async function cleanupOneShotIndexing(
   }
 }
 
+interface DirectJinaHnswLifecycleDependencies {
+  shutdownDerivedRefreshQueue: typeof shutdownDerivedRefreshQueue;
+  enableDerivedRefreshQueue: typeof enableDerivedRefreshQueue;
+  closeLadybugDb: typeof closeLadybugDb;
+  initGraphDb: typeof initGraphDb;
+  getLadybugDbPath: typeof getLadybugDbPath;
+  prepareReopenedJinaHnsw: typeof prepareReopenedJinaHnsw;
+  validateReopenedJinaHnsw: typeof validateReopenedJinaHnsw;
+}
+
+const DEFAULT_DIRECT_JINA_HNSW_LIFECYCLE_DEPENDENCIES: DirectJinaHnswLifecycleDependencies = {
+  shutdownDerivedRefreshQueue,
+  enableDerivedRefreshQueue,
+  closeLadybugDb,
+  initGraphDb,
+  getLadybugDbPath,
+  prepareReopenedJinaHnsw,
+  validateReopenedJinaHnsw,
+};
+
+function strictCloseDiagnostic(
+  context: string,
+  retainedPath: string | null,
+): string {
+  return retainedPath
+    ? `${context} strict close failed; normal-family ownership is retained or poisoned at ${normalizePath(retainedPath)}`
+    : `${context} strict close failed; native ownership is closed but cleanup failed`;
+}
+
+/** @internal Direct one-shot normal-family lifecycle; exported for focused tests. */
+export async function runDirectJinaHnswLifecycle(
+  params: {
+    config: AppConfig;
+    configPath: string;
+    spec: ConfiguredJinaHnswSpec;
+    selectedFullRepoIds: readonly string[];
+    requireAbsent: boolean;
+  },
+  _dependenciesForTesting?: Partial<DirectJinaHnswLifecycleDependencies>,
+): Promise<ReopenedJinaHnswFinalizationResult> {
+  const dependencies = {
+    ...DEFAULT_DIRECT_JINA_HNSW_LIFECYCLE_DEPENDENCIES,
+    ..._dependenciesForTesting,
+  };
+  let dbInitialized = true;
+  let strictCloseFailed = false;
+
+  const closeStrict = async (context: string): Promise<void> => {
+    try {
+      await dependencies.closeLadybugDb({ strict: true });
+      // Only a resolved strict close proves this normal-family owner is gone.
+      dbInitialized = false;
+    } catch (error) {
+      strictCloseFailed = true;
+      throw new AggregateError(
+        [
+          error,
+          new Error(
+            strictCloseDiagnostic(context, dependencies.getLadybugDbPath()),
+          ),
+        ],
+        `${context} strict close failed`,
+      );
+    }
+  };
+
+  const reopen = async (): Promise<void> => {
+    try {
+      await dependencies.initGraphDb(params.config, params.configPath, {
+        deferSemanticVectorIndexes: true,
+      });
+      dbInitialized = true;
+    } catch (initError) {
+      if (dependencies.getLadybugDbPath() !== null) {
+        try {
+          await closeStrict("Partial normal-family initialization cleanup");
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [initError, cleanupError],
+            "Normal-family reopen failed and partial initialization cleanup failed",
+          );
+        }
+      }
+      throw initError;
+    }
+  };
+
+  try {
+    await dependencies.shutdownDerivedRefreshQueue();
+    await closeStrict("Pre-finalization");
+    await reopen();
+
+    const result = await dependencies.prepareReopenedJinaHnsw({
+      spec: params.spec,
+      selectedFullRepoIds: params.selectedFullRepoIds,
+      requireAbsent: params.requireAbsent,
+    });
+    if (result.outcome === "created") {
+      if (!result.probe) {
+        throw new Error(
+          "Created Jina HNSW finalization result is missing its validation probe",
+        );
+      }
+      await closeStrict("Post-create");
+      await reopen();
+      result.queryMs = await dependencies.validateReopenedJinaHnsw({
+        spec: result,
+        probe: result.probe,
+      });
+    }
+
+    await closeStrict("Final");
+    return result;
+  } catch (error) {
+    if (
+      !strictCloseFailed &&
+      (dbInitialized || dependencies.getLadybugDbPath() !== null)
+    ) {
+      try {
+        await closeStrict("Failure cleanup");
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Direct Jina HNSW finalization failed and teardown failed",
+        );
+      }
+    }
+    throw error;
+  } finally {
+    dependencies.enableDerivedRefreshQueue();
+  }
+}
+
+function flattenIndexErrorMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return error.errors.flatMap(flattenIndexErrorMessages);
+  }
+  return [error instanceof Error ? error.message : String(error)];
+}
+
 export function canDelegateIndexToServer(
   existing: PidfileData | null,
   httpAuthEnabled: boolean,
@@ -2324,6 +2469,9 @@ interface IndexCommandDependencies {
   initGraphDb: typeof initGraphDb;
   loadConfiguredAdapterPlugins: typeof loadConfiguredAdapterPlugins;
   closeLadybugDb: typeof closeLadybugDb;
+  getLadybugDbPath: typeof getLadybugDbPath;
+  prepareReopenedJinaHnsw: typeof prepareReopenedJinaHnsw;
+  validateReopenedJinaHnsw: typeof validateReopenedJinaHnsw;
   delegateIndexToServer: typeof delegateIndexToServer;
   indexRepo: typeof indexRepo;
   resolveEffectiveIndexMode: typeof resolveEffectiveIndexMode;
@@ -2333,6 +2481,9 @@ const DEFAULT_INDEX_COMMAND_DEPENDENCIES: IndexCommandDependencies = {
   initGraphDb,
   loadConfiguredAdapterPlugins,
   closeLadybugDb,
+  getLadybugDbPath,
+  prepareReopenedJinaHnsw,
+  validateReopenedJinaHnsw,
   delegateIndexToServer,
   indexRepo,
   resolveEffectiveIndexMode,
@@ -2471,6 +2622,7 @@ export async function indexCommand(
 
   const requestedMode = options.force ? "full" : "incremental";
   let jinaHnswMayBeAbsent = false;
+  let jinaHnswSpec: ConfiguredJinaHnswSpec | undefined;
   let jinaHnswFinalization: IndexRepoOptions["jinaHnswFinalization"];
 
   const effectiveModes = new Map<string, "full" | "incremental">();
@@ -2500,7 +2652,7 @@ export async function indexCommand(
         }
       });
 
-      const jinaHnswSpec = resolveConfiguredJinaHnswSpec(config);
+      jinaHnswSpec = resolveConfiguredJinaHnswSpec(config);
       if (
         isJinaHnswDeferralEligible({
           canDelegate,
@@ -2529,11 +2681,11 @@ export async function indexCommand(
     }
   }
 
-  // Task 6 consumes this state after the repository loop to decide whether a
-  // cold-reopen repair is required. Keep the callback monotonic meanwhile.
-  void jinaHnswMayBeAbsent;
-
-  const errors: Array<{ repoId: string; error: string }> = [];
+  const errors: Array<{
+    repoId: string;
+    error: string;
+    secondary?: string[];
+  }> = [];
 
   for (const repo of reposToIndex) {
     // Try delegating to the running server first. The server auto-upgrades
@@ -2713,6 +2865,67 @@ export async function indexCommand(
     }
   }
 
+  if (
+    !canDelegate &&
+    isOneShot &&
+    jinaHnswSpec &&
+    jinaHnswFinalization &&
+    (errors.length === 0 || jinaHnswMayBeAbsent)
+  ) {
+    const repairingAfterRepoError = errors.length > 0;
+    const selectedFullRepoIds = repairingAfterRepoError
+      ? []
+      : [...effectiveModes]
+          .filter(([, mode]) => mode === "full")
+          .map(([repoId]) => repoId);
+
+    // Transfer normal-family and queue ownership to the cold-reopen lifecycle.
+    // Its finally block handles every success and failure path exactly once.
+    dbCleanupOwned = false;
+    derivedRefreshDisabled = false;
+    try {
+      const finalized = await runDirectJinaHnswLifecycle(
+        {
+          config,
+          configPath,
+          spec: jinaHnswSpec,
+          selectedFullRepoIds,
+          requireAbsent: jinaHnswMayBeAbsent,
+        },
+        {
+          closeLadybugDb: dependencies.closeLadybugDb,
+          initGraphDb: dependencies.initGraphDb,
+          getLadybugDbPath: dependencies.getLadybugDbPath,
+          prepareReopenedJinaHnsw: dependencies.prepareReopenedJinaHnsw,
+          validateReopenedJinaHnsw: dependencies.validateReopenedJinaHnsw,
+        },
+      );
+      if (!repairingAfterRepoError) {
+        for (const line of formatReopenedHnswCanaryLines(finalized)) {
+          console.log(line);
+        }
+      }
+    } catch (error) {
+      const lifecycleMessages = flattenIndexErrorMessages(error);
+      if (repairingAfterRepoError) {
+        errors[0].secondary = [
+          ...(errors[0].secondary ?? []),
+          ...lifecycleMessages.map(
+            (message) => `Jina HNSW repair: ${message}`,
+          ),
+        ];
+      } else {
+        errors.push({
+          repoId: "Jina HNSW finalization",
+          error: lifecycleMessages[0] ?? String(error),
+          ...(lifecycleMessages.length > 1
+            ? { secondary: lifecycleMessages.slice(1) }
+            : {}),
+        });
+      }
+    }
+  }
+
   // Announce watch mode intention only if all repos indexed successfully
   if (options.watch && errors.length === 0) {
     for (const repo of reposToIndex) {
@@ -2724,12 +2937,17 @@ export async function indexCommand(
     console.error(`\nFailed to index ${errors.length} repo(s):`);
     for (const e of errors) {
       console.error(`  - ${e.repoId}: ${e.error}`);
+      for (const secondary of e.secondary ?? []) {
+        console.error(`    ${secondary}`);
+      }
     }
-    await cleanupOneShotIndexing(
-      dbCleanupOwned,
-      derivedRefreshDisabled,
-      dependencies.closeLadybugDb,
-    );
+    if (dbCleanupOwned || derivedRefreshDisabled) {
+      await cleanupOneShotIndexing(
+        dbCleanupOwned,
+        derivedRefreshDisabled,
+        dependencies.closeLadybugDb,
+      );
+    }
     process.exit(1);
   }
 
@@ -2793,7 +3011,7 @@ export async function indexCommand(
     await new Promise(() => {});
   }
 
-  if (!options.watch) {
+  if (!options.watch && (dbCleanupOwned || derivedRefreshDisabled)) {
     await cleanupOneShotIndexing(
       dbCleanupOwned,
       derivedRefreshDisabled,
