@@ -480,6 +480,24 @@ live outside those defaults.
 
 ### Semantic / Embedding Setup Issues
 
+#### Symbol embeddings reach 100% but indexing continues
+
+- Symptom: `Symbol Embeddings` reaches 100%, then indexing appears idle for several minutes.
+- Cause: embedding inference is complete, but LadybugDB must still build the Symbol HNSW vector index. Current builds report this separately as `Symbol Vector Index: <model>: building HNSW` and then `ready`.
+- Resolution:
+  - use `index --diagnostics` and inspect the `semanticReadiness.symbolEmbeddings:<model>.hnsw.create` timing
+  - the same diagnostics report captures process RSS, heap, external memory, array buffers, and system free memory before/after inference and HNSW construction
+  - do not drop or rebuild the active graph's vector index manually
+  - to evaluate a lower construction setting without mutating the source graph, stop SDL-MCP and run `npm run bench:hnsw-efc -- --source <absolute-lbug-path> --efc 200,100 --queries 20 --k 10`
+  - the default `--load-mode create` streams Jina vectors from the source opened read-only into fresh rows; add `--load-mode update` to first create every row with a null vector and then update the existing rows in production-sized batches
+  - if both synthetic modes remain much faster than production, use `--load-mode clone` to copy and validate the complete stopped LadybugDB family before discovering and rebuilding its unique Jina index only on the temporary clone; use `--index-name <name>` only when an indexless clone should use a non-default name
+  - a slow clone rebuild implicates persistent graph shape or storage state; a fast clone rebuild implicates fresh-index session state or memory pressure
+  - safe rebuilds persist Jina vectors without creating HNSW in the long-lived indexing session; after the candidate is closed and reopened, SDL-MCP proves the index is absent, creates it once with `semantic.retrieval.vector.efc`, cold-reopens again, then query-validates it before publication
+  - when Jina vector retrieval is configured, a non-empty candidate with no valid Jina vectors fails validation instead of publishing without HNSW
+  - with `--diagnostics`, this post-reopen work is reported as `Post-reopen Jina HNSW build` with the effective `efc` and create/query/checkpoint timings
+  - compare both load modes before tuning `efc`; the benchmark builds each candidate in a temporary database, excludes null vectors from exact-cosine ground truth, compares logical symbol IDs, and deletes the temporary database afterward
+  - repeat once with `--efc 100,200` to reverse warm-cache ordering before changing the production setting; require recall parity as well as a meaningful build-time reduction
+
 #### ONNX Runtime not loading
 
 - Symptom: warning "Failed to load ONNX runtime" or semantic search returns no results

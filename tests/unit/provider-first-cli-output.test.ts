@@ -2,7 +2,10 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  formatIndexTimingLines,
   formatIndexWallTimeLine,
+  formatReopenedHnswCanaryLines,
+  formatSafeRebuildRepoCompleteLines,
   formatSummaryStatsLine,
   formatProviderFirstExecutionSummaryLines,
   formatScipFailureLine,
@@ -12,6 +15,87 @@ import {
 import { PROVIDER_FIRST_COPY_SHADOW_ACTIVATION_BLOCK_REASON } from "../../dist/indexer/provider-first/shadow-activation.js";
 
 describe("provider-first CLI output", () => {
+  it("formats index timing diagnostics", () => {
+    assert.deepEqual(
+      formatIndexTimingLines({
+        totalMs: 120,
+        phases: { finalize: 20, embeddings: 100 },
+      }),
+      [
+        "",
+        "  Timings (total=120ms):",
+        "       100ms  embeddings",
+        "        20ms  finalize",
+      ],
+    );
+  });
+
+  it("formats embedding memory snapshots separately from milliseconds", () => {
+    const timings = {
+      totalMs: 120,
+      phases: { embeddings: 100 },
+      memorySnapshots: [
+        {
+          phase:
+            "semanticReadiness.symbolEmbeddings:jina-embeddings-v2-base-code.beforeHnsw",
+          rssBytes: 1_048_576_000,
+          heapUsedBytes: 104_857_600,
+          externalBytes: 52_428_800,
+          arrayBuffersBytes: 26_214_400,
+          systemFreeBytes: 2_097_152_000,
+          systemTotalBytes: 4_194_304_000,
+        },
+      ],
+    } as Parameters<typeof formatIndexTimingLines>[0];
+
+    assert.deepEqual(formatIndexTimingLines(timings), [
+      "",
+      "  Timings (total=120ms):",
+      "       100ms  embeddings",
+      "",
+      "  Memory snapshots:",
+      "    semanticReadiness.symbolEmbeddings:jina-embeddings-v2-base-code.beforeHnsw: rss=1000.0MiB heap=100.0MiB external=50.0MiB arrayBuffers=25.0MiB systemFree=2000.0/4000.0MiB",
+    ]);
+  });
+
+  it("includes timing diagnostics in safe-rebuild repo output", () => {
+    assert.deepEqual(
+      formatSafeRebuildRepoCompleteLines(
+        "sdl-mcp",
+        {
+          filesProcessed: 10,
+          symbolsIndexed: 20,
+          edgesCreated: 30,
+          timings: { totalMs: 120, phases: { embeddings: 100 } },
+        },
+        true,
+      ),
+      [
+        "  sdl-mcp: 10 files, 20 symbols, 30 edges",
+        "",
+        "  Timings (total=120ms):",
+        "       100ms  embeddings",
+      ],
+    );
+  });
+
+  it("formats the post-reopen Jina HNSW build timings and effective efc", () => {
+    assert.deepEqual(
+      formatReopenedHnswCanaryLines({
+        model: "jina-embeddings-v2-base-code",
+        indexName: "symbol_vec_jina_code_v2",
+        efc: 100,
+        createMs: 7_123,
+        queryMs: 21,
+        checkpointMs: 8,
+      }),
+      [
+        "  Post-reopen Jina HNSW build: jina-embeddings-v2-base-code (symbol_vec_jina_code_v2, efc=100)",
+        "    create=7123ms query=21ms checkpoint=8ms",
+      ],
+    );
+  });
+
   it("prints summary cost only for API summary providers", () => {
     const apiLine = formatSummaryStatsLine({
       generated: 849,

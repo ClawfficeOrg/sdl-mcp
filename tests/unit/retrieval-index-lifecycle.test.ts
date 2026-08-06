@@ -500,6 +500,19 @@ describe("createVectorIndex — current Kuzu API", () => {
       "should pass efc as named parameter to Kuzu",
     );
   });
+
+  it("builds a validated literal probe for QUERY_VECTOR_INDEX", () => {
+    const fnStart = src.indexOf("export async function queryVectorIndexProbe");
+    assert.ok(fnStart !== -1, "queryVectorIndexProbe function must exist");
+    const fnBody = src.slice(fnStart, fnStart + 1_400);
+    assert.ok(fnBody.includes("validateIdentifier(indexName"));
+    assert.ok(fnBody.includes("Number.isFinite"));
+    assert.ok(fnBody.includes("QUERY_VECTOR_INDEX"));
+    assert.ok(fnBody.includes("node.symbolId AS id"));
+    assert.ok(fnBody.includes("row.distance"));
+    assert.ok(fnBody.includes("near-zero"));
+    assert.ok(src.includes("@param efc - HNSW ef_construction"));
+  });
 });
 
 // ---------------------------------------------------------------------------

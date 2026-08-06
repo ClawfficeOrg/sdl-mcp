@@ -1,3 +1,5 @@
+import { freemem, totalmem } from "node:os";
+
 import {
   getLadybugConn,
   withWriteConn,
@@ -76,6 +78,27 @@ export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
   getDimension(): number;
   isMockFallback?(): boolean;
+}
+
+export interface EmbeddingMemorySnapshot {
+  rssBytes: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  arrayBuffersBytes: number;
+  systemFreeBytes: number;
+  systemTotalBytes: number;
+}
+
+function captureEmbeddingMemorySnapshot(): EmbeddingMemorySnapshot {
+  const memory = process.memoryUsage();
+  return {
+    rssBytes: memory.rss,
+    heapUsedBytes: memory.heapUsed,
+    externalBytes: memory.external,
+    arrayBuffersBytes: memory.arrayBuffers,
+    systemFreeBytes: freemem(),
+    systemTotalBytes: totalmem(),
+  };
 }
 
 class MockEmbeddingProvider implements EmbeddingProvider {
@@ -322,10 +345,17 @@ export async function refreshSymbolEmbeddings(params: {
   rebuildMinUncachedRows?: number;
   /** Preserve the repo-specific timeout for destructive rebuild sessions. */
   postIndexSessionTimeoutMs?: number;
+  /** @internal Safe rebuilds create the Jina HNSW index after a cold reopen. */
+  deferVectorIndexCreate?: boolean;
   /** @internal Allows tests to exercise provider degradation deterministically. */
   embeddingProvider?: EmbeddingProvider;
   /** Records internal phase durations for opt-in indexing diagnostics. */
   recordTiming?: (phaseName: string, durationMs: number) => void;
+  /** Records read-only process/system memory at semantic phase boundaries. */
+  recordMemorySnapshot?: (
+    phaseName: string,
+    snapshot: EmbeddingMemorySnapshot,
+  ) => void;
 }): Promise<{
   embedded: number;
   skipped: number;
@@ -359,6 +389,12 @@ export async function refreshSymbolEmbeddings(params: {
         params.recordTiming?.("inference", Date.now() - inferenceStartedAt);
       }
     }
+  };
+  const recordMemorySnapshot = (phaseName: string): void => {
+    params.recordMemorySnapshot?.(
+      phaseName,
+      captureEmbeddingMemorySnapshot(),
+    );
   };
   const conn = await getLadybugConn();
   const symbols =
@@ -693,6 +729,7 @@ export async function refreshSymbolEmbeddings(params: {
     let degraded = false;
     let failedBatches = 0;
     let processedBatches = 0;
+    recordMemorySnapshot("beforeInference");
     try {
       for (
         let chunkStart = 0;
@@ -759,6 +796,7 @@ export async function refreshSymbolEmbeddings(params: {
           }
         }
       }
+      recordMemorySnapshot("afterInference");
     } finally {
       // P2.b: drain any remaining coalesced writes BEFORE rebuilding the
       // index. The rebuild scans Symbol.<vecProp>, so unflushed items would
@@ -775,24 +813,62 @@ export async function refreshSymbolEmbeddings(params: {
         }
       }
 
-      // P2: rebuild the dropped index regardless of write outcome so search
-      // remains operational even if the bulk write aborted partway. Failure
-      // to recreate is non-fatal but logged loudly — vector retrieval will
-      // degrade until the next index.refresh.
-      if (indexDropped && vecProp !== null && indexName !== null) {
+      // P2: normal refreshes rebuild the dropped index regardless of write
+      // outcome. Safe rebuilds explicitly leave Jina absent for the cold-
+      // reopened finalizer below the indexing lifecycle.
+      if (
+        indexDropped &&
+        vecProp !== null &&
+        indexName !== null &&
+        params.deferVectorIndexCreate
+      ) {
+        params.onProgress?.({
+          stage: "embeddings",
+          substage: "symbolVectorIndex",
+          current: Math.min(skipped + embedded, symbols.length),
+          total: symbols.length,
+          model: storageModel,
+          message: "deferred until safe-rebuild reopen",
+        });
+        logger.info(
+          `[embeddings] Vector index '${indexName}' creation deferred until safe-rebuild reopen`,
+        );
+      } else if (indexDropped && vecProp !== null && indexName !== null) {
         const modelInfo = EMBEDDING_MODELS[modelName];
         if (modelInfo) {
-          const ok = await measure("hnsw.create", () =>
-            withWriteConn((wConn) =>
-              createVectorIndex(
-                wConn,
-                "Symbol",
-                vecProp,
-                indexName,
-                modelInfo.dimension,
+          recordMemorySnapshot("beforeHnsw");
+          params.onProgress?.({
+            stage: "embeddings",
+            substage: "symbolVectorIndex",
+            current: Math.min(skipped + embedded, symbols.length),
+            total: symbols.length,
+            model: storageModel,
+            message: "building HNSW",
+          });
+          let ok: boolean;
+          try {
+            ok = await measure("hnsw.create", () =>
+              withWriteConn((wConn) =>
+                createVectorIndex(
+                  wConn,
+                  "Symbol",
+                  vecProp,
+                  indexName,
+                  modelInfo.dimension,
+                ),
               ),
-            ),
-          );
+            );
+          } finally {
+            recordMemorySnapshot("afterHnsw");
+          }
+          params.onProgress?.({
+            stage: "embeddings",
+            substage: "symbolVectorIndex",
+            current: Math.min(skipped + embedded, symbols.length),
+            total: symbols.length,
+            model: storageModel,
+            message: ok ? "ready" : "rebuild failed",
+          });
           if (ok) {
             logger.info(
               `[embeddings] Vector index '${indexName}' rebuilt after bulk write`,

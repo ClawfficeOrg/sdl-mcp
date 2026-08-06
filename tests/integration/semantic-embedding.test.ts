@@ -16,6 +16,11 @@ import {
   type EmbeddingProvider,
 } from "../../dist/indexer/embeddings.js";
 import { refreshFileSummaryEmbeddings } from "../../dist/indexer/file-summary-embeddings.js";
+import { readSafeRebuildJinaVectorProbe } from "../../dist/db/ladybug-safe-rebuild.js";
+import {
+  queryVectorIndexProbe,
+  showIndexesStrict,
+} from "../../dist/retrieval/index-lifecycle.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -362,8 +367,13 @@ describe("Semantic Embedding Pipeline", () => {
     };
     const timings = new Map<string, number>();
     const timingCalls: string[] = [];
+    const progressSubstages: Array<string | undefined> = [];
+    const memorySnapshots: Array<{
+      phase: string;
+      snapshot: Record<string, number>;
+    }> = [];
 
-    const result = await refreshSymbolEmbeddings({
+    const refreshParams = {
       repoId,
       provider: "local",
       model: jinaModel,
@@ -372,16 +382,31 @@ describe("Semantic Embedding Pipeline", () => {
       embeddingProvider: provider,
       batchSize: 1,
       concurrency: 2,
+      onProgress: ({ substage }) => progressSubstages.push(substage),
       recordTiming: (phaseName, durationMs) => {
         timingCalls.push(phaseName);
         timings.set(phaseName, (timings.get(phaseName) ?? 0) + durationMs);
       },
-    });
+      recordMemorySnapshot: (
+        phase: string,
+        snapshot: Record<string, number>,
+      ) => memorySnapshots.push({ phase, snapshot }),
+    } as Parameters<typeof refreshSymbolEmbeddings>[0] & {
+      recordMemorySnapshot: (
+        phase: string,
+        snapshot: Record<string, number>,
+      ) => void;
+    };
+    const result = await refreshSymbolEmbeddings(refreshParams);
 
     assert.deepStrictEqual(result, {
       embedded: symbols.length,
       skipped: 0,
     });
+    assert.ok(
+      progressSubstages.includes("symbolVectorIndex"),
+      "the rebuild must expose HNSW construction after embedding progress",
+    );
 
     const conn = await getLadybugConn();
     for (const symbol of symbols) {
@@ -413,6 +438,95 @@ describe("Semantic Embedding Pipeline", () => {
       timingCalls.filter((phaseName) => phaseName === "inference").length,
       Math.ceil(symbols.length / 2),
       "overlapping inference batches should emit one wall-time interval per concurrency window",
+    );
+    assert.deepEqual(
+      memorySnapshots.map(({ phase }) => phase),
+      ["beforeInference", "afterInference", "beforeHnsw", "afterHnsw"],
+    );
+    for (const { snapshot } of memorySnapshots) {
+      for (const field of [
+        "rssBytes",
+        "heapUsedBytes",
+        "externalBytes",
+        "arrayBuffersBytes",
+        "systemFreeBytes",
+        "systemTotalBytes",
+      ]) {
+        assert.equal(typeof snapshot[field], "number", `expected ${field}`);
+        assert.ok(snapshot[field] >= 0, `expected non-negative ${field}`);
+      }
+    }
+  });
+
+  it("persists Jina vectors without creating HNSW when creation is deferred", async () => {
+    const { provider } = createRecordingProvider();
+    const timings: string[] = [];
+    const progressMessages: Array<string | undefined> = [];
+
+    const result = await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+      deferVectorIndexCreate: true,
+      recordTiming: (phaseName) => timings.push(phaseName),
+      onProgress: ({ message }) => progressMessages.push(message),
+    });
+
+    assert.deepStrictEqual(result, { embedded: symbols.length, skipped: 0 });
+    const conn = await getLadybugConn();
+    assert.equal(
+      (await showIndexesStrict(conn)).some(
+        (index) => index.name === "symbol_vec_jina_code_v2",
+      ),
+      false,
+    );
+    assert.equal(timings.includes("hnsw.create"), false);
+    assert.equal(progressMessages.includes("ready"), false);
+    for (const symbol of symbols) {
+      assert.ok(
+        await ladybugDb.getSymbolEmbeddingFromNode(
+          conn,
+          symbol.symbolId,
+          jinaModel,
+        ),
+      );
+    }
+  });
+
+  it("rejects an HNSW probe that cannot recover a near-zero neighbor", async () => {
+    const { provider } = createRecordingProvider();
+    await refreshSymbolEmbeddings({
+      repoId,
+      provider: "local",
+      model: jinaModel,
+      symbols,
+      rebuildMinUncachedRows: 1,
+      embeddingProvider: provider,
+    });
+
+    const conn = await getLadybugConn();
+    const stored = await readSafeRebuildJinaVectorProbe(conn);
+    assert.ok(Array.isArray(stored));
+    assert.ok(
+      (await queryVectorIndexProbe(
+        conn,
+        "symbol_vec_jina_code_v2",
+        stored,
+      )) > 0,
+    );
+
+    const unrelated = new Array<number>(768).fill(0);
+    unrelated[767] = 1;
+    await assert.rejects(
+      queryVectorIndexProbe(
+        conn,
+        "symbol_vec_jina_code_v2",
+        unrelated,
+      ),
+      /near-zero/i,
     );
   });
 

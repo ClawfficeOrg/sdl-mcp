@@ -354,10 +354,13 @@ describe("provider-first indexing foundation", () => {
   it("runs provider-first semantic readiness refresh with deferred indexes", async () => {
     const calls: string[] = [];
     const timings: string[] = [];
+    const memoryPhases: string[] = [];
     const result = await runProviderFirstSemanticReadinessRefresh({
       recordTiming: (phaseName) => timings.push(phaseName),
+      recordMemorySnapshot: (phaseName) => memoryPhases.push(phaseName),
       repoId: "repo-semantic-refresh",
       versionId: "v-semantic-refresh",
+      deferJinaVectorIndexCreate: true,
       appConfig: {
         semantic: {
           enabled: true,
@@ -385,8 +388,18 @@ describe("provider-first indexing foundation", () => {
           };
         },
         refreshSymbolEmbeddings: async (params) => {
-          calls.push(`symbol:${params.model}`);
+          calls.push(
+            `symbol:${params.model}:${String(params.deferVectorIndexCreate)}`,
+          );
           params.recordTiming?.("inference", 1);
+          params.recordMemorySnapshot?.("beforeHnsw", {
+            rssBytes: 1,
+            heapUsedBytes: 2,
+            externalBytes: 3,
+            arrayBuffersBytes: 4,
+            systemFreeBytes: 5,
+            systemTotalBytes: 6,
+          });
           return { embedded: 5, skipped: 6 };
         },
         buildDeferredIndexes: async (params) => {
@@ -409,8 +422,8 @@ describe("provider-first indexing foundation", () => {
     assert.deepEqual(calls, [
       "summaries",
       "file:nomic-embed-text-v1.5",
-      "symbol:jina-embeddings-v2-base-code",
-      "indexes:false:false",
+      "symbol:jina-embeddings-v2-base-code:true",
+      "indexes:true:false",
       "computed:true:true",
     ]);
     assert.ok(
@@ -418,6 +431,9 @@ describe("provider-first indexing foundation", () => {
         "semanticReadiness.symbolEmbeddings:jina-embeddings-v2-base-code.inference",
       ),
     );
+    assert.deepEqual(memoryPhases, [
+      "semanticReadiness.symbolEmbeddings:jina-embeddings-v2-base-code.beforeHnsw",
+    ]);
   });
 
   it("keeps semantic readiness deferred when either embedding lane is incomplete", async () => {

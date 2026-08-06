@@ -7,7 +7,10 @@ import {
   recordDerivedStateError,
 } from "../../db/ladybug-derived-state.js";
 import { IndexError } from "../../domain/errors.js";
-import { refreshSymbolEmbeddings } from "../embeddings.js";
+import {
+  refreshSymbolEmbeddings,
+  type EmbeddingMemorySnapshot,
+} from "../embeddings.js";
 import {
   refreshFileSummaryEmbeddings,
   type FileSummaryEmbeddingRefreshResult,
@@ -83,7 +86,13 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
   appConfig: Pick<AppConfig, "semantic">;
   onProgress?: (progress: IndexProgress) => void;
   recordTiming?: (phaseName: string, durationMs: number) => void;
+  recordMemorySnapshot?: (
+    phaseName: string,
+    snapshot: EmbeddingMemorySnapshot,
+  ) => void;
   postIndexSessionTimeoutMs?: number;
+  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
+  deferJinaVectorIndexCreate?: boolean;
   deps?: ProviderFirstSemanticReadinessRefreshDeps;
 }): Promise<ProviderFirstSemanticReadinessRefreshResult> {
   const semanticConfig = params.appConfig.semantic;
@@ -120,6 +129,11 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
   try {
     const modelPlan = resolveSemanticEmbeddingModelPlan(semanticConfig);
+    const deferJinaVectorIndexCreate =
+      params.deferJinaVectorIndexCreate === true &&
+      modelPlan.symbolEmbeddingModels.includes(
+        "jina-embeddings-v2-base-code",
+      );
     if (modelPlan.unsupportedModels.length > 0) {
       logger.warn(
         `Unsupported semantic embedding models skipped: ${modelPlan.unsupportedModels.join(", ")}`,
@@ -176,8 +190,16 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
           concurrency: semanticConfig.embeddingConcurrency,
           batchSize: semanticConfig.embeddingBatchSize,
           postIndexSessionTimeoutMs: params.postIndexSessionTimeoutMs,
+          deferVectorIndexCreate:
+            deferJinaVectorIndexCreate &&
+            embModel === "jina-embeddings-v2-base-code",
           recordTiming: (subphaseName, durationMs) =>
             params.recordTiming?.(`${phaseName}.${subphaseName}`, durationMs),
+          recordMemorySnapshot: (subphaseName, snapshot) =>
+            params.recordMemorySnapshot?.(
+              `${phaseName}.${subphaseName}`,
+              snapshot,
+            ),
         }),
       );
       if (stats.degraded || (stats.deferred ?? 0) > 0) {
@@ -189,7 +211,7 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
     await measure("semanticReadiness.deferredIndexes", () =>
       deps.buildDeferredIndexes({
-        deferSemanticVectorIndexes: false,
+        deferSemanticVectorIndexes: deferJinaVectorIndexCreate,
         deferSemanticTextIndexes: false,
         recordTiming: (phaseName, durationMs) =>
           params.recordTiming?.(

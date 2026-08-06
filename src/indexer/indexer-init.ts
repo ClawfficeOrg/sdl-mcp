@@ -42,6 +42,7 @@ export type IndexProgressSubstage =
   | "semanticSummaries"
   | "semanticEmbeddings"
   | "fileSummaryEmbeddings"
+  | "symbolVectorIndex"
   | "clusterRefresh"
   | "processRefresh"
   | "algorithmRefresh"

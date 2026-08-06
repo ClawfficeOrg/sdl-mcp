@@ -41,6 +41,7 @@ import {
   type RepoConfig,
 } from "../config/types.js";
 import { loadConfig } from "../config/loadConfig.js";
+import { resolveSemanticEmbeddingModelPlan } from "../config/semantic-embedding-model-plan.js";
 import {
   buildDeferredIndexes,
   ensureCriticalSymbolFtsIndex,
@@ -137,6 +138,7 @@ import type {
   ScipGeneratedIndexDiagnostic,
 } from "../scip/diagnostics.js";
 import type { BatchPersistDrainDiagnostics } from "./parser/batch-persist.js";
+import type { EmbeddingMemorySnapshot } from "./embeddings.js";
 import {
   executeProviderFirstLspIncremental,
   executeProviderFirstLspFull,
@@ -483,12 +485,15 @@ export interface IndexTimingDiagnostics {
   totalMs: number;
   phases: Record<string, number>;
   pass1Drain?: BatchPersistDrainDiagnostics;
+  memorySnapshots?: Array<EmbeddingMemorySnapshot & { phase: string }>;
 }
 
 export interface IndexRepoOptions {
   includeTimings?: boolean;
   /** @internal Allows destructive full writes only on a fresh rebuild path. */
   isolatedRebuild?: boolean;
+  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
+  deferJinaVectorIndexCreate?: boolean;
   /** @internal Keeps compatibility benchmarks on the TypeScript-only pipeline. */
   forceLegacyPipeline?: boolean;
 }
@@ -2059,6 +2064,7 @@ async function indexRepoImpl(
   const phaseTimings: Record<string, number> | null = options?.includeTimings
     ? {}
     : null;
+  const memorySnapshots: Array<EmbeddingMemorySnapshot & { phase: string }> = [];
   const providerFirstPhaseTimings: Record<string, number> = {};
   const providerFirstLegacyFallbackPhaseTimings: Record<string, number> = {};
   let providerFirstTimingStartedAt: number | undefined;
@@ -2123,6 +2129,12 @@ async function indexRepoImpl(
       providerFirstLegacyFallbackPhaseTimings[phaseName] =
         (providerFirstLegacyFallbackPhaseTimings[phaseName] ?? 0) + durationMs;
     }
+  };
+  const recordMemorySnapshot = (
+    phase: string,
+    snapshot: EmbeddingMemorySnapshot,
+  ): void => {
+    memorySnapshots.push({ phase, ...snapshot });
   };
   const recordPass2SubphaseTiming = (
     phaseName: string,
@@ -2225,6 +2237,12 @@ async function indexRepoImpl(
     "shadow staging skipped because repo.sourceFileListPath scopes this run to a benchmark subset";
 
   const appConfig: AppConfig = loadConfig();
+  const deferJinaVectorIndexCreate =
+    options?.deferJinaVectorIndexCreate === true &&
+    appConfig.semantic?.enabled === true &&
+    resolveSemanticEmbeddingModelPlan(
+      appConfig.semantic,
+    ).symbolEmbeddingModels.includes("jina-embeddings-v2-base-code");
   const providerFirstConfig =
     appConfig.indexing?.providerFirst ??
     IndexingConfigSchema.parse({}).providerFirst;
@@ -2390,6 +2408,7 @@ async function indexRepoImpl(
         callResolutionTelemetry: params.callResolutionTelemetry,
         prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
         deferSemanticRefresh: params.deferSemanticRefresh,
+        deferJinaVectorIndexCreate,
         preFinalize: params.preFinalize,
         postIndexSessionTimeoutMs,
         onProgress,
@@ -2444,7 +2463,9 @@ async function indexRepoImpl(
 
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
-            deferSemanticVectorIndexes: finalizeResult.semanticDeferred,
+            deferSemanticVectorIndexes:
+              finalizeResult.semanticDeferred ||
+              deferJinaVectorIndexCreate,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });
@@ -2586,7 +2607,9 @@ async function indexRepoImpl(
       appConfig,
       onProgress,
       recordTiming: recordIndexSubphaseTiming,
+      recordMemorySnapshot: phaseTimings ? recordMemorySnapshot : undefined,
       postIndexSessionTimeoutMs,
+      deferJinaVectorIndexCreate,
     });
     return {
       semanticDeferred: semanticRefresh.semanticDeferred || undefined,
@@ -3493,6 +3516,9 @@ async function indexRepoImpl(
                 ? {
                     totalMs: Date.now() - startTime,
                     phases: phaseTimings,
+                    ...(memorySnapshots.length > 0
+                      ? { memorySnapshots }
+                      : {}),
                   }
                 : undefined,
               pass1Engine,
@@ -3678,7 +3704,13 @@ async function indexRepoImpl(
         processesTraced,
         durationMs: totalMs,
         summaryStats,
-        timings: phaseTimings ? { totalMs, phases: phaseTimings } : undefined,
+        timings: phaseTimings
+          ? {
+              totalMs,
+              phases: phaseTimings,
+              ...(memorySnapshots.length > 0 ? { memorySnapshots } : {}),
+            }
+          : undefined,
         // Phase 1 Task 1.12 — no Pass-1 ran in this short-circuit, emit zeros
         // so downstream consumers see a stable shape.
         pass1Engine,
@@ -4277,6 +4309,7 @@ async function indexRepoImpl(
         callResolutionTelemetry,
         prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
         deferSemanticRefresh,
+        deferJinaVectorIndexCreate,
         postIndexSessionTimeoutMs,
         onProgress,
       }),
@@ -4336,7 +4369,10 @@ async function indexRepoImpl(
         // --- Phase: build deferred indexes (fresh DB only) ---
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
-            deferSemanticVectorIndexes: finalizeResult.semanticDeferred,
+            // The safe-rebuild Jina index is created after a cold reopen.
+            deferSemanticVectorIndexes:
+              finalizeResult.semanticDeferred ||
+              deferJinaVectorIndexCreate,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });
@@ -4549,6 +4585,7 @@ async function indexRepoImpl(
             totalMs,
             phases: phaseTimings,
             pass1Drain: pass1Acc.pass1DrainDiagnostics,
+            ...(memorySnapshots.length > 0 ? { memorySnapshots } : {}),
           }
         : undefined,
       // Phase 1 Task 1.12 — surface Pass-1 engine breakdown so tests and

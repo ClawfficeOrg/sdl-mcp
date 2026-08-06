@@ -253,6 +253,30 @@ describe("renderIndexProgress — embeddings stage", () => {
       restoreStdout();
     }
   });
+
+  it("renders HNSW construction after symbol embeddings complete", async () => {
+    const { createProgressState, renderIndexProgress } =
+      await import("../../dist/cli/commands/index.js");
+    try {
+      const state = createProgressState();
+      renderIndexProgress(state, {
+        stage: "embeddings",
+        substage: "symbolVectorIndex",
+        current: 0,
+        total: 0,
+        model: "jina-embeddings-v2-base-code",
+        message: "building HNSW",
+      });
+
+      assert.ok(
+        captured.join("").includes(
+          "Symbol Vector Index: jina: building HNSW",
+        ),
+      );
+    } finally {
+      restoreStdout();
+    }
+  });
 });
 
 describe("renderIndexProgress — pass-1 drain substage", () => {

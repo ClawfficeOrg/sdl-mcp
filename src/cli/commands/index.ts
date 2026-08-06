@@ -44,6 +44,7 @@ import { normalizePath } from "../../util/paths.js";
 import {
   runSafeRebuild,
   validateSafeRebuildRequest,
+  type ReopenedHnswCanaryResult,
 } from "./index-safe-rebuild.js";
 
 // ---------------------------------------------------------------------------
@@ -1744,6 +1745,80 @@ export function formatSummaryStatsLine(
   );
 }
 
+export function formatIndexTimingLines(
+  timings: NonNullable<IndexResult["timings"]>,
+): string[] {
+  const lines = ["", `  Timings (total=${timings.totalMs}ms):`];
+  const entries = Object.entries(timings.phases)
+    .filter(([phase]) => !isProviderFirstLegacyFallbackCounterPhase(phase))
+    .sort((a, b) => b[1] - a[1]);
+  for (const [phase, ms] of entries) {
+    lines.push(`    ${ms.toString().padStart(6)}ms  ${phase}`);
+  }
+  if (timings.pass1Drain) {
+    const drain = timings.pass1Drain;
+    lines.push(
+      "",
+      `  Pass 1 write batches: ${drain.batches} batch(es), ${drain.rows.total} row(s), ${drain.totalMs}ms write wall`,
+      `    rows: files=${drain.rows.files}, symbols=${drain.rows.symbols}, refs=${drain.rows.refs}, edges=${drain.rows.edges}, existingFiles=${drain.rows.existingFiles}`,
+    );
+    const writeEntries = Object.entries(drain.phases).sort(
+      (a, b) => b[1].totalMs - a[1].totalMs,
+    );
+    for (const [phase, detail] of writeEntries) {
+      lines.push(
+        `    ${detail.totalMs.toString().padStart(6)}ms  ${phase} (${detail.rows} row(s), ${detail.count} call(s), max=${detail.maxMs}ms)`,
+      );
+    }
+    if (drain.largestBatch) {
+      lines.push(
+        `    largest batch: ${drain.largestBatch.rows} row(s), ${drain.largestBatch.totalMs}ms`,
+      );
+    }
+  }
+  if (timings.memorySnapshots && timings.memorySnapshots.length > 0) {
+    const mib = (bytes: number): string =>
+      (bytes / (1024 * 1024)).toFixed(1);
+    lines.push("", "  Memory snapshots:");
+    for (const snapshot of timings.memorySnapshots) {
+      lines.push(
+        `    ${snapshot.phase}: rss=${mib(snapshot.rssBytes)}MiB ` +
+          `heap=${mib(snapshot.heapUsedBytes)}MiB ` +
+          `external=${mib(snapshot.externalBytes)}MiB ` +
+          `arrayBuffers=${mib(snapshot.arrayBuffersBytes)}MiB ` +
+          `systemFree=${mib(snapshot.systemFreeBytes)}/${mib(snapshot.systemTotalBytes)}MiB`,
+      );
+    }
+  }
+  return lines;
+}
+
+export function formatReopenedHnswCanaryLines(
+  canary: ReopenedHnswCanaryResult,
+): string[] {
+  return [
+    `  Post-reopen Jina HNSW build: ${canary.model} (${canary.indexName}, efc=${canary.efc})`,
+    `    create=${canary.createMs}ms query=${canary.queryMs}ms checkpoint=${canary.checkpointMs}ms`,
+  ];
+}
+
+export function formatSafeRebuildRepoCompleteLines(
+  repoId: string,
+  stats: Pick<
+    IndexResult,
+    "filesProcessed" | "symbolsIndexed" | "edgesCreated" | "timings"
+  >,
+  includeDiagnostics: boolean,
+): string[] {
+  const lines = [
+    `  ${repoId}: ${stats.filesProcessed} files, ${stats.symbolsIndexed} symbols, ${stats.edgesCreated} edges`,
+  ];
+  if (includeDiagnostics && stats.timings) {
+    lines.push(...formatIndexTimingLines(stats.timings));
+  }
+  return lines;
+}
+
 export function formatSemanticReadinessLines(
   semanticDeferred: boolean | null | undefined,
 ): string[] {
@@ -1751,6 +1826,7 @@ export function formatSemanticReadinessLines(
 }
 
 function embeddingStageLabel(substage?: IndexProgressSubstage): string {
+  if (substage === "symbolVectorIndex") return "Symbol Vector Index";
   return substage === "fileSummaryEmbeddings"
     ? "Summary Embeddings"
     : "Symbol Embeddings";
@@ -2255,9 +2331,13 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       },
       onRepoComplete: (repoId, stats) => {
         finishProgress(progressState);
-        console.log(
-          `  ${repoId}: ${stats.filesProcessed} files, ${stats.symbolsIndexed} symbols, ${stats.edgesCreated} edges`,
-        );
+        for (const line of formatSafeRebuildRepoCompleteLines(
+          repoId,
+          stats,
+          Boolean(options.diagnostics),
+        )) {
+          console.log(line);
+        }
       },
     });
 
@@ -2274,6 +2354,13 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       console.log(
         `  Symbol FTS: ${result.validation.ftsIndexName} present and queryable`,
       );
+    }
+    if (result.reopenedHnswCanary) {
+      for (const line of formatReopenedHnswCanaryLines(
+        result.reopenedHnswCanary,
+      )) {
+        console.log(line);
+      }
     }
     console.log(
       "  Activation is intentionally manual: keep SDL-MCP stopped, switch the configured graph path, then restart and verify.",
@@ -2481,36 +2568,8 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       }
 
       if (options.diagnostics && stats.timings) {
-        console.log(`\n  Timings (total=${stats.timings.totalMs}ms):`);
-        const entries = Object.entries(stats.timings.phases)
-          .filter(
-            ([phase]) => !isProviderFirstLegacyFallbackCounterPhase(phase),
-          )
-          .sort((a, b) => b[1] - a[1]);
-        for (const [phase, ms] of entries) {
-          console.log(`    ${ms.toString().padStart(6)}ms  ${phase}`);
-        }
-        if (stats.timings.pass1Drain) {
-          const drain = stats.timings.pass1Drain;
-          console.log(
-            `\n  Pass 1 write batches: ${drain.batches} batch(es), ${drain.rows.total} row(s), ${drain.totalMs}ms write wall`,
-          );
-          console.log(
-            `    rows: files=${drain.rows.files}, symbols=${drain.rows.symbols}, refs=${drain.rows.refs}, edges=${drain.rows.edges}, existingFiles=${drain.rows.existingFiles}`,
-          );
-          const writeEntries = Object.entries(drain.phases).sort(
-            (a, b) => b[1].totalMs - a[1].totalMs,
-          );
-          for (const [phase, detail] of writeEntries) {
-            console.log(
-              `    ${detail.totalMs.toString().padStart(6)}ms  ${phase} (${detail.rows} row(s), ${detail.count} call(s), max=${detail.maxMs}ms)`,
-            );
-          }
-          if (drain.largestBatch) {
-            console.log(
-              `    largest batch: ${drain.largestBatch.rows} row(s), ${drain.largestBatch.totalMs}ms`,
-            );
-          }
+        for (const line of formatIndexTimingLines(stats.timings)) {
+          console.log(line);
         }
       }
 

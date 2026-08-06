@@ -30,6 +30,8 @@ import {
   runSafeRebuild,
   validateSafeRebuildCandidate,
 } from "../../dist/cli/commands/index-safe-rebuild.js";
+import * as safeRebuildModule from "../../dist/cli/commands/index-safe-rebuild.js";
+import { indexRepo } from "../../dist/indexer/indexer.js";
 import {
   getDerivedState,
   markCurrentGraphIntegrityRevisionFailed,
@@ -120,11 +122,44 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
     return { activePath, candidatePath, configPath, sentinel };
   }
 
+  it("uses the configured Jina vector index name with the model default as fallback", () => {
+    const resolver = (
+      safeRebuildModule as unknown as {
+        resolveSafeRebuildJinaVectorIndexName?: (config: unknown) => string;
+      }
+    ).resolveSafeRebuildJinaVectorIndexName;
+    assert.equal(typeof resolver, "function");
+    if (!resolver) return;
+
+    assert.equal(
+      resolver({
+        semantic: {
+          retrieval: {
+            vector: {
+              indexes: {
+                "jina-embeddings-v2-base-code": {
+                  indexName: "custom_jina_index",
+                },
+              },
+            },
+          },
+        },
+      }),
+      "custom_jina_index",
+    );
+    assert.equal(
+      resolver({ semantic: { retrieval: { vector: { indexes: {} } } } }),
+      "symbol_vec_jina_code_v2",
+    );
+  });
+
   it("builds every configured repo and validates only after close/reopen", async () => {
     const fixture = createFixture();
     const events: string[] = [];
     const markerStates: boolean[] = [];
     const repoValidationOrder: string[] = [];
+    const indexOptions: Array<Record<string, unknown> | undefined> = [];
+    let postReopenBuildCalls = 0;
     const config = loadConfig(fixture.configPath);
     const result = await runSafeRebuild({
       options: {
@@ -143,6 +178,14 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       },
       _afterRepoStorageValidationForTesting: (repoId) => {
         repoValidationOrder.push(`validated:${repoId}`);
+      },
+      _indexRepoForTesting: async (...args) => {
+        indexOptions.push(args[4]);
+        return indexRepo(...args);
+      },
+      _runReopenedHnswCanaryForTesting: async () => {
+        postReopenBuildCalls++;
+        return undefined;
       },
       onRepoComplete: (repoId) => {
         repoValidationOrder.push(`complete:${repoId}`);
@@ -187,6 +230,13 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       "validated:safe-rebuild-empty",
       "complete:safe-rebuild-empty",
     ]);
+    assert.ok(indexOptions.length > 0);
+    assert.equal(postReopenBuildCalls, 1);
+    assert.ok(
+      indexOptions.every(
+        (options) => options?.deferJinaVectorIndexCreate === true,
+      ),
+    );
 
     await initLadybugDb(fixture.candidatePath);
     await assert.rejects(
@@ -510,6 +560,128 @@ describe("safe rebuild candidate lifecycle", { concurrency: 1 }, () => {
       existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
       false,
     );
+  });
+
+  it("abandons the candidate when the post-reopen Jina HNSW build fails", async () => {
+    const fixture = createFixture();
+    const events: string[] = [];
+    let validationStarted = false;
+
+    await assert.rejects(
+      runSafeRebuild({
+        options: {
+          config: fixture.configPath,
+          diagnostics: true,
+          force: true,
+          safeRebuildPath: fixture.candidatePath,
+        },
+        config: loadConfig(fixture.configPath),
+        configPath: fixture.configPath,
+        activeGraphDbPath: fixture.activePath,
+        onLifecycleEvent: (event) => events.push(event),
+        _runReopenedHnswCanaryForTesting: async () => {
+          throw new Error("injected post-reopen Jina HNSW build failure");
+        },
+        _validateCandidateForTesting: async (config) => {
+          validationStarted = true;
+          return validateSafeRebuildCandidate(config);
+        },
+      }),
+      /injected post-reopen Jina HNSW build failure/,
+    );
+
+    assert.equal(validationStarted, false);
+    assert.ok(events.includes("candidate:reopened"));
+    assert.equal(events.includes("candidate:validated"), false);
+    assert.equal(events.at(-1), "candidate:closed-after-failure");
+    assert.equal(getLadybugDbPath(), null);
+    assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
+  });
+
+  it("rejects a non-empty semantic candidate with no Jina vectors", async () => {
+    const fixture = createFixture();
+    const rawConfig = JSON.parse(
+      readFileSync(fixture.configPath, "utf8"),
+    ) as Record<string, unknown>;
+    rawConfig.semantic = {
+      enabled: true,
+      provider: "mock",
+      generateSummaries: false,
+    };
+    writeFileSync(fixture.configPath, JSON.stringify(rawConfig), "utf8");
+    invalidateConfigCache();
+
+    await assert.rejects(
+      runSafeRebuild({
+        options: {
+          config: fixture.configPath,
+          force: true,
+          safeRebuildPath: fixture.candidatePath,
+        },
+        config: loadConfig(fixture.configPath),
+        configPath: fixture.configPath,
+        activeGraphDbPath: fixture.activePath,
+      }),
+      /non-empty candidate.*no valid Jina vectors/i,
+    );
+    assert.equal(
+      existsSync(getLadybugLineageMarkerPath(fixture.candidatePath)),
+      false,
+    );
+  });
+
+  it("reopens a post-reopen HNSW-mutated candidate again before validation", async () => {
+    const fixture = createFixture();
+    const events: string[] = [];
+    const config = loadConfig(fixture.configPath);
+    const result = await runSafeRebuild({
+      options: {
+        config: fixture.configPath,
+        diagnostics: true,
+        force: true,
+        safeRebuildPath: fixture.candidatePath,
+      },
+      config,
+      configPath: fixture.configPath,
+      activeGraphDbPath: fixture.activePath,
+      onLifecycleEvent: (event) => events.push(event),
+      _runReopenedHnswCanaryForTesting: async () => ({
+        model: "jina-embeddings-v2-base-code",
+        indexName: "symbol_vec_jina_code_v2",
+        efc: 100,
+        createMs: 2,
+        queryMs: 3,
+        checkpointMs: 4,
+      }),
+      _validateColdReopenedJinaHnswForTesting: async () => 5,
+    });
+
+    assert.deepEqual(result.reopenedHnswCanary, {
+      model: "jina-embeddings-v2-base-code",
+      indexName: "symbol_vec_jina_code_v2",
+      efc: 100,
+      createMs: 2,
+      queryMs: 5,
+      checkpointMs: 4,
+    });
+    assert.ok(
+      events.indexOf("candidate:reopened") <
+        events.indexOf("candidate:closed-after-canary"),
+    );
+    assert.ok(
+      events.indexOf("candidate:closed-after-canary") <
+        events.indexOf("candidate:reopened-after-canary"),
+    );
+    assert.ok(
+      events.indexOf("candidate:reopened-after-canary") <
+        events.indexOf("candidate:validated"),
+    );
+    assert.equal(getLadybugDbPath(), null);
+    assert.equal(readFileSync(fixture.activePath, "utf8"), fixture.sentinel);
   });
 
   it("rejects a safe-rebuild target that appears after preflight", async () => {

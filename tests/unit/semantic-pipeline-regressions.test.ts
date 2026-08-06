@@ -46,7 +46,9 @@ describe("semantic pipeline regressions", () => {
     );
 
     // 4. Batch embed call
-    const batchEmbedIdx = fnBody.indexOf("await provider.embed(batchTexts)");
+    const batchEmbedIdx = fnBody.indexOf(
+      "await measureInference(() => provider.embed(batchTexts))",
+    );
     assert.ok(
       batchEmbedIdx !== -1,
       "refreshSymbolEmbeddings should batch embed calls",

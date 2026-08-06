@@ -66,6 +66,7 @@
     "benchmark:claims": "node scripts/check-benchmark-claims.ts",
     "benchmark:sweep": "node scripts/budget-sensitivity-sweep.ts",
     "bench:ppr": "node scripts/bench-ppr-weight.ts",
+    "bench:hnsw-efc": "npm run build && node scripts/benchmark-hnsw-efc.ts",
     "bench:delta-slice": "node scripts/bench-delta-slice-set-oriented.ts",
     "benchmark:provider-first-fallback": "node scripts/provider-first-fallback-benchmark.ts",
     "benchmark:background-graph-integrity": "node --experimental-strip-types scripts/background-graph-integrity-benchmark.ts",

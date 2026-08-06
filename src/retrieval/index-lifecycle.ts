@@ -319,7 +319,7 @@ export async function dropFtsIndexWithDependencies(
  * @param propertyName - Node property that holds the embedding vector
  * @param indexName - Name for the new index
  * @param dimension - Vector dimensionality (must match embedding model)
- * @param efs - HNSW ef_construction parameter (default 200)
+ * @param efc - HNSW ef_construction parameter (default 200)
  */
 export async function createVectorIndex(
   conn: Connection,
@@ -350,6 +350,44 @@ export async function createVectorIndex(
     );
     return false;
   }
+}
+
+export async function queryVectorIndexProbe(
+  conn: Connection,
+  indexName: string,
+  embedding: number[],
+): Promise<number> {
+  validateIdentifier(indexName, "index name");
+  if (
+    embedding.length === 0 ||
+    !embedding.every((value) => Number.isFinite(value))
+  ) {
+    throw new Error("Vector index probe requires finite embedding values");
+  }
+  const rows = await queryStoredProcAll<{ id: unknown; distance: unknown }>(
+    conn,
+    `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${JSON.stringify(embedding)}, 10, efs := 200) RETURN node.symbolId AS id, distance`,
+  );
+  for (const row of rows) {
+    if (
+      typeof row.id !== "string" ||
+      row.id.length === 0 ||
+      typeof row.distance !== "number" ||
+      !Number.isFinite(row.distance)
+    ) {
+      throw new Error("Vector index probe returned an invalid symbol result");
+    }
+  }
+  if (
+    rows.length > 0 &&
+    !rows.some(
+      (row) =>
+        typeof row.distance === "number" && Math.abs(row.distance) <= 1e-6,
+    )
+  ) {
+    throw new Error("Vector index probe returned no near-zero neighbor");
+  }
+  return rows.length;
 }
 
 /**

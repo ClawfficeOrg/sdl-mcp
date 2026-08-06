@@ -23,6 +23,19 @@ export interface SafeRebuildSymbolPointLookupSample {
   }>;
 }
 
+export async function readSafeRebuildJinaVectorProbe(
+  conn: Connection,
+): Promise<unknown | null> {
+  const row = await querySingle<{ vector: unknown }>(
+    conn,
+    `MATCH (s:Symbol)
+     WHERE s.embeddingJinaCodeVec IS NOT NULL
+     RETURN s.embeddingJinaCodeVec AS vector
+     LIMIT 1`,
+  );
+  return row?.vector ?? null;
+}
+
 const SAFE_REBUILD_SYMBOL_POINT_LOOKUP_PAGE_SIZE = 2_048;
 const SAFE_REBUILD_SYMBOL_POINT_LOOKUP_BATCH_SIZE = 64;
 export const SAFE_REBUILD_SYMBOL_STRING_FIELDS = [
