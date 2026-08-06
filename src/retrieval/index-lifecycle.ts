@@ -58,6 +58,11 @@ export interface IndexHealthResult {
   entityIndexes?: EntityIndexHealth[];
 }
 
+export interface VectorIndexProbeRow {
+  symbolId: string;
+  distance: number;
+}
+
 export interface IndexEnsureResult {
   created: string[];
   skipped: string[];
@@ -356,7 +361,7 @@ export async function queryVectorIndexProbe(
   conn: Connection,
   indexName: string,
   embedding: number[],
-): Promise<number> {
+): Promise<VectorIndexProbeRow[]> {
   validateIdentifier(indexName, "index name");
   if (
     embedding.length === 0 ||
@@ -364,14 +369,17 @@ export async function queryVectorIndexProbe(
   ) {
     throw new Error("Vector index probe requires finite embedding values");
   }
-  const rows = await queryStoredProcAll<{ id: unknown; distance: unknown }>(
+  const rows = await queryStoredProcAll<{
+    symbolId: unknown;
+    distance: unknown;
+  }>(
     conn,
-    `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${JSON.stringify(embedding)}, 10, efs := 200) RETURN node.symbolId AS id, distance`,
+    `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${JSON.stringify(embedding)}, 10, efs := 200) RETURN node.symbolId AS symbolId, distance`,
   );
   for (const row of rows) {
     if (
-      typeof row.id !== "string" ||
-      row.id.length === 0 ||
+      typeof row.symbolId !== "string" ||
+      row.symbolId.length === 0 ||
       typeof row.distance !== "number" ||
       !Number.isFinite(row.distance)
     ) {
@@ -387,7 +395,10 @@ export async function queryVectorIndexProbe(
   ) {
     throw new Error("Vector index probe returned no near-zero neighbor");
   }
-  return rows.length;
+  return rows.map((row) => ({
+    symbolId: row.symbolId as string,
+    distance: row.distance as number,
+  }));
 }
 
 /**

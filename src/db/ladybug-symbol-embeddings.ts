@@ -12,9 +12,11 @@ import {
   exec,
   queryAll,
   querySingle,
+  toNumber,
   withTransaction,
 } from "./ladybug-core.js";
 import {
+  EMBEDDING_MODELS,
   getEmbeddingPropertyName,
   getVecPropertyName,
   getCardHashPropertyName,
@@ -31,6 +33,17 @@ export interface SymbolNodeEmbeddingRow {
   vector: string;
   cardHash: string;
   updatedAt: string;
+}
+
+export interface SymbolNumericVectorProbe {
+  repoId: string;
+  symbolId: string;
+  vector: number[];
+}
+
+export interface RepoSymbolVectorProbe {
+  symbolCount: number;
+  probe: SymbolNumericVectorProbe | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +89,170 @@ function resolvePropertyNames(model: string): {
   }
 
   return { vectorProp, vecProp, cardHashProp, updatedAtProp };
+}
+
+function resolveNumericVectorProperty(model: string): {
+  vecProp: string;
+  dimension: number;
+} {
+  const { vecProp } = resolvePropertyNames(model);
+  const dimension = EMBEDDING_MODELS[model]?.dimension;
+  if (!vecProp || !Number.isSafeInteger(dimension) || dimension <= 0) {
+    throw new Error(
+      `Embedding model "${model}" has no numeric Symbol vector property`,
+    );
+  }
+  return { vecProp, dimension };
+}
+
+function isValidNumericVector(
+  value: unknown,
+  dimension: number,
+): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length === dimension &&
+    value.every(
+      (element) => typeof element === "number" && Number.isFinite(element),
+    )
+  );
+}
+
+interface SymbolNumericVectorProjection {
+  repoId: unknown;
+  symbolId: unknown;
+  vector: unknown;
+}
+
+function parseSymbolNumericVectorProbe(
+  row: SymbolNumericVectorProjection,
+  dimension: number,
+): SymbolNumericVectorProbe | null {
+  if (
+    typeof row.repoId !== "string" ||
+    row.repoId.length === 0 ||
+    typeof row.symbolId !== "string" ||
+    row.symbolId.length === 0
+  ) {
+    throw new Error("Symbol vector probe returned an invalid logical identity");
+  }
+  return isValidNumericVector(row.vector, dimension)
+    ? { repoId: row.repoId, symbolId: row.symbolId, vector: row.vector }
+    : null;
+}
+
+const SYMBOL_VECTOR_PROBE_PAGE_SIZE = 32;
+
+async function readSymbolVectorProbePage(
+  conn: Connection,
+  model: string,
+  repoId?: string,
+  after?: { repoId: string; symbolId: string },
+): Promise<SymbolNumericVectorProjection[]> {
+  const { vecProp } = resolveNumericVectorProperty(model);
+  if (repoId !== undefined) {
+    return queryAll<SymbolNumericVectorProjection>(
+      conn,
+      `MATCH (:Repo {repoId: $repoId})<-[:SYMBOL_IN_REPO]-(s:Symbol)
+       WHERE s.${vecProp} IS NOT NULL
+         AND ($afterSymbolId = '' OR s.symbolId > $afterSymbolId)
+       RETURN s.repoId AS repoId,
+              s.symbolId AS symbolId,
+              s.${vecProp} AS vector
+       ORDER BY s.symbolId
+       LIMIT $limit`,
+      {
+        repoId,
+        afterSymbolId: after?.symbolId ?? "",
+        limit: SYMBOL_VECTOR_PROBE_PAGE_SIZE,
+      },
+    );
+  }
+  return queryAll<SymbolNumericVectorProjection>(
+    conn,
+    `MATCH (s:Symbol)
+     WHERE s.${vecProp} IS NOT NULL
+       AND ($afterRepoId = '' OR s.repoId > $afterRepoId OR
+            (s.repoId = $afterRepoId AND s.symbolId > $afterSymbolId))
+     RETURN s.repoId AS repoId,
+            s.symbolId AS symbolId,
+            s.${vecProp} AS vector
+     ORDER BY s.repoId, s.symbolId
+     LIMIT $limit`,
+    {
+      afterRepoId: after?.repoId ?? "",
+      afterSymbolId: after?.symbolId ?? "",
+      limit: SYMBOL_VECTOR_PROBE_PAGE_SIZE,
+    },
+  );
+}
+
+async function readFirstValidSymbolVectorProbe(
+  conn: Connection,
+  model: string,
+  repoId?: string,
+): Promise<SymbolNumericVectorProbe | null> {
+  const { dimension } = resolveNumericVectorProperty(model);
+  let after: { repoId: string; symbolId: string } | undefined;
+  while (true) {
+    const rows = await readSymbolVectorProbePage(conn, model, repoId, after);
+    for (const row of rows) {
+      const probe = parseSymbolNumericVectorProbe(row, dimension);
+      if (probe) return probe;
+    }
+    if (rows.length < SYMBOL_VECTOR_PROBE_PAGE_SIZE) return null;
+    const last = rows.at(-1);
+    if (
+      !last ||
+      typeof last.repoId !== "string" ||
+      typeof last.symbolId !== "string"
+    ) {
+      throw new Error("Symbol vector probe page has no valid cursor");
+    }
+    after = { repoId: last.repoId, symbolId: last.symbolId };
+  }
+}
+
+/** Select the first valid numeric Symbol vector in stable repository/id order. */
+export async function readDeterministicSymbolVectorProbe(
+  conn: Connection,
+  model: string,
+): Promise<SymbolNumericVectorProbe | null> {
+  return readFirstValidSymbolVectorProbe(conn, model);
+}
+
+/** Count a selected repository's Symbols and independently select a valid vector. */
+export async function readRepoSymbolVectorProbe(
+  conn: Connection,
+  repoId: string,
+  model: string,
+): Promise<RepoSymbolVectorProbe> {
+  const row = await querySingle<{ symbolCount: unknown }>(
+    conn,
+    `MATCH (:Repo {repoId: $repoId})<-[:SYMBOL_IN_REPO]-(s:Symbol)
+     RETURN count(s) AS symbolCount`,
+    { repoId },
+  );
+  return {
+    symbolCount: toNumber(row?.symbolCount ?? 0),
+    probe: await readFirstValidSymbolVectorProbe(conn, model, repoId),
+  };
+}
+
+/** Read one logical Symbol's dimension-correct finite numeric vector. */
+export async function readSymbolNumericVector(
+  conn: Connection,
+  symbolId: string,
+  model: string,
+): Promise<number[] | null> {
+  const { vecProp, dimension } = resolveNumericVectorProperty(model);
+  const row = await querySingle<{ vector: unknown }>(
+    conn,
+    `MATCH (s:Symbol {symbolId: $symbolId})
+     RETURN s.${vecProp} AS vector`,
+    { symbolId },
+  );
+  return isValidNumericVector(row?.vector, dimension) ? row.vector : null;
 }
 
 // ---------------------------------------------------------------------------

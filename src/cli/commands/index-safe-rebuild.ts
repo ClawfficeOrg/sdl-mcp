@@ -27,10 +27,13 @@ import * as ladybugDb from "../../db/ladybug-queries.js";
 import {
   countInvalidSafeRebuildDependencyEndpoints,
   readSafeRebuildRepoMembershipCounts,
-  readSafeRebuildJinaVectorProbe,
   readSafeRebuildSymbolPointLookupSample,
   validateSafeRebuildCanonicalStrings,
 } from "../../db/ladybug-safe-rebuild.js";
+import {
+  readDeterministicSymbolVectorProbe,
+  readSymbolNumericVector,
+} from "../../db/ladybug-symbol-embeddings.js";
 import { SafeRebuildValidationError } from "../../domain/errors.js";
 import {
   disableDerivedRefreshQueue,
@@ -232,6 +235,20 @@ function failCandidateValidation(message: string): never {
   );
 }
 
+function cosineDistance(a: readonly number[], b: readonly number[]): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return normA > 0 && normB > 0
+    ? 1 - dot / Math.sqrt(normA * normB)
+    : Number.POSITIVE_INFINITY;
+}
+
 function configuredFtsIndexName(config: AppConfig): string | undefined {
   if (!config.semantic?.enabled || !config.semantic.retrieval) return undefined;
   if (config.semantic.retrieval.fts?.enabled === false) return undefined;
@@ -427,8 +444,11 @@ async function runReopenedHnswCanary(
     "safe-rebuild-reopened-jina-hnsw-build-post",
     () =>
       withWriteConn(async (conn) => {
-        const probeVector = await readSafeRebuildJinaVectorProbe(conn);
-        if (probeVector === null) {
+        const probe = await readDeterministicSymbolVectorProbe(
+          conn,
+          JINA_CODE_MODEL,
+        );
+        if (probe === null) {
           const symbols = await ladybugDb.assertPhysicalSymbolUniqueness(conn);
           if (symbols.physicalTotal > 0) {
             failCandidateValidation(
@@ -438,18 +458,6 @@ async function runReopenedHnswCanary(
           return;
         }
         ranCanary = true;
-        if (
-          !Array.isArray(probeVector) ||
-          probeVector.length !== modelInfo.dimension ||
-          !probeVector.every(
-            (value) => typeof value === "number" && Number.isFinite(value),
-          )
-        ) {
-          failCandidateValidation(
-            `Post-reopen Jina HNSW build found an invalid ${modelInfo.vecProperty} probe vector`,
-          );
-        }
-
         const requireExpectedIndex = async (): Promise<void> => {
           const index = (await showIndexesStrict(conn)).find(
             (candidate) =>
@@ -517,7 +525,7 @@ async function runReopenedHnswCanary(
   };
 }
 
-async function validateColdReopenedJinaHnsw(
+export async function validateColdReopenedJinaHnsw(
   config: AppConfig,
 ): Promise<number | undefined> {
   const modelPlan = resolveSemanticEmbeddingModelPlan(config.semantic);
@@ -532,14 +540,8 @@ async function validateColdReopenedJinaHnsw(
   const modelInfo = EMBEDDING_MODELS[JINA_CODE_MODEL];
   const indexName = resolveSafeRebuildJinaVectorIndexName(config);
   const conn = await getLadybugConn();
-  const probeVector = await readSafeRebuildJinaVectorProbe(conn);
-  if (
-    !Array.isArray(probeVector) ||
-    probeVector.length !== modelInfo.dimension ||
-    !probeVector.every(
-      (value) => typeof value === "number" && Number.isFinite(value),
-    )
-  ) {
+  const probe = await readDeterministicSymbolVectorProbe(conn, JINA_CODE_MODEL);
+  if (!probe) {
     failCandidateValidation(
       `Cold-reopened Jina HNSW validation found no valid ${modelInfo.vecProperty} probe vector`,
     );
@@ -562,15 +564,34 @@ async function validateColdReopenedJinaHnsw(
   }
 
   const startedAt = Date.now();
-  const rowCount = await queryVectorIndexProbe(
-    conn,
-    indexName,
-    probeVector,
-  );
+  const rows = await queryVectorIndexProbe(conn, indexName, probe.vector);
   const queryMs = Date.now() - startedAt;
-  if (rowCount === 0) {
+  if (rows.length === 0) {
     failCandidateValidation(
       `Cold-reopened Jina HNSW query returned no rows from ${indexName}`,
+    );
+  }
+  let matchedPersistedVector = false;
+  for (const row of rows) {
+    if (Math.abs(row.distance) > 1e-6) continue;
+    const persisted = await readSymbolNumericVector(
+      conn,
+      row.symbolId,
+      JINA_CODE_MODEL,
+    );
+    if (
+      persisted &&
+      persisted.length === probe.vector.length &&
+      persisted.every(Number.isFinite) &&
+      Math.abs(cosineDistance(probe.vector, persisted)) <= 1e-6
+    ) {
+      matchedPersistedVector = true;
+      break;
+    }
+  }
+  if (!matchedPersistedVector) {
+    failCandidateValidation(
+      `Cold-reopened Jina HNSW query returned no persisted vector matching its probe`,
     );
   }
   return queryMs;

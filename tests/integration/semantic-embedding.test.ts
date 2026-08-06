@@ -16,7 +16,13 @@ import {
   type EmbeddingProvider,
 } from "../../dist/indexer/embeddings.js";
 import { refreshFileSummaryEmbeddings } from "../../dist/indexer/file-summary-embeddings.js";
-import { readSafeRebuildJinaVectorProbe } from "../../dist/db/ladybug-safe-rebuild.js";
+import { AppConfigSchema } from "../../dist/config/types.js";
+import { validateColdReopenedJinaHnsw } from "../../dist/cli/commands/index-safe-rebuild.js";
+import {
+  readDeterministicSymbolVectorProbe,
+  readRepoSymbolVectorProbe,
+  readSymbolNumericVector,
+} from "../../dist/db/ladybug-symbol-embeddings.js";
 import {
   queryVectorIndexProbe,
   showIndexesStrict,
@@ -636,36 +642,169 @@ describe("Semantic Embedding Pipeline", () => {
     );
   });
 
-  it("rejects an HNSW probe that cannot recover a near-zero neighbor", async () => {
-    const { provider } = createRecordingProvider();
+  it("selects deterministic model-aware Symbol vector probes", async () => {
+    const conn = await getLadybugConn();
+    const noVector = await readRepoSymbolVectorProbe(conn, repoId, jinaModel);
+    assert.equal(noVector.symbolCount, symbols.length);
+    assert.equal(noVector.probe, null);
+
+    const emptyRepoId = "empty-probe-repo";
+    const now = new Date().toISOString();
+    await ladybugDb.upsertRepo(conn, {
+      repoId: emptyRepoId,
+      rootPath: "/fake/empty-probe-repo",
+      configJson: "{}",
+      createdAt: now,
+    });
+    assert.deepEqual(
+      await readRepoSymbolVectorProbe(conn, emptyRepoId, jinaModel),
+      {
+        symbolCount: 0,
+        probe: null,
+      },
+    );
+
+    const earlyRepoId = "aaa-probe-repo";
+    await ladybugDb.upsertRepo(conn, {
+      repoId: earlyRepoId,
+      rootPath: "/fake/aaa-probe-repo",
+      configJson: "{}",
+      createdAt: now,
+    });
+    await ladybugDb.upsertFile(conn, {
+      fileId: "probe-file",
+      repoId: earlyRepoId,
+      relPath: "src/probe.ts",
+      contentHash: "probe-hash",
+      language: "ts",
+      byteSize: 10,
+      lastIndexedAt: now,
+    });
+    const probeSymbols = Array.from(
+      { length: 34 },
+      (_, index): ladybugDb.SymbolRow => ({
+        ...symbols[0],
+        symbolId:
+          index === 33
+            ? "aab-valid"
+            : `aaa-invalid-${String(index).padStart(2, "0")}`,
+        repoId: earlyRepoId,
+        fileId: "probe-file",
+        name: `probe${index}`,
+        astFingerprint: `probe-fp-${index}`,
+      }),
+    );
+    await ladybugDb.upsertSymbolBatch(conn, probeSymbols);
+
+    const validVector = new Array<number>(768).fill(0);
+    validVector[0] = 1.25;
+    const invalidVector = [...validVector];
+    invalidVector[1] = Number.NaN;
+    await ladybugDb.setSymbolEmbeddingBatchOnNode(
+      conn,
+      jinaModel,
+      probeSymbols.map((symbol) => ({
+        symbolId: symbol.symbolId,
+        vector:
+          symbol.symbolId === "aab-valid" ? JSON.stringify(validVector) : "[]",
+        cardHash:
+          symbol.symbolId === "aab-valid" ? "valid-card" : "invalid-card",
+        vectorArray:
+          symbol.symbolId === "aab-valid" ? validVector : invalidVector,
+      })),
+    );
+    await ladybugDb.setSymbolEmbeddingOnNode(
+      conn,
+      "sym-auth",
+      jinaModel,
+      JSON.stringify(validVector),
+      "later-card",
+      validVector,
+    );
+
+    assert.deepEqual(
+      await readDeterministicSymbolVectorProbe(conn, jinaModel),
+      { repoId: earlyRepoId, symbolId: "aab-valid", vector: validVector },
+    );
+    assert.deepEqual(
+      await readRepoSymbolVectorProbe(conn, earlyRepoId, jinaModel),
+      {
+        symbolCount: 34,
+        probe: {
+          repoId: earlyRepoId,
+          symbolId: "aab-valid",
+          vector: validVector,
+        },
+      },
+    );
+    assert.deepEqual(
+      await readSymbolNumericVector(conn, "aab-valid", jinaModel),
+      validVector,
+    );
+  });
+
+  it("validates any matching logical Symbol among more than ten tied HNSW rows", async () => {
+    const tiedVector = new Array<number>(768).fill(0);
+    tiedVector[0] = 1;
+    const tiedSymbols = Array.from(
+      { length: 12 },
+      (_, index): ladybugDb.SymbolRow => ({
+        ...symbols[0],
+        symbolId: `tie-${String(index).padStart(2, "0")}`,
+        name: `tie${index}`,
+        astFingerprint: `tie-fp-${index}`,
+      }),
+    );
+    const conn = await getLadybugConn();
+    for (const symbol of tiedSymbols)
+      await ladybugDb.upsertSymbol(conn, symbol);
     await refreshSymbolEmbeddings({
       repoId,
       provider: "local",
       model: jinaModel,
-      symbols,
+      symbols: tiedSymbols,
       rebuildMinUncachedRows: 1,
-      embeddingProvider: provider,
+      embeddingProvider: {
+        async embed(texts: string[]): Promise<number[][]> {
+          return texts.map(() => [...tiedVector]);
+        },
+        getDimension: () => 768,
+        isMockFallback: () => false,
+      },
     });
 
-    const conn = await getLadybugConn();
-    const stored = await readSafeRebuildJinaVectorProbe(conn);
-    assert.ok(Array.isArray(stored));
-    assert.ok(
-      (await queryVectorIndexProbe(
-        conn,
-        "symbol_vec_jina_code_v2",
-        stored,
-      )) > 0,
+    const probe = await readDeterministicSymbolVectorProbe(conn, jinaModel);
+    assert.ok(probe);
+    const rows = await queryVectorIndexProbe(
+      conn,
+      "symbol_vec_jina_code_v2",
+      probe.vector,
     );
+    assert.ok(rows.length > 0 && rows.length <= 10);
+    assert.ok(
+      rows.every(
+        (row) =>
+          row.symbolId.length > 0 &&
+          typeof row.distance === "number" &&
+          Number.isFinite(row.distance),
+      ),
+    );
+    const config = AppConfigSchema.parse({
+      repos: [],
+      policy: {},
+      semantic: {
+        enabled: true,
+        provider: "local",
+        model: jinaModel,
+        retrieval: { vector: { enabled: true } },
+      },
+    });
+    assert.ok((await validateColdReopenedJinaHnsw(config)) >= 0);
 
     const unrelated = new Array<number>(768).fill(0);
     unrelated[767] = 1;
     await assert.rejects(
-      queryVectorIndexProbe(
-        conn,
-        "symbol_vec_jina_code_v2",
-        unrelated,
-      ),
+      queryVectorIndexProbe(conn, "symbol_vec_jina_code_v2", unrelated),
       /near-zero/i,
     );
   });
