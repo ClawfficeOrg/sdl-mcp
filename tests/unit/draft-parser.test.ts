@@ -1,4 +1,4 @@
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it, test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -6,13 +6,15 @@ import { tmpdir } from "node:os";
 import {
   _setDraftSymbolFallbackObserverForTests,
   parseDraftFile,
+  parserCoverageMatchesVerifiedGraph,
+  resolveDraftSymbolRemap,
+  type DraftParserPreflight,
 } from "../../dist/live-index/draft-parser.js";
+import { BUILTIN_TYPESCRIPT_PARSER_CONTRACT } from "../../dist/indexer/parser-provenance.js";
 import {
   closeLadybugDb,
-  getLadybugConn,
   initLadybugDb,
 } from "../../dist/db/ladybug.js";
-import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import {
   getAdapterForExtension,
   loadBuiltInAdapters,
@@ -20,6 +22,29 @@ import {
 
 const TEST_CASE_JSON =
   '{"framework":"node:test","title":"keeps sdl.info callable","suitePath":["Code Mode"],"modifiers":["only"]}';
+
+function newFilePreflight(
+  repoId: string,
+  relPath: string,
+): DraftParserPreflight {
+  return {
+    repoId,
+    relPath,
+    durableFile: null,
+    durableSymbols: [],
+    contract: BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+    graphVersionId: "v1",
+    graphRevision: 0,
+    pruningSupported: true,
+    repoParserState: {
+      repoId,
+      coverageState: "complete",
+      graphVersionId: "v1",
+      graphRevision: 0,
+      coverageDigest: "a".repeat(64),
+    },
+  };
+}
 
 describe("parseDraftFile", () => {
   const testDbDir = mkdtempSync(join(tmpdir(), "sdl-draft-parser-test-"));
@@ -75,27 +100,33 @@ describe("parseDraftFile", () => {
       );
     let result: Awaited<ReturnType<typeof parseDraftFile>>;
     try {
-      result = await parseDraftFile({
-        repoId: "demo-repo",
-        repoRoot: process.cwd(),
-        filePath: "tests/example.test.ts",
-        content: [
-          "export function alpha() {",
-          "  return beta();",
-          "}",
-          "",
-          "function beta() {",
-          "  return 1;",
-          "}",
-        ].join("\n"),
-        languages: ["ts"],
-        language: "typescript",
-        version: 5,
-      });
+      result = await parseDraftFile(
+        {
+          repoId: "demo-repo",
+          repoRoot: process.cwd(),
+          filePath: "tests/example.test.ts",
+          content: [
+            "export function alpha() {",
+            "  return beta();",
+            "}",
+            "",
+            "function beta() {",
+            "  return 1;",
+            "}",
+          ].join("\n"),
+          languages: ["ts"],
+          language: "typescript",
+          version: 5,
+        },
+        newFilePreflight("demo-repo", "tests/example.test.ts"),
+      );
     } finally {
       adapter.extractSymbols = extractSymbols;
     }
 
+    assert.strictEqual(result.parserContract, BUILTIN_TYPESCRIPT_PARSER_CONTRACT);
+    assert.equal(result.graphVersionId, "v1");
+    assert.equal(result.graphRevision, 0);
     assert.strictEqual(result.file.relPath, "tests/example.test.ts");
     assert.strictEqual(result.symbols.length, 2);
     assert.ok(result.symbols.some((symbol) => symbol.name === "alpha"));
@@ -125,35 +156,38 @@ describe("parseDraftFile", () => {
       language: "typescript",
       version: 1,
     };
-    const initial = await parseDraftFile(input);
-    const durableSymbol = initial.symbols.find((symbol) => symbol.name === "stable");
+    const initial = await parseDraftFile(
+      input,
+      newFilePreflight(input.repoId, input.filePath),
+    );
+    const durableSymbol = initial.symbols.find(
+      (symbol) => symbol.name === "stable",
+    );
     assert.ok(durableSymbol);
 
-    const conn = await getLadybugConn();
-    await ladybugDb.upsertRepo(conn, {
-      repoId: input.repoId,
-      rootPath: input.repoRoot,
-      configJson: "{}",
-      createdAt: "2026-07-13T00:00:00.000Z",
-    });
-    await ladybugDb.upsertFile(conn, initial.file);
-    await ladybugDb.upsertSymbol(conn, durableSymbol);
-
     const fallbacks: string[] = [];
-    _setDraftSymbolFallbackObserverForTests((matchKey) => fallbacks.push(matchKey));
+    _setDraftSymbolFallbackObserverForTests((matchKey) =>
+      fallbacks.push(matchKey),
+    );
     try {
-      const changed = await parseDraftFile({
-        ...input,
-        content: "export function stable() { return 2; }\n",
-        version: 2,
-      });
+      const changed = await parseDraftFile(
+        {
+          ...input,
+          content: "export function stable() { return 2; }\n",
+          version: 2,
+        },
+        {
+          ...newFilePreflight(input.repoId, input.filePath),
+          durableFile: initial.file,
+          durableSymbols: [durableSymbol],
+        },
+      );
       assert.deepEqual(fallbacks, ["function:stable:1:0"]);
       assert.equal(changed.symbols[0]?.symbolId, durableSymbol.symbolId);
     } finally {
       _setDraftSymbolFallbackObserverForTests();
     }
   });
-
 
   it("normalizes static test cases from retained draft content", async () => {
     const content = readFileSync(
@@ -166,15 +200,18 @@ describe("parseDraftFile", () => {
       ),
       "utf8",
     );
-    const result = await parseDraftFile({
-      repoId: "draft-test-case-repo",
-      repoRoot: process.cwd(),
-      filePath: "src/embedded-cases.ts",
-      content,
-      languages: ["ts"],
-      language: "typescript",
-      version: 1,
-    });
+    const result = await parseDraftFile(
+      {
+        repoId: "draft-test-case-repo",
+        repoRoot: process.cwd(),
+        filePath: "src/embedded-cases.ts",
+        content,
+        languages: ["ts"],
+        language: "typescript",
+        version: 1,
+      },
+      newFilePreflight("draft-test-case-repo", "src/embedded-cases.ts"),
+    );
 
     const cases = result.symbols.filter(
       (symbol) => symbol.testCaseJson !== null,
@@ -238,6 +275,167 @@ describe("parseDraftFile", () => {
       ),
     );
   });
+});
 
+test("rejects duplicate durable symbol remap keys", () => {
+  assert.throws(
+    () =>
+      resolveDraftSymbolRemap(
+        [
+          {
+            symbolId: "old-a",
+            kind: "function",
+            name: "run",
+            rangeStartLine: 1,
+            rangeStartCol: 0,
+          },
+          {
+            symbolId: "old-b",
+            kind: "function",
+            name: "run",
+            rangeStartLine: 1,
+            rangeStartCol: 0,
+          },
+        ],
+        [
+          {
+            symbolId: "native-new",
+            kind: "function",
+            name: "run",
+            range: { startLine: 1, startCol: 0 },
+          },
+        ],
+        "src/example.ts",
+        "native:1",
+      ),
+    (error: unknown) => {
+      assert.equal((error as { code?: unknown }).code, "PARSER_SYMBOL_REMAP");
+      return true;
+    },
+  );
+});
 
+test("binds parser coverage to the same verified version and revision", () => {
+  const graph = {
+    graphIntegrityState: "verified",
+    graphIntegrityVersionId: "v1",
+    graphIntegrityRevision: 3,
+    graphIntegrityVerifiedRevision: 3,
+    graphIntegrityDigest: "b".repeat(64),
+    graphIntegrityFilelessPruningSupported: true,
+    graphIntegrityManifestEstablished: true,
+  };
+  const coverage = {
+    repoId: "repo",
+    coverageState: "complete",
+    graphVersionId: "v1",
+    graphRevision: 3,
+    coverageDigest: "a".repeat(64),
+  };
+
+  assert.equal(parserCoverageMatchesVerifiedGraph(graph, "v1", coverage), true);
+  for (const candidate of [
+    { graph: { ...graph, graphIntegrityState: "verifying" } },
+    { graph: { ...graph, graphIntegrityVerifiedRevision: 2 } },
+    { coverage: { ...coverage, coverageState: "incomplete" } },
+    { coverage: { ...coverage, graphVersionId: "v2" } },
+    { coverage: { ...coverage, graphRevision: 2 } },
+  ]) {
+    assert.equal(
+      parserCoverageMatchesVerifiedGraph(
+        candidate.graph ?? graph,
+        "v1",
+        candidate.coverage ?? coverage,
+      ),
+      false,
+    );
+  }
+});
+
+test("retains only an exact same-position durable symbol ID", () => {
+  const durable = [{
+    symbolId: "durable",
+    kind: "function",
+    name: "run",
+    rangeStartLine: 1,
+    rangeStartCol: 0,
+  }];
+  const exact = resolveDraftSymbolRemap(
+    durable,
+    [{
+      symbolId: "selected-engine",
+      kind: "function",
+      name: "run",
+      range: { startLine: 1, startCol: 0 },
+    }],
+    "src/example.ts",
+    "typescript:1",
+  );
+  assert.equal(exact.get("selected-engine"), "durable");
+
+  const moved = resolveDraftSymbolRemap(
+    durable,
+    [{
+      symbolId: "moved-engine-id",
+      kind: "function",
+      name: "run",
+      range: { startLine: 2, startCol: 0 },
+    }],
+    "src/example.ts",
+    "typescript:1",
+  );
+  assert.equal(moved.size, 0);
+});
+
+test("rejects duplicate parsed keys and final ID collisions", () => {
+  const durable = [{
+    symbolId: "durable",
+    kind: "function",
+    name: "run",
+    rangeStartLine: 1,
+    rangeStartCol: 0,
+  }];
+  const assertRemapRejected = (
+    candidates: Parameters<typeof resolveDraftSymbolRemap>[1],
+  ) => assert.throws(
+    () => resolveDraftSymbolRemap(
+      durable,
+      candidates,
+      "src/example.ts",
+      "typescript:1",
+    ),
+    (error: unknown) => {
+      assert.equal((error as { code?: unknown }).code, "PARSER_SYMBOL_REMAP");
+      return true;
+    },
+  );
+
+  assertRemapRejected([
+    {
+      symbolId: "one",
+      kind: "function",
+      name: "run",
+      range: { startLine: 1, startCol: 0 },
+    },
+    {
+      symbolId: "two",
+      kind: "function",
+      name: "run",
+      range: { startLine: 1, startCol: 0 },
+    },
+  ]);
+  assertRemapRejected([
+    {
+      symbolId: "selected",
+      kind: "function",
+      name: "run",
+      range: { startLine: 1, startCol: 0 },
+    },
+    {
+      symbolId: "durable",
+      kind: "function",
+      name: "other",
+      range: { startLine: 2, startCol: 0 },
+    },
+  ]);
 });

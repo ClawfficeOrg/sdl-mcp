@@ -1,3 +1,11 @@
+import { extname } from "node:path";
+import {
+  ParserContractMismatchError,
+  ParserEngineUnavailableError,
+  ParserFileStateMissingError,
+  ParserProvenanceIncompleteError,
+  ParserSymbolRemapError,
+} from "../domain/errors.js";
 import type {
   EdgeRow,
   FileRow,
@@ -5,13 +13,26 @@ import type {
   SymbolRow,
 } from "../db/ladybug-queries.js";
 import { getLadybugConn } from "../db/ladybug.js";
+import { withReadOnlyTransaction } from "../db/ladybug-core.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
+import {
+  getFileParserState,
+  getRepoParserState,
+  type RepoParserStateRecord,
+} from "../db/ladybug-parser-provenance.js";
+import {
+  getDerivedStateFromConnection,
+  graphIntegrityIsVerifiedForVersion,
+} from "../db/ladybug-derived-state.js";
 import {
   type SymbolPlaceholderMeta,
   unresolvedCallDependencyTarget,
   unresolvedCallSymbolId,
 } from "../db/symbol-placeholders.js";
-import { getAdapterForExtension } from "../indexer/adapter/registry.js";
+import {
+  getAdapterForExtension,
+  getAdapterParserContract,
+} from "../indexer/adapter/registry.js";
 import { logger } from "../util/logger.js";
 import { serializeTestCaseFacet } from "../util/test-case.js";
 import {
@@ -36,8 +57,20 @@ import {
 } from "../indexer/summaries.js";
 import type { SymbolWithNodeId } from "../indexer/worker.js";
 import { applyTestCaseCandidates } from "../indexer/test-case-normalizer.js";
+import {
+  NATIVE_PARSER_CONTRACT,
+  selectParserContract,
+  type ParserContract,
+} from "../indexer/parser-provenance.js";
+import {
+  getNativeContentParserCapability,
+  type RustExtractedSymbol,
+} from "../indexer/rustIndexer.js";
 import { hashContent } from "../util/hashing.js";
-import { getAbsolutePathFromRepoRoot, normalizePath } from "../util/paths.js";
+import { normalizePath } from "../util/paths.js";
+import {
+  parseDraftSource,
+} from "./draft-source-parser.js";
 
 export interface DraftParseInput {
   repoId: string;
@@ -51,10 +84,167 @@ export interface DraftParseInput {
 
 export interface DraftParseResult {
   version: number;
+  graphVersionId: string;
+  graphRevision: number;
   file: FileRow;
   symbols: SymbolRow[];
   edges: EdgeRow[];
   references: SymbolReferenceRow[];
+  parserContract: ParserContract;
+}
+
+export interface DraftParserPreflight {
+  repoId: string;
+  relPath: string;
+  durableFile: FileRow | null;
+  durableSymbols: SymbolRow[];
+  contract: ParserContract;
+  graphVersionId: string;
+  graphRevision: number;
+  pruningSupported: boolean;
+  repoParserState: RepoParserStateRecord;
+}
+
+function contractsMatch(
+  recorded: ParserContract,
+  available: ParserContract | undefined,
+): boolean {
+  return (
+    available?.engine === recorded.engine &&
+    available.engineContract === recorded.engineContract &&
+    available.adapterKey === recorded.adapterKey &&
+    available.language === recorded.language
+  );
+}
+
+export function parserCoverageMatchesVerifiedGraph(
+  derivedState: Awaited<ReturnType<typeof getDerivedStateFromConnection>>,
+  versionId: string,
+  repoParserState: RepoParserStateRecord | null,
+): boolean {
+  return Boolean(
+    graphIntegrityIsVerifiedForVersion(derivedState, versionId) &&
+    repoParserState?.coverageState === "complete" &&
+    repoParserState.graphVersionId === versionId &&
+    repoParserState.graphRevision ===
+      derivedState?.graphIntegrityVerifiedRevision,
+  );
+}
+
+function assertRecordedContractAvailable(
+  contract: ParserContract,
+  relPath: string,
+): void {
+  if (contract.engine === "native") {
+    if (!contractsMatch(contract, NATIVE_PARSER_CONTRACT)) {
+      throw new ParserContractMismatchError(relPath, contract.engineContract);
+    }
+    const capability = getNativeContentParserCapability();
+    if (!capability.available) {
+      if (capability.reason === "contract-version-mismatch") {
+        throw new ParserContractMismatchError(relPath, contract.engineContract);
+      }
+      throw new ParserEngineUnavailableError(relPath, contract.engineContract);
+    }
+    if (capability.contract !== contract.engineContract) {
+      throw new ParserContractMismatchError(relPath, contract.engineContract);
+    }
+    return;
+  }
+
+  const extension = extname(relPath);
+  if (!contractsMatch(contract, getAdapterParserContract(extension))) {
+    throw new ParserContractMismatchError(relPath, contract.engineContract);
+  }
+}
+
+export async function preflightDraftParser(input: {
+  repoId: string;
+  filePath: string;
+}): Promise<DraftParserPreflight> {
+  const relPath = normalizePath(input.filePath);
+  const conn = await getLadybugConn();
+  return withReadOnlyTransaction(conn, async () => {
+    const latestVersion = await ladybugDb.getLatestVersion(conn, input.repoId);
+    const derivedState = await getDerivedStateFromConnection(
+      conn,
+      input.repoId,
+    );
+    const repoParserState = await getRepoParserState(conn, input.repoId);
+    const durableFile = await ladybugDb.getFileByRepoPath(
+      conn,
+      input.repoId,
+      relPath,
+    );
+
+    if (
+      !latestVersion ||
+      !parserCoverageMatchesVerifiedGraph(
+        derivedState,
+        latestVersion.versionId,
+        repoParserState,
+      )
+    ) {
+      throw new ParserProvenanceIncompleteError(
+        relPath,
+        "complete parser provenance",
+      );
+    }
+
+    const durableFileId = durableFile?.fileId ?? input.repoId + ":" + relPath;
+    const parserState = await getFileParserState(
+      conn,
+      input.repoId,
+      durableFileId,
+    );
+    let contract: ParserContract;
+    if (durableFile) {
+      if (!parserState) {
+        throw new ParserFileStateMissingError(
+          relPath,
+          "recorded parser contract",
+        );
+      }
+      contract = {
+        engine: parserState.engine,
+        engineContract: parserState.engineContract,
+        adapterKey: parserState.adapterKey,
+        language: parserState.language,
+      };
+      assertRecordedContractAvailable(contract, relPath);
+    } else {
+      if (parserState) {
+        throw new ParserProvenanceIncompleteError(
+          relPath,
+          "complete parser provenance",
+        );
+      }
+      const extension = relPath.includes(".")
+        ? relPath.slice(relPath.lastIndexOf("."))
+        : "";
+      const adapter = getAdapterForExtension(extension);
+      contract = selectParserContract({
+        repoRelativePath: relPath,
+        language: adapter?.languageId ?? "",
+        nativeCapability: getNativeContentParserCapability(),
+        adapterContract: getAdapterParserContract(extension),
+      });
+    }
+
+    return {
+      repoId: input.repoId,
+      relPath,
+      durableFile,
+      durableSymbols: durableFile
+        ? await ladybugDb.getSymbolsByFile(conn, durableFile.fileId)
+        : [],
+      contract,
+      graphVersionId: latestVersion.versionId,
+      graphRevision: derivedState!.graphIntegrityRevision!,
+      pruningSupported: derivedState!.graphIntegrityFilelessPruningSupported!,
+      repoParserState: repoParserState!,
+    };
+  });
 }
 
 function computeDirectory(relPath: string): string {
@@ -87,91 +277,50 @@ function buildDurableSymbolMatchKey(params: {
 
 export async function parseDraftFile(
   input: DraftParseInput,
+  prepared?: DraftParserPreflight,
 ): Promise<DraftParseResult> {
+  const preflight =
+    prepared ??
+    (await preflightDraftParser({
+      repoId: input.repoId,
+      filePath: input.filePath,
+    }));
   const relPath = normalizePath(input.filePath);
-  const conn = await getLadybugConn();
-  const durableFile = await ladybugDb.getFileByRepoPath(
-    conn,
-    input.repoId,
-    relPath,
-  );
-  const fileId = durableFile?.fileId ?? `${input.repoId}:${relPath}`;
-  const ext = relPath.includes(".")
-    ? relPath.slice(relPath.lastIndexOf(".") + 1)
-    : "";
-  const extWithDot = ext ? `.${ext}` : "";
-  const adapter = getAdapterForExtension(extWithDot);
+  if (preflight.repoId !== input.repoId || preflight.relPath !== relPath) {
+    throw new ParserContractMismatchError(
+      relPath,
+      preflight.contract.engineContract,
+    );
+  }
+  const { contract, durableFile, durableSymbols } = preflight;
+  const fileId = durableFile?.fileId ?? input.repoId + ":" + relPath;
+  const extension = extname(relPath);
+  const adapter = getAdapterForExtension(extension);
+  if (!adapter) {
+    throw new ParserContractMismatchError(relPath, contract.engineContract);
+  }
+
   const timestamp = new Date().toISOString();
   const file: FileRow = {
     fileId,
     repoId: input.repoId,
     relPath,
     contentHash: hashContent(input.content),
-    language: ext || input.language || "unknown",
+    language: contract.language,
     byteSize: Buffer.byteLength(input.content, "utf8"),
     lastIndexedAt: null,
     directory: computeDirectory(relPath),
   };
-
-  let durableSymbolsByMatchKey = new Map<DurableSymbolMatchKey, SymbolRow>();
-  if (durableFile) {
-    const durableSymbols = await ladybugDb.getSymbolsByFile(
-      conn,
-      durableFile.fileId,
-    );
-    durableSymbolsByMatchKey = new Map(
-      durableSymbols.map((symbol) => [
-        buildDurableSymbolMatchKey({
-          kind: symbol.kind,
-          name: symbol.name,
-          startLine: symbol.rangeStartLine,
-          startCol: symbol.rangeStartCol,
-        }),
-        symbol,
-      ]),
-    );
-  }
-
-  if (!adapter) {
-    return {
-      version: input.version,
-      file,
-      symbols: [],
-      edges: [],
-      references: isTestFile(relPath, input.languages)
-        ? buildSymbolReferences(input.content, input.repoId, fileId)
-        : [],
-    };
-  }
-
-  const absolutePath = getAbsolutePathFromRepoRoot(input.repoRoot, relPath);
-  const tree = adapter.parse(input.content, absolutePath);
-  if (!tree) {
-    return {
-      version: input.version,
-      file,
-      symbols: [],
-      edges: [],
-      references: [],
-    };
-  }
+  const extraction = await parseDraftSource({
+    repoId: input.repoId,
+    repoRelativePath: relPath,
+    content: input.content,
+    contract,
+  });
+  const tree = extraction.tree;
 
   try {
-    let extractedSymbols: ReturnType<typeof adapter.extractSymbols> = [];
-    try {
-      extractedSymbols = adapter.extractSymbols(
-        tree,
-        input.content,
-        absolutePath,
-      );
-    } catch (error) {
-      logger.warn("Draft symbol extraction failed", {
-        file: absolutePath,
-        error: String(error),
-      });
-      extractedSymbols = [];
-    }
-
+    const extractedSymbols = extraction.symbols;
     let symbolsWithNodeIds: SymbolWithNodeId[] = extractedSymbols.map(
       (symbol) => ({
         nodeId: symbol.nodeId,
@@ -182,18 +331,16 @@ export async function parseDraftFile(
         signature: symbol.signature,
         visibility: symbol.visibility,
         testCase: symbol.testCase,
-        astFingerprint: "",
+        astFingerprint:
+          contract.engine === "native"
+            ? (symbol as RustExtractedSymbol).astFingerprint
+            : "",
       }),
     );
-    const imports = adapter.extractImports(tree, input.content, absolutePath);
-    let calls = adapter.extractCalls(
-      tree,
-      input.content,
-      absolutePath,
-      symbolsWithNodeIds,
-    );
+    const imports = extraction.imports;
+    let calls = extraction.calls;
 
-    if (adapter.detectTestCases) {
+    if (contract.engine === "typescript" && tree && adapter.detectTestCases) {
       try {
         const normalized = applyTestCaseCandidates({
           relPath,
@@ -202,7 +349,7 @@ export async function parseDraftFile(
           candidates: adapter.detectTestCases({
             tree,
             content: input.content,
-            filePath: absolutePath,
+            filePath: relPath,
             symbols: symbolsWithNodeIds,
           }),
         });
@@ -237,41 +384,72 @@ export async function parseDraftFile(
             namespaceImports: new Map<string, Map<string, string>>(),
           };
 
-    const symbolDetails = symbolsWithNodeIds.map((extractedSymbol) => {
-      let astFingerprint = extractedSymbol.astFingerprint ?? "";
-      const matchingNode = resolveSymbolNodeForFingerprint(tree, {
-        kind: extractedSymbol.kind,
-        name: extractedSymbol.name,
-        startLine: extractedSymbol.range.startLine,
-        startCol: extractedSymbol.range.startCol,
-      });
-      if (matchingNode) {
-        astFingerprint = generateAstFingerprint(matchingNode);
-      }
+    const candidateDetails = symbolsWithNodeIds.map(
+      (extractedSymbol, index) => {
+        const sourceSymbol = extractedSymbols[index]!;
+        let astFingerprint = extractedSymbol.astFingerprint ?? "";
+        if (contract.engine === "typescript") {
+          if (!tree) {
+            throw new ParserEngineUnavailableError(
+              relPath,
+              contract.engineContract,
+            );
+          }
+          const matchingNode = resolveSymbolNodeForFingerprint(tree, {
+            kind: extractedSymbol.kind,
+            name: extractedSymbol.name,
+            startLine: extractedSymbol.range.startLine,
+            startCol: extractedSymbol.range.startCol,
+          });
+          if (matchingNode) {
+            astFingerprint = generateAstFingerprint(matchingNode);
+          }
+        }
 
-      const matchKey = buildDurableSymbolMatchKey({
-        kind: extractedSymbol.kind,
-        name: extractedSymbol.name,
-        startLine: extractedSymbol.range.startLine,
-        startCol: extractedSymbol.range.startCol,
-      });
-      const durableSymbol = durableSymbolsByMatchKey.get(matchKey);
-      if (durableSymbol) {
-        durableSymbolFallbackObserver?.(matchKey);
+        const candidateSymbolId =
+          contract.engine === "native"
+            ? (sourceSymbol as RustExtractedSymbol).symbolId
+            : generateSymbolId(
+                input.repoId,
+                relPath,
+                extractedSymbol.kind,
+                extractedSymbol.name,
+                astFingerprint,
+              );
+        return {
+          extractedSymbol,
+          sourceSymbol,
+          candidateSymbolId,
+          astFingerprint,
+        };
+      },
+    );
+    const remappedIds = resolveDraftSymbolRemap(
+      durableSymbols,
+      candidateDetails.map((detail) => ({
+        symbolId: detail.candidateSymbolId,
+        kind: detail.extractedSymbol.kind,
+        name: detail.extractedSymbol.name,
+        range: detail.extractedSymbol.range,
+      })),
+      relPath,
+      contract.engineContract,
+    );
+    const symbolDetails = candidateDetails.map((detail) => {
+      const remappedId = remappedIds.get(detail.candidateSymbolId);
+      if (remappedId) {
+        durableSymbolFallbackObserver?.(
+          buildDurableSymbolMatchKey({
+            kind: detail.extractedSymbol.kind,
+            name: detail.extractedSymbol.name,
+            startLine: detail.extractedSymbol.range.startLine,
+            startCol: detail.extractedSymbol.range.startCol,
+          }),
+        );
       }
-
       return {
-        extractedSymbol,
-        symbolId:
-          durableSymbol?.symbolId ??
-          generateSymbolId(
-            input.repoId,
-            relPath,
-            extractedSymbol.kind,
-            extractedSymbol.name,
-            astFingerprint,
-          ),
-        astFingerprint,
+        ...detail,
+        symbolId: remappedId ?? detail.candidateSymbolId,
       };
     });
 
@@ -286,17 +464,38 @@ export async function parseDraftFile(
 
     const symbols: SymbolRow[] = symbolDetails.map((detail) => {
       const extractedSymbol = detail.extractedSymbol;
-      const summary = generateSummary(extractedSymbol, input.content);
-      const invariants = extractInvariants(extractedSymbol, input.content);
-      const sideEffects = extractSideEffects(extractedSymbol, input.content);
-      const { roleTagsJson, searchText } = resolveSymbolEnrichment({
-        kind: extractedSymbol.kind,
-        name: extractedSymbol.name,
-        relPath,
-        summary,
-        signature: extractedSymbol.signature,
-        testCase: extractedSymbol.testCase,
-      });
+      const nativeSymbol =
+        contract.engine === "native"
+          ? (detail.sourceSymbol as RustExtractedSymbol)
+          : undefined;
+      const summary =
+        nativeSymbol?.summary ??
+        generateSummary(extractedSymbol, input.content);
+      const invariantsJson = nativeSymbol
+        ? nativeSymbol.invariantsJson || null
+        : (() => {
+            const values = extractInvariants(extractedSymbol, input.content);
+            return values.length > 0 ? JSON.stringify(values) : null;
+          })();
+      const sideEffectsJson = nativeSymbol
+        ? nativeSymbol.sideEffectsJson || null
+        : (() => {
+            const values = extractSideEffects(extractedSymbol, input.content);
+            return values.length > 0 ? JSON.stringify(values) : null;
+          })();
+      const enrichment = nativeSymbol
+        ? {
+            roleTagsJson: nativeSymbol.roleTagsJson || null,
+            searchText: nativeSymbol.searchText,
+          }
+        : resolveSymbolEnrichment({
+            kind: extractedSymbol.kind,
+            name: extractedSymbol.name,
+            relPath,
+            summary,
+            signature: extractedSymbol.signature,
+            testCase: extractedSymbol.testCase,
+          });
 
       return {
         symbolId: detail.symbolId,
@@ -306,7 +505,7 @@ export async function parseDraftFile(
         name: extractedSymbol.name,
         exported: extractedSymbol.exported,
         visibility: extractedSymbol.visibility || null,
-        language: adapter.languageId,
+        language: contract.language,
         rangeStartLine: extractedSymbol.range.startLine,
         rangeStartCol: extractedSymbol.range.startCol,
         rangeEndLine: extractedSymbol.range.endLine,
@@ -316,15 +515,13 @@ export async function parseDraftFile(
           ? JSON.stringify(extractedSymbol.signature)
           : null,
         summary,
-        invariantsJson:
-          invariants.length > 0 ? JSON.stringify(invariants) : null,
-        sideEffectsJson:
-          sideEffects.length > 0 ? JSON.stringify(sideEffects) : null,
-        roleTagsJson,
+        invariantsJson,
+        sideEffectsJson,
+        roleTagsJson: enrichment.roleTagsJson,
         testCaseJson: extractedSymbol.testCase
           ? (serializeTestCaseFacet(extractedSymbol.testCase) ?? null)
           : null,
-        searchText,
+        searchText: enrichment.searchText,
         updatedAt: timestamp,
       };
     });
@@ -415,12 +612,15 @@ export async function parseDraftFile(
 
     return {
       version: input.version,
+      graphVersionId: preflight.graphVersionId,
+      graphRevision: preflight.graphRevision,
       file,
       symbols,
       edges,
       references: isTestFile(relPath, input.languages)
         ? buildSymbolReferences(input.content, input.repoId, fileId)
         : [],
+      parserContract: contract,
     };
   } finally {
     if (
@@ -430,4 +630,77 @@ export async function parseDraftFile(
       (tree as unknown as { delete: () => void }).delete();
     }
   }
+}
+
+export interface DurableDraftSymbolRemapInput {
+  symbolId: string;
+  kind: string;
+  name: string;
+  rangeStartLine: number;
+  rangeStartCol: number;
+}
+
+export interface DraftSymbolRemapCandidate {
+  symbolId: string;
+  kind: string;
+  name: string;
+  range: { startLine: number; startCol: number };
+}
+
+export function resolveDraftSymbolRemap(
+  durableSymbols: readonly DurableDraftSymbolRemapInput[],
+  parsedSymbols: readonly DraftSymbolRemapCandidate[],
+  repoRelativePath: string,
+  requiredContract: string,
+): Map<string, string> {
+  const durableByKey = new Map<string, string>();
+  for (const symbol of durableSymbols) {
+    const key = buildDurableSymbolMatchKey({
+      kind: symbol.kind,
+      name: symbol.name,
+      startLine: symbol.rangeStartLine,
+      startCol: symbol.rangeStartCol,
+    });
+    if (durableByKey.has(key)) {
+      throw new ParserSymbolRemapError(repoRelativePath, requiredContract);
+    }
+    durableByKey.set(key, symbol.symbolId);
+  }
+
+  const remapped = new Map<string, string>();
+  const parsedKeys = new Set<string>();
+  const parsedIds = new Set<string>();
+  const usedDurableIds = new Set<string>();
+  for (const symbol of parsedSymbols) {
+    const key = buildDurableSymbolMatchKey({
+      kind: symbol.kind,
+      name: symbol.name,
+      startLine: symbol.range.startLine,
+      startCol: symbol.range.startCol,
+    });
+    if (parsedKeys.has(key) || parsedIds.has(symbol.symbolId)) {
+      throw new ParserSymbolRemapError(repoRelativePath, requiredContract);
+    }
+    parsedKeys.add(key);
+    parsedIds.add(symbol.symbolId);
+
+    const durableId = durableByKey.get(key);
+    if (durableId) {
+      if (usedDurableIds.has(durableId)) {
+        throw new ParserSymbolRemapError(repoRelativePath, requiredContract);
+      }
+      usedDurableIds.add(durableId);
+      remapped.set(symbol.symbolId, durableId);
+    }
+  }
+
+  const finalIds = new Set<string>();
+  for (const symbol of parsedSymbols) {
+    const finalId = remapped.get(symbol.symbolId) ?? symbol.symbolId;
+    if (finalIds.has(finalId)) {
+      throw new ParserSymbolRemapError(repoRelativePath, requiredContract);
+    }
+    finalIds.add(finalId);
+  }
+  return remapped;
 }

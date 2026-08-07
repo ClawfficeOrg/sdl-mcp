@@ -120,7 +120,7 @@ describe("provider-first indexRepo fallback", () => {
     const repoId = await initIndexedRepo("auto");
     const deletedPath = join(repoDir, "src", "deleted.ts");
     const renamedPath = join(repoDir, "src", "renamed.ts");
-    const movedPath = join(repoDir, "src", "moved.ts");
+    const movedPath = join(repoDir, "src", "moved.tsx");
     writeFileSync(
       deletedPath,
       "export function deleted() { return unresolvedDeleted(); }\n",
@@ -131,10 +131,17 @@ describe("provider-first indexRepo fallback", () => {
 
     const conn = await getLadybugConn();
     const before = await ladybugDb.listGraphIntegrityFileStates(conn, repoId);
+    const beforeParserStates = await ladybugDb.listFileParserStates(conn, repoId);
     const deletedState = before.find((row) => row.relPath === "src/deleted.ts");
     const renamedState = before.find((row) => row.relPath === "src/renamed.ts");
     assert.ok(deletedState);
     assert.ok(renamedState);
+    assert.ok(
+      beforeParserStates.some((row) => row.fileId === deletedState.fileId),
+    );
+    assert.ok(
+      beforeParserStates.some((row) => row.fileId === renamedState.fileId),
+    );
     const deletedReferences: unknown = JSON.parse(
       deletedState.filelessReferencesJson,
     );
@@ -189,7 +196,7 @@ describe("provider-first indexRepo fallback", () => {
       after.some((row) => row.fileId === renamedState.fileId),
       false,
     );
-    assert.ok(after.some((row) => row.relPath === "src/moved.ts"));
+    assert.ok(after.some((row) => row.relPath === "src/moved.tsx"));
     assert.equal(
       afterFileless.some((row) => deletedFilelessIds.includes(row.symbolId)),
       false,
@@ -198,6 +205,30 @@ describe("provider-first indexRepo fallback", () => {
       after.find((row) => row.relPath === "src/index.ts")?.digest,
       before.find((row) => row.relPath === "src/index.ts")?.digest,
     );
+    const afterParserStates = await ladybugDb.listFileParserStates(
+      afterConn,
+      repoId,
+    );
+    assert.equal(
+      afterParserStates.some((row) => row.fileId === deletedState.fileId),
+      false,
+    );
+    assert.equal(
+      afterParserStates.some((row) => row.fileId === renamedState.fileId),
+      false,
+    );
+    const movedManifest = after.find((row) => row.relPath === "src/moved.tsx");
+    assert.ok(movedManifest);
+    const movedParserState = afterParserStates.find(
+      (row) => row.fileId === movedManifest.fileId,
+    );
+    assert.ok(movedParserState);
+    assert.equal(movedParserState.language, "typescript");
+    const coverageDigest =
+      await ladybugDb.verifyExactParserCoverageInTransaction(afterConn, repoId);
+    const repoParserState = await ladybugDb.getRepoParserState(afterConn, repoId);
+    assert.equal(repoParserState?.coverageState, "complete");
+    assert.equal(repoParserState?.coverageDigest, coverageDigest);
   });
 
   it("falls back cleanly when provenance fails before provider graph persistence", async () => {
@@ -1581,7 +1612,7 @@ describe("provider-first indexRepo fallback", () => {
           repoId,
           rootPath: repoDir,
           ignore: [],
-          languages: ["ts"],
+          languages: ["ts", "tsx"],
           maxFileBytes: 2_000_000,
           ...(sourceFileListPath ? { sourceFileListPath } : {}),
           includeNodeModulesTypes: true,

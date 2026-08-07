@@ -13,6 +13,7 @@ import {
 import {
   deleteFileParserStatesByFileIdsInTransaction,
   deleteParserProvenanceForRepoInTransaction,
+  getFileParserState,
   getRepoParserState,
   listFileParserStates,
   upsertFileParserStatesInTransaction,
@@ -36,9 +37,7 @@ function parserState(
     fileId,
     engine,
     engineContract: native ? "native:1" : "typescript:1",
-    adapterKey: native
-      ? "native:native:1"
-      : "builtin:typescript:typescript:1",
+    adapterKey: native ? "native:native:1" : "builtin:typescript:typescript:1",
     language: "typescript",
   };
 }
@@ -90,13 +89,7 @@ describe("parser provenance persistence", () => {
     const f2 = parserState("r1", "f2");
     const expectedDigest = hashContent(
       JSON.stringify([
-        [
-          "f1",
-          "native",
-          "native:1",
-          "native:native:1",
-          "typescript",
-        ],
+        ["f1", "native", "native:1", "native:native:1", "typescript"],
         [
           "f2",
           "typescript",
@@ -162,10 +155,7 @@ describe("parser provenance persistence", () => {
         if (corruption !== "zero") {
           const states =
             corruption === "equal-count-different-id"
-              ? [
-                  parserState(repoId, "f1"),
-                  parserState(repoId, "f3"),
-                ]
+              ? [parserState(repoId, "f1"), parserState(repoId, "f3")]
               : corruption === "wrong-file"
                 ? [parserState(repoId, "f3")]
                 : fileIds.map((fileId) => parserState(repoId, fileId));
@@ -227,6 +217,75 @@ describe("parser provenance persistence", () => {
       });
     });
   }
+
+  it("loads one file parser state without scanning repository coverage", async () => {
+    const repoId = "single-state-repo";
+    const fileId = "single-state-file";
+    const expected = parserState(repoId, fileId);
+    await seedRepo(repoId, [fileId]);
+    await withWriteConn((conn) =>
+      upsertFileParserStatesInTransaction(conn, [expected]),
+    );
+
+    await withWriteConn(async (conn) => {
+      assert.deepEqual(
+        await getFileParserState(conn, repoId, fileId),
+        expected,
+      );
+      assert.equal(
+        await getFileParserState(conn, repoId, "missing-file"),
+        null,
+      );
+    });
+  });
+
+  it("rejects duplicate and wrong-owner states for one file lookup", async () => {
+    const repoId = "single-state-corruption-repo";
+    const otherRepoId = repoId + "-other";
+    const fileId = "single-state-corruption-file";
+    await seedRepo(repoId, [fileId]);
+    await seedRepo(otherRepoId, []);
+
+    await withWriteConn(async (conn) => {
+      const expected = parserState(repoId, fileId);
+      await upsertFileParserStatesInTransaction(conn, [expected]);
+      const duplicateStateId = JSON.stringify([repoId, fileId, "duplicate"]);
+      await exec(
+        conn,
+        `MATCH (r:Repo {repoId: $repoId})
+         CREATE (s:FileParserState {
+           stateId: $duplicateStateId, repoId: $repoId, fileId: $fileId,
+           engine: 'typescript', engineContract: 'typescript:1',
+           adapterKey: 'builtin:typescript:typescript:1',
+           language: 'typescript'
+         })
+         CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+        { repoId, fileId, duplicateStateId },
+      );
+      await assert.rejects(
+        getFileParserState(conn, repoId, fileId),
+        /parser coverage/i,
+      );
+
+      await exec(
+        conn,
+        `MATCH (s:FileParserState {stateId: $duplicateStateId})
+         DETACH DELETE s`,
+        { duplicateStateId },
+      );
+      await exec(
+        conn,
+        `MATCH (s:FileParserState {stateId: $stateId})
+         MATCH (r:Repo {repoId: $otherRepoId})
+         CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+        { stateId: expected.stateId, otherRepoId },
+      );
+      await assert.rejects(
+        getFileParserState(conn, repoId, fileId),
+        /parser coverage/i,
+      );
+    });
+  });
 
   it("lists only relationship-owned states for the requested repository", async () => {
     await seedRepo("r1", ["f1"]);

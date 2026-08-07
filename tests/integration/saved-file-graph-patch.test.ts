@@ -24,6 +24,11 @@ import {
 } from "../../dist/db/ladybug-core.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import {
+  getAdapterForExtension,
+  loadPluginsSync,
+} from "../../dist/indexer/adapter/registry.js";
+import { getHostApiVersion } from "../../dist/indexer/adapter/plugin/loader.js";
+import {
   capturePersistedGraphIntegrity,
   compareGraphIntegrityExpectations,
   createGraphIntegrityFilelessDelta,
@@ -32,10 +37,14 @@ import {
   createGraphIntegrityFilelessSymbols,
   createGraphIntegrityExpectationFromManifest,
   createGraphIntegrityFileState,
-  GraphIntegrityVerificationError,
   parseGraphIntegrityCanonicalSymbol,
 } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
 import { patchSavedFile } from "../../dist/live-index/file-patcher.js";
+import {
+  parseDraftFile,
+  parserCoverageMatchesVerifiedGraph,
+  preflightDraftParser,
+} from "../../dist/live-index/draft-parser.js";
 import { generateFileId } from "../../dist/util/hashing.js";
 import {
   getDerivedState,
@@ -48,6 +57,8 @@ import {
 } from "../../dist/live-index/coordinator.js";
 import {
   cancelAndWaitForGraphIntegrityVerifier,
+  notifyGraphIntegrityVerifier,
+  waitForGraphIntegrityVerifier,
 } from "../../dist/indexer/provider-first/background-graph-integrity-verifier.js";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -75,26 +86,63 @@ async function waitForVerifiedRevision(
   repoId: string,
   revision: number,
 ): Promise<NonNullable<Awaited<ReturnType<typeof getDerivedState>>>> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const state = await getDerivedState(repoId);
-    if (
-      state?.graphIntegrityState === "verified" &&
-      state.graphIntegrityVerifiedRevision === revision
-    ) {
-      return state;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  await waitForGraphIntegrityVerifier(repoId);
+  const state = await getDerivedState(repoId);
+  const parserState = await ladybugDb.getRepoParserState(
+    await getLadybugConn(),
+    repoId,
+  );
+  if (
+    state?.graphIntegrityState === "verified" &&
+    state.graphIntegrityVerifiedRevision === revision &&
+    parserCoverageMatchesVerifiedGraph(
+      state,
+      state.graphIntegrityVersionId ?? "",
+      parserState,
+    )
+  ) {
+    return state;
   }
-  throw new Error(`Timed out waiting for graph integrity revision ${revision}`);
+  throw new Error(`Graph integrity revision ${revision} was not fully published: state=${state?.graphIntegrityState}/${state?.graphIntegrityVersionId}/${state?.graphIntegrityRevision}/${state?.graphIntegrityVerifiedRevision}; parser=${parserState?.coverageState}/${parserState?.graphVersionId}/${parserState?.graphRevision}`);
+}
+
+async function restoreGraphIntegrityState(
+  repoId: string,
+  state: NonNullable<Awaited<ReturnType<typeof getDerivedState>>>,
+): Promise<void> {
+  await withWriteConn((conn) =>
+    exec(
+      conn,
+      `MATCH (d:DerivedState {repoId: $repoId})
+       SET d.graphIntegrityState = 'verified',
+           d.graphIntegrityVersionId = $versionId,
+           d.graphIntegrityDigest = $digest,
+           d.graphIntegrityError = NULL,
+           d.graphIntegrityRevision = $revision,
+           d.graphIntegrityVerifiedRevision = $verifiedRevision,
+           d.graphIntegrityFilelessPruningSupported = $filelessPruningSupported,
+           d.updatedAt = $updatedAt`,
+      {
+        repoId,
+        versionId: state.graphIntegrityVersionId,
+        digest: state.graphIntegrityDigest,
+        revision: state.graphIntegrityRevision,
+        verifiedRevision: state.graphIntegrityVerifiedRevision,
+        filelessPruningSupported:
+          state.graphIntegrityFilelessPruningSupported,
+        updatedAt: state.updatedAt,
+      },
+    ),
+  );
 }
 
 describe("saved file graph patch", () => {
   const repoId = "saved-file-graph-patch-repo";
   const durableFileId = generateFileId(repoId, "src/example.ts");
   const providerExternalId = "scip-typescript npm fixture 1.0.0 dep#external().";
-  const dbPath = join(tmpdir(), ".lbug-saved-file-graph-patch-test-db.lbug");
-  const configPath = join(tmpdir(), `sdl-saved-file-patch-${Date.now()}.json`);
+  let testDir = "";
+  let dbPath = "";
+  let configPath = "";
   let repoDir = "";
   let baselineDigest = "";
   let providerCanonicalJson = "";
@@ -102,8 +150,9 @@ describe("saved file graph patch", () => {
   const prevConfigPath = process.env.SDL_CONFIG_PATH;
 
   before(async () => {
-    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
-    if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
+    testDir = mkdtempSync(join(tmpdir(), "sdl-saved-file-patch-test-"));
+    dbPath = join(testDir, "graph.lbug");
+    configPath = join(testDir, "config.json");
     repoDir = mkdtempSync(join(tmpdir(), "sdl-saved-file-patch-repo-"));
     mkdirSync(join(repoDir, "src"), { recursive: true });
     writeFileSync(
@@ -280,7 +329,63 @@ describe("saved file graph patch", () => {
       ],
       fileless: baselineFileless,
     });
+    await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+      {
+        stateId: JSON.stringify([repoId, durableFileId]),
+        repoId,
+        fileId: durableFileId,
+        engine: "typescript",
+        engineContract: "typescript:1",
+        adapterKey: "builtin:typescript:typescript:1",
+        language: "typescript",
+      },
+    ]);
+    const coverageDigest =
+      await ladybugDb.verifyExactParserCoverageInTransaction(conn, repoId);
+    await ladybugDb.upsertRepoParserStateInTransaction(conn, {
+      repoId,
+      coverageState: "complete",
+      graphVersionId: "v1",
+      graphRevision: 0,
+      coverageDigest,
+    });
     await markGraphIntegrityVerified(repoId, "v1", baselineDigest);
+    const seededDerivedState = await getDerivedState(repoId);
+    const seededRepoParserState = await ladybugDb.getRepoParserState(
+      conn,
+      repoId,
+    );
+    assert.equal(seededDerivedState?.graphIntegrityState, "verified");
+    assert.equal(seededDerivedState?.graphIntegrityManifestEstablished, true);
+    assert.equal(seededDerivedState?.graphIntegrityRevision, 0);
+    assert.equal(seededDerivedState?.graphIntegrityVerifiedRevision, 0);
+    assert.match(seededDerivedState?.graphIntegrityDigest ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(
+      seededDerivedState?.graphIntegrityFilelessPruningSupported,
+      true,
+    );
+    assert.equal(seededRepoParserState?.coverageState, "complete");
+    assert.equal(seededRepoParserState?.graphVersionId, "v1");
+    assert.equal(seededRepoParserState?.graphRevision, 0);
+    assert.equal(
+      parserCoverageMatchesVerifiedGraph(
+        seededDerivedState,
+        "v1",
+        seededRepoParserState,
+      ),
+      true,
+    );
+    const seededPreflight = await preflightDraftParser({
+      repoId,
+      filePath: "src/example.ts",
+    });
+    assert.equal(seededPreflight.contract.engine, "typescript");
+    const normalizedPreflight = await preflightDraftParser({
+      repoId,
+      filePath: "src\\example.ts",
+    });
+    assert.equal(normalizedPreflight.relPath, "src/example.ts");
+    assert.equal(normalizedPreflight.durableFile?.fileId, durableFileId);
   });
 
   beforeEach(async () => {
@@ -292,14 +397,251 @@ describe("saved file graph patch", () => {
     resetDefaultLiveIndexCoordinator();
     await cancelAndWaitForGraphIntegrityVerifier(repoId);
     await closeLadybugDb();
-    rmSync(dbPath + ".sdl-lineage.json", { recursive: true, force: true });
-    if (existsSync(dbPath)) rmSync(dbPath, { recursive: true, force: true });
-    if (existsSync(configPath)) rmSync(configPath, { force: true });
+    if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
     if (repoDir && existsSync(repoDir)) rmSync(repoDir, { recursive: true, force: true });
     if (prevConfig === undefined) delete process.env.SDL_CONFIG;
     else process.env.SDL_CONFIG = prevConfig;
     if (prevConfigPath === undefined) delete process.env.SDL_CONFIG_PATH;
     else process.env.SDL_CONFIG_PATH = prevConfigPath;
+  });
+
+  it("rejects every invalid provenance predicate before parsing or writing", async (t) => {
+    const conn = await getLadybugConn();
+    const baselineDerived = await getDerivedState(repoId);
+    const baselineRepoState = await ladybugDb.getRepoParserState(conn, repoId);
+    const baselineFileState = await ladybugDb.getFileParserState(
+      conn,
+      repoId,
+      durableFileId,
+    );
+    assert.ok(baselineDerived && baselineRepoState && baselineFileState);
+
+    const otherRepoId = repoId + "-wrong-owner";
+    await withWriteConn((writeConn) =>
+      ladybugDb.upsertRepo(writeConn, {
+        repoId: otherRepoId,
+        rootPath: repoDir,
+        configJson: "{}",
+        createdAt: "2026-03-07T12:00:00.000Z",
+      }),
+    );
+
+    const statements = new WeakMap<object, string>();
+    const originalPrepare = Connection.prototype.prepare;
+    const originalExecute = Connection.prototype.execute;
+    let armed = false;
+    let writeAttempts = 0;
+    t.mock.method(Connection.prototype, "prepare", async function (statement) {
+      const prepared = await originalPrepare.call(this, statement);
+      statements.set(prepared, statement);
+      return prepared;
+    });
+    t.mock.method(
+      Connection.prototype,
+      "execute",
+      async function (prepared, params, progressCallback) {
+        const statement = statements.get(prepared) ?? "";
+        if (
+          armed &&
+          /\b(?:MERGE|CREATE|SET|DELETE|DETACH)\b/.test(statement)
+        ) {
+          writeAttempts += 1;
+        }
+        return originalExecute.call(this, prepared, params, progressCallback);
+      },
+    );
+
+    const adapter = getAdapterForExtension(".ts");
+    assert.ok(adapter);
+    const originalParse = adapter.parse;
+    let parseAttempts = 0;
+    adapter.parse = (...args) => {
+      if (armed) parseAttempts += 1;
+      return originalParse.call(adapter, ...args);
+    };
+
+    const cases: Array<{
+      name: string;
+      expectedCode: string;
+      corrupt: () => Promise<void>;
+    }> = [
+      {
+        name: "graph state",
+        expectedCode: "PARSER_PROVENANCE_INCOMPLETE",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (d:DerivedState {repoId: $repoId})
+               SET d.graphIntegrityState = 'failed'`,
+              { repoId },
+            ),
+          ),
+      },
+      {
+        name: "verified revision",
+        expectedCode: "PARSER_PROVENANCE_INCOMPLETE",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (d:DerivedState {repoId: $repoId})
+               SET d.graphIntegrityRevision = d.graphIntegrityRevision + 1`,
+              { repoId },
+            ),
+          ),
+      },
+      {
+        name: "coverage state",
+        expectedCode: "DATABASE_ERROR",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (s:RepoParserState {repoId: $repoId})
+               SET s.coverageState = 'incomplete'`,
+              { repoId },
+            ),
+          ),
+      },
+      {
+        name: "coverage version",
+        expectedCode: "PARSER_PROVENANCE_INCOMPLETE",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (s:RepoParserState {repoId: $repoId})
+               SET s.graphVersionId = 'wrong-version'`,
+              { repoId },
+            ),
+          ),
+      },
+      {
+        name: "coverage revision",
+        expectedCode: "PARSER_PROVENANCE_INCOMPLETE",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (s:RepoParserState {repoId: $repoId})
+               SET s.graphRevision = s.graphRevision + 1`,
+              { repoId },
+            ),
+          ),
+      },
+      {
+        name: "missing file state",
+        expectedCode: "PARSER_FILE_STATE_MISSING",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            ladybugDb.deleteFileParserStatesByFileIdsInTransaction(
+              writeConn,
+              [durableFileId],
+            ),
+          ),
+      },
+      {
+        name: "duplicate file state",
+        expectedCode: "DATABASE_ERROR",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (r:Repo {repoId: $repoId})
+               CREATE (s:FileParserState {
+                 stateId: $stateId, repoId: $repoId, fileId: $fileId,
+                 engine: 'typescript', engineContract: 'typescript:1',
+                 adapterKey: 'builtin:typescript:typescript:1',
+                 language: 'typescript'
+               })
+               CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+              {
+                repoId,
+                fileId: durableFileId,
+                stateId: JSON.stringify([repoId, durableFileId, "duplicate"]),
+              },
+            ),
+          ),
+      },
+      {
+        name: "wrong file-state owner",
+        expectedCode: "DATABASE_ERROR",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (s:FileParserState {stateId: $stateId})
+               MATCH (r:Repo {repoId: $otherRepoId})
+               CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+              { stateId: baselineFileState.stateId, otherRepoId },
+            ),
+          ),
+      },
+      {
+        name: "parser contract",
+        expectedCode: "PARSER_CONTRACT_MISMATCH",
+        corrupt: () =>
+          withWriteConn((writeConn) =>
+            exec(
+              writeConn,
+              `MATCH (s:FileParserState {stateId: $stateId})
+               SET s.engineContract = 'typescript:2'`,
+              { stateId: baselineFileState.stateId },
+            ),
+          ),
+      },
+    ];
+
+    try {
+      for (const [index, candidate] of cases.entries()) {
+        await candidate.corrupt();
+        await clearTestPreparedStatementCaches();
+        parseAttempts = 0;
+        writeAttempts = 0;
+        armed = true;
+        try {
+          await assert.rejects(
+            patchSavedFile({
+              repoId,
+              filePath: "src/example.ts",
+              content: "export function rejected() { return 0; }",
+              language: "typescript",
+              version: 100 + index,
+            }),
+            (error: unknown) => {
+              assert.equal(
+                (error as { code?: unknown }).code,
+                candidate.expectedCode,
+                candidate.name,
+              );
+              return true;
+            },
+          );
+          assert.equal(parseAttempts, 0, candidate.name + " parsed");
+          assert.equal(writeAttempts, 0, candidate.name + " wrote");
+        } finally {
+          armed = false;
+          await restoreGraphIntegrityState(repoId, baselineDerived);
+          await withWriteConn(async (writeConn) => {
+            await ladybugDb.deleteFileParserStatesByFileIdsInTransaction(
+              writeConn,
+              [durableFileId],
+            );
+            await ladybugDb.upsertFileParserStatesInTransaction(writeConn, [
+              baselineFileState,
+            ]);
+            await ladybugDb.upsertRepoParserStateInTransaction(
+              writeConn,
+              baselineRepoState,
+            );
+          });
+        }
+      }
+    } finally {
+      armed = false;
+      adapter.parse = originalParse;
+    }
   });
 
   it("keeps a provider-backed declaration range stable across edit and restore", async () => {
@@ -524,7 +866,7 @@ describe("saved file graph patch", () => {
     );
   });
 
-  it("returns rapid edits independently while only the newest revision publishes", async (t) => {
+  it("waits for current verification before accepting a rapid edit", async (t) => {
     const startingState = await getDerivedState(repoId);
     assert.equal(startingState?.graphIntegrityState, "verified");
     const startingRevision = startingState!.graphIntegrityRevision!;
@@ -609,7 +951,7 @@ describe("saved file graph patch", () => {
       startingVerifiedRevision,
     );
 
-    await patchSavedFile(
+    const secondPatch = patchSavedFile(
       {
         repoId,
         filePath: "src/example.ts",
@@ -627,19 +969,22 @@ describe("saved file graph patch", () => {
       },
       observer,
     );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepStrictEqual(committedRevisions, [firstRevision]);
+    releaseFirstPage.resolve();
+    await secondPatch;
     const secondState = await getDerivedState(repoId);
     assert.deepStrictEqual(committedRevisions, [firstRevision, secondRevision]);
     assert.equal(secondState?.graphIntegrityState, "verifying");
     assert.equal(secondState?.graphIntegrityRevision, secondRevision);
     assert.equal(
       secondState?.graphIntegrityVerifiedRevision,
-      startingVerifiedRevision,
+      firstRevision,
     );
-    assert.deepStrictEqual(publishedRevisions, []);
+    assert.deepStrictEqual(publishedRevisions, [firstRevision]);
 
-    releaseFirstPage.resolve();
     await waitForVerifiedRevision(repoId, secondRevision);
-    assert.deepStrictEqual(publishedRevisions, [secondRevision]);
+    assert.deepStrictEqual(publishedRevisions, [firstRevision, secondRevision]);
     assert.ok(pageQueries >= 2);
   });
 
@@ -926,6 +1271,150 @@ describe("saved file graph patch", () => {
     assert.notEqual(matchedCapture.digest, captured.digest);
   });
 
+  it("reparses when a cached parse result is stale", async () => {
+    const beforeState = await getDerivedState(repoId);
+    assert.equal(beforeState?.graphIntegrityState, "verified");
+    const staleContent = "export function stale() { return 1; }";
+    const preflight = await preflightDraftParser({
+      repoId,
+      filePath: "src/example.ts",
+    });
+    const staleResult = await parseDraftFile(
+      {
+        repoId,
+        repoRoot: repoDir,
+        filePath: "src/example.ts",
+        content: staleContent,
+        languages: ["ts"],
+        language: "typescript",
+        version: 7,
+      },
+      preflight,
+    );
+
+    let committedRevision: number | undefined;
+    const result = await patchSavedFile(
+      {
+        repoId,
+        filePath: "src/example.ts",
+        content: "export function fresh() { return 2; }",
+        language: "typescript",
+        version: 7,
+        parseResult: staleResult,
+      },
+      {
+        onCommitted(revision) {
+          committedRevision = revision;
+        },
+      },
+    );
+    assert.equal(result.parseResult.symbols.some((symbol) => symbol.name === "stale"), false);
+    assert.equal(result.parseResult.symbols.some((symbol) => symbol.name === "fresh"), true);
+    assert.ok(committedRevision !== undefined);
+    await waitForVerifiedRevision(repoId, committedRevision);
+  });
+
+  it("rolls back every foreground mutation phase and refuses the next save", async (t) => {
+    const conn = await getLadybugConn();
+    const baselineGraph = await capturePersistedGraphIntegrity(conn, repoId);
+    const baselineState = await getDerivedState(repoId);
+    assert.equal(baselineState?.graphIntegrityState, "verified");
+    assert.ok(baselineState);
+    const baselineParserState = await ladybugDb.getRepoParserState(conn, repoId);
+    await clearTestPreparedStatementCaches();
+    const statements = new WeakMap<object, string>();
+    const originalPrepare = Connection.prototype.prepare;
+    const originalExecute = Connection.prototype.execute;
+    let activePhase = "";
+    let injected = false;
+    const phaseMatches: Record<string, (statement: string) => boolean> = {
+      file: (statement) => statement.includes("MERGE (f:File {fileId: $fileId})"),
+      symbol: (statement) =>
+        statement.includes("MERGE (s:Symbol {symbolId: row.symbolId})"),
+      edge: (statement) => statement.includes("CREATE (a)-[:DEPENDS_ON"),
+      provenance: (statement) => statement.includes("MERGE (s:FileParserState"),
+      manifest: (statement) => statement.includes("MERGE (f:GraphIntegrityFileState"),
+      verification: (statement) =>
+        statement.includes("d.graphIntegrityRevision = $nextRevision"),
+    };
+    t.mock.method(Connection.prototype, "prepare", async function (statement) {
+      const prepared = await originalPrepare.call(this, statement);
+      statements.set(prepared, statement);
+      return prepared;
+    });
+    t.mock.method(
+      Connection.prototype,
+      "execute",
+      async function (prepared, params, progressCallback) {
+        const statement = statements.get(prepared) ?? "";
+        if (!injected && phaseMatches[activePhase]?.(statement)) {
+          injected = true;
+          throw new Error(`injected ${activePhase} phase failure`);
+        }
+        return originalExecute.call(this, prepared, params, progressCallback);
+      },
+    );
+
+    for (const [index, phase] of Object.keys(phaseMatches).entries()) {
+      activePhase = phase;
+      injected = false;
+      try {
+        await assert.rejects(
+          patchSavedFile({
+            repoId,
+            filePath: "src/example.ts",
+            content: [
+              "export function alpha() {",
+              "  return gamma();",
+              "}",
+              "",
+              "export function gamma() {",
+              "  return 3;",
+              "}",
+            ].join("\n"),
+            language: "typescript",
+            version: 20 + index,
+          }),
+          new RegExp(`injected ${phase} phase failure`),
+        );
+        assert.equal(injected, true, `${phase} injection did not execute`);
+        assert.deepStrictEqual(
+          await capturePersistedGraphIntegrity(conn, repoId),
+          baselineGraph,
+        );
+        const failed = await getDerivedState(repoId);
+        assert.equal(failed?.graphIntegrityState, "failed");
+        assert.equal(failed?.graphIntegrityRevision, baselineState.graphIntegrityRevision);
+        assert.equal(
+          failed?.graphIntegrityVerifiedRevision,
+          baselineState.graphIntegrityVerifiedRevision,
+        );
+        assert.deepStrictEqual(
+          await ladybugDb.getRepoParserState(conn, repoId),
+          baselineParserState,
+        );
+        await assert.rejects(
+          patchSavedFile({
+            repoId,
+            filePath: "src/example.ts",
+            content: "export function refused() { return 0; }",
+            language: "typescript",
+            version: 40 + index,
+          }),
+          (error: unknown) => {
+            assert.equal(
+              (error as { code?: unknown }).code,
+              "PARSER_PROVENANCE_INCOMPLETE",
+            );
+            return true;
+          },
+        );
+      } finally {
+        await restoreGraphIntegrityState(repoId, baselineState);
+      }
+    }
+  });
+
   it("rolls back graph, manifest, fileless, and revision mutations atomically", async (t) => {
     const conn = await getLadybugConn();
     const beforeGraph = await capturePersistedGraphIntegrity(conn, repoId);
@@ -935,12 +1424,17 @@ describe("saved file graph patch", () => {
       repoId,
     );
     const beforeState = await getDerivedState(repoId);
+    assert.equal(beforeState?.graphIntegrityState, "verified");
+    assert.ok(beforeState);
+    const beforeParserState = await ladybugDb.getRepoParserState(conn, repoId);
+    assert.equal(beforeParserState?.graphRevision, beforeState.graphIntegrityRevision);
     const beforeFile = await ladybugDb.getFileByRepoPath(
       conn,
       repoId,
       "src/example.ts",
     );
     const beforeSymbols = await ladybugDb.getSymbolsByFile(conn, durableFileId);
+    t.after(() => restoreGraphIntegrityState(repoId, beforeState));
 
     await clearTestPreparedStatementCaches();
     const statements = new WeakMap<object, string>();
@@ -1019,7 +1513,33 @@ describe("saved file graph patch", () => {
       await ladybugDb.listGraphIntegrityFilelessStates(conn, repoId),
       beforeFileless,
     );
-    assert.deepStrictEqual(await getDerivedState(repoId), beforeState);
+    const failedState = await getDerivedState(repoId);
+    assert.equal(failedState?.graphIntegrityState, "failed");
+    assert.equal(failedState?.graphIntegrityRevision, beforeState.graphIntegrityRevision);
+    assert.equal(
+      failedState?.graphIntegrityVerifiedRevision,
+      beforeState.graphIntegrityVerifiedRevision,
+    );
+    assert.deepStrictEqual(
+      await ladybugDb.getRepoParserState(conn, repoId),
+      beforeParserState,
+    );
+    await assert.rejects(
+      patchSavedFile({
+        repoId,
+        filePath: "src/example.ts",
+        content: "export function refused() { return 0; }",
+        language: "typescript",
+        version: 8,
+      }),
+      (error: unknown) => {
+        assert.equal(
+          (error as { code?: unknown }).code,
+          "PARSER_PROVENANCE_INCOMPLETE",
+        );
+        return true;
+      },
+    );
     assert.deepStrictEqual(
       await ladybugDb.getFileByRepoPath(conn, repoId, "src/example.ts"),
       beforeFile,
@@ -1030,7 +1550,7 @@ describe("saved file graph patch", () => {
     );
   });
 
-  it("reloads after a lost direct-failure CAS and fails only the newer revision", async (t) => {
+  it("fails closed after a lost failure CAS advances to a newer revision", async (t) => {
     const conn = await getLadybugConn();
     const beforeState = await getDerivedState(repoId);
     assert.equal(beforeState?.graphIntegrityState, "verified");
@@ -1045,33 +1565,9 @@ describe("saved file graph patch", () => {
     const originalSymbol = symbols[0]!;
     t.after(async () => {
       await withWriteConn((writeConn) =>
-        ladybugDb.withTransaction(writeConn, async () => {
-          // Restore only the rows deliberately mutated by this destructive test.
-          await ladybugDb.upsertSymbol(writeConn, originalSymbol);
-          await exec(
-            writeConn,
-            `MATCH (d:DerivedState {repoId: $repoId})
-             SET d.graphIntegrityState = 'verified',
-                 d.graphIntegrityVersionId = $versionId,
-                 d.graphIntegrityDigest = $digest,
-                 d.graphIntegrityError = NULL,
-                 d.graphIntegrityRevision = $revision,
-                 d.graphIntegrityVerifiedRevision = $verifiedRevision,
-                 d.graphIntegrityFilelessPruningSupported = $filelessPruningSupported,
-                 d.updatedAt = $updatedAt`,
-            {
-              repoId,
-              versionId: beforeState!.graphIntegrityVersionId,
-              digest: beforeState!.graphIntegrityDigest,
-              revision: beforeState!.graphIntegrityRevision,
-              verifiedRevision: beforeState!.graphIntegrityVerifiedRevision,
-              filelessPruningSupported:
-                beforeState!.graphIntegrityFilelessPruningSupported,
-              updatedAt: beforeState!.updatedAt,
-            },
-          );
-        }),
+        ladybugDb.upsertSymbol(writeConn, originalSymbol),
       );
+      await restoreGraphIntegrityState(repoId, beforeState!);
     });
     await ladybugDb.upsertSymbol(conn, {
       ...originalSymbol,
@@ -1083,7 +1579,6 @@ describe("saved file graph patch", () => {
     const originalPrepare = Connection.prototype.prepare;
     const originalExecute = Connection.prototype.execute;
     let failureCasAttempts = 0;
-    let stateBeforeLatestFailure: Awaited<ReturnType<typeof getDerivedState>> = null;
     t.mock.method(Connection.prototype, "prepare", async function (statement) {
       const prepared = await originalPrepare.call(this, statement);
       statements.set(prepared, statement);
@@ -1126,14 +1621,19 @@ describe("saved file graph patch", () => {
             } finally {
               bumpResult.close();
             }
-          } else if (failureCasAttempts === 2) {
-            stateBeforeLatestFailure = await getDerivedState(repoId);
+            notifyGraphIntegrityVerifier(repoId);
           }
         }
         return originalExecute.call(this, prepared, params, progressCallback);
       },
     );
 
+    const prePatchState = await getDerivedState(repoId);
+    const prePatchParserState = await ladybugDb.getRepoParserState(conn, repoId);
+    assert.equal(
+      parserCoverageMatchesVerifiedGraph(prePatchState, "v1", prePatchParserState),
+      true,
+    );
     let committed = false;
     await assert.rejects(
       patchSavedFile(
@@ -1153,15 +1653,16 @@ describe("saved file graph patch", () => {
           },
         },
       ),
-      GraphIntegrityVerificationError,
+      (error: unknown) => {
+        assert.equal(
+          (error as { code?: unknown }).code,
+          "PARSER_PROVENANCE_INCOMPLETE",
+        );
+        return true;
+      },
     );
     assert.equal(committed, false);
-    assert.equal(failureCasAttempts, 2);
-    assert.equal(stateBeforeLatestFailure?.graphIntegrityState, "verifying");
-    assert.equal(
-      stateBeforeLatestFailure?.graphIntegrityRevision,
-      beforeState!.graphIntegrityRevision! + 1,
-    );
+    assert.equal(failureCasAttempts, 1);
 
     const afterState = await getDerivedState(repoId);
     assert.equal(afterState?.graphIntegrityState, "failed");
@@ -1184,6 +1685,73 @@ describe("saved file graph patch", () => {
     const afterSymbols = await ladybugDb.getSymbolsByFile(conn, durableFileId);
     assert.ok(afterSymbols.some((symbol) => symbol.name === "corrupt-before-edit"));
     assert.equal(afterSymbols.some((symbol) => symbol.name === "repaired"), false);
+  });
+
+  it("selects and persists a declared plugin contract for a new file", async () => {
+    const pluginPath = join(testDir, "live-parser-plugin.mjs");
+    writeFileSync(
+      pluginPath,
+      [
+        "export const manifest = {",
+        "  name: 'live-parser-plugin',",
+        "  version: '1.0.0',",
+        "  apiVersion: '" + getHostApiVersion() + "',",
+        "  adapters: [{ extension: '.pluglive', languageId: 'plugin-live', adapterIdentity: 'live-parser-adapter', adapterContractVersion: 'plugin-live:1' }],",
+        "};",
+        "export async function createAdapters() {",
+        "  return [{",
+        "    extension: '.pluglive',",
+        "    languageId: 'plugin-live',",
+        "    adapterIdentity: 'live-parser-adapter',",
+        "    adapterContractVersion: 'plugin-live:1',",
+        "    factory: () => ({",
+        "      languageId: 'plugin-live',",
+        "      fileExtensions: ['.pluglive'],",
+        "      getParser: () => null,",
+        "      parse: (content, filePath) => ({ content, filePath }),",
+        "      extractSymbols: () => [],",
+        "      extractImports: () => [],",
+        "      extractCalls: () => [],",
+        "    }),",
+        "  }];",
+        "}",
+      ].join("\n"),
+      "utf8",
+    );
+    await loadPluginsSync([pluginPath], testDir);
+
+    let committedRevision: number | undefined;
+    const result = await patchSavedFile(
+      {
+        repoId,
+        filePath: "src/new.pluglive",
+        content: "fn plugged() {}\n",
+        language: "plugin-live",
+        version: 77,
+      },
+      {
+        onCommitted(revision) {
+          committedRevision = revision;
+        },
+      },
+    );
+    assert.ok(committedRevision !== undefined);
+    await waitForVerifiedRevision(repoId, committedRevision);
+
+    const conn = await getLadybugConn();
+    const file = await ladybugDb.getFileByRepoPath(
+      conn,
+      repoId,
+      "src/new.pluglive",
+    );
+    assert.ok(file);
+    const state = await ladybugDb.getFileParserState(conn, repoId, file.fileId);
+    assert.ok(state);
+    assert.equal(state.engine, "typescript");
+    assert.equal(state.engineContract, "plugin-live:1");
+    assert.equal(state.language, "plugin-live");
+    assert.equal(state.adapterKey, result.parseResult.parserContract.adapterKey);
+    assert.match(state.adapterKey, /live-parser-plugin/);
   });
 
   it("leaves the shared fixture verified after destructive failure coverage", async () => {

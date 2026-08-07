@@ -19,16 +19,18 @@ import {
 } from "../../dist/indexer/provider-first/background-graph-integrity-verifier.js";
 import {
   closeLadybugDb,
+  getLadybugConn,
   initLadybugDb,
   withWriteConn,
 } from "../../dist/db/ladybug.js";
-import { withTransaction } from "../../dist/db/ladybug-core.js";
+import { withReadOnlyTransaction, withTransaction } from "../../dist/db/ladybug-core.js";
 import * as derivedState from "../../dist/db/ladybug-derived-state.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import {
   createGraphIntegrityExpectationFromManifest,
   createGraphIntegrityFileState,
   PersistedGraphIntegritySession,
+  verifyPersistedGraphIntegrityRevision,
 } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
 import { logger } from "../../dist/util/logger.js";
 
@@ -97,6 +99,15 @@ async function seedPendingRevision(
         lastIndexedAt: "2026-07-21T00:00:00.000Z",
       });
       await ladybugDb.upsertKnownFileSymbols(conn, [row]);
+      await ladybugDb.upsertFileParserStatesInTransaction(conn, [{
+        stateId: JSON.stringify([repoId, row.fileId]),
+        repoId,
+        fileId: row.fileId,
+        engine: "typescript",
+        engineContract: "typescript:1",
+        adapterKey: "builtin:typescript:typescript:1",
+        language: "typescript",
+      }]);
       await ladybugDb.createVersion(conn, {
         versionId: "v1",
         repoId,
@@ -542,6 +553,90 @@ describe("background graph integrity verifier", () => {
     assert.doesNotMatch(row.graphIntegrityError ?? "", /secret|private|\.lbug/i);
   });
 
+  it("publishes parser coverage and verified state with no visible partial window", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-bg-integrity-atomic-visibility-"));
+    await initLadybugDb(join(root, "graph.lbug"));
+    await seedPendingRevision(root, "repo");
+    const parserStateWritten = deferred();
+    const releasePublication = deferred();
+    const verification = verifyPersistedGraphIntegrityRevision(
+      "repo",
+      "v1",
+      1,
+      {
+        async publicationHook(phase) {
+          if (phase === "afterRepoParserState") {
+            parserStateWritten.resolve();
+            await releasePublication.promise;
+          }
+        },
+      },
+    );
+    await parserStateWritten.promise;
+
+    const reader = await getLadybugConn();
+    await withReadOnlyTransaction(reader, async () => {
+      const state = await derivedState.getDerivedStateFromConnection(reader, "repo");
+      assert.equal(state?.graphIntegrityState, "verifying");
+      assert.equal(await ladybugDb.getRepoParserState(reader, "repo"), null);
+    });
+
+    releasePublication.resolve();
+    assert.equal(await verification, "verified");
+    await withReadOnlyTransaction(reader, async () => {
+      const state = await derivedState.getDerivedStateFromConnection(reader, "repo");
+      const parserState = await ladybugDb.getRepoParserState(reader, "repo");
+      assert.equal(state?.graphIntegrityState, "verified");
+      assert.equal(state?.graphIntegrityVerifiedRevision, 1);
+      assert.equal(parserState?.graphRevision, 1);
+      assert.equal(parserState?.graphVersionId, "v1");
+    });
+  });
+
+  it("rolls back parser coverage when final graph publication fails", async (t) => {
+    root = mkdtempSync(join(tmpdir(), "sdl-bg-integrity-publication-"));
+    await initLadybugDb(join(root, "graph.lbug"));
+    await seedPendingRevision(root, "repo");
+
+    const statements = new WeakMap<object, string>();
+    let failures = 0;
+    const originalPrepare = Connection.prototype.prepare;
+    const originalExecute = Connection.prototype.execute;
+    t.mock.method(Connection.prototype, "prepare", async function (statement) {
+      const prepared = await originalPrepare.call(this, statement);
+      statements.set(prepared, statement);
+      return prepared;
+    });
+    t.mock.method(
+      Connection.prototype,
+      "execute",
+      async function (prepared, params, progressCallback) {
+        const statement = statements.get(prepared);
+        if (
+          statement?.includes("SET d.graphIntegrityState = 'verified'") &&
+          statement.includes("d.graphIntegrityRevision = $revision")
+        ) {
+          failures += 1;
+          throw new Error("injected final publication failure");
+        }
+        return originalExecute.call(this, prepared, params, progressCallback);
+      },
+    );
+
+    notifyGraphIntegrityVerifier("repo");
+    const row = await waitForState(
+      "repo",
+      (state) => state?.graphIntegrityState === "failed",
+    );
+    assert.equal(failures, 4);
+    assert.equal(row.graphIntegrityRevision, 1);
+    assert.equal(row.graphIntegrityVerifiedRevision, 0);
+    assert.equal(
+      await withWriteConn((conn) => ladybugDb.getRepoParserState(conn, "repo")),
+      null,
+    );
+  });
+
   it("publishes deterministic manifest corruption without retrying", async (t) => {
     root = mkdtempSync(join(tmpdir(), "sdl-bg-integrity-corrupt-manifest-"));
     await initLadybugDb(join(root, "graph.lbug"));
@@ -592,48 +687,22 @@ describe("background graph integrity verifier", () => {
     );
   });
 
-  it("reloads the newest durable revision after a stale success CAS", async (t) => {
+  it("reloads the newest durable revision after a stale success CAS", async () => {
     root = mkdtempSync(join(tmpdir(), "sdl-bg-integrity-stale-success-"));
     await initLadybugDb(join(root, "graph.lbug"));
     await seedPendingRevision(root, "repo");
 
-    const statements = new WeakMap<object, string>();
-    let successPublications = 0;
-    let pageQueries = 0;
-    const originalPrepare = Connection.prototype.prepare;
-    const originalExecute = Connection.prototype.execute;
-    t.mock.method(Connection.prototype, "prepare", async function (statement) {
-      const prepared = await originalPrepare.call(this, statement);
-      statements.set(prepared, statement);
-      return prepared;
-    });
-    t.mock.method(
-      Connection.prototype,
-      "execute",
-      async function (prepared, params, progressCallback) {
-        const statement = statements.get(prepared);
-        if (statement?.includes("OPTIONAL MATCH (s)-[:SYMBOL_IN_FILE]")) {
-          pageQueries += 1;
-        }
-        if (
-          statement?.includes("SET d.graphIntegrityState = 'verified'") &&
-          statement.includes("d.graphIntegrityRevision = $revision")
-        ) {
-          successPublications += 1;
-          if (successPublications === 1) {
-            const result = await this.query(
-              `MATCH (d:DerivedState {repoId: 'repo'})
-               SET d.graphIntegrityState = 'verifying',
-                   d.graphIntegrityRevision = 2`,
-            );
-            for (const item of Array.isArray(result) ? result : [result]) {
-              item.close();
-            }
-          }
-        }
-        return originalExecute.call(this, prepared, params, progressCallback);
+    const first = await verifyPersistedGraphIntegrityRevision(
+      "repo",
+      "v1",
+      1,
+      {
+        async afterSnapshot() {
+          await advanceRevision("repo", 1);
+        },
       },
     );
+    assert.equal(first, "stale");
 
     notifyGraphIntegrityVerifier("repo");
     const row = await waitForState(
@@ -642,12 +711,8 @@ describe("background graph integrity verifier", () => {
         state?.graphIntegrityState === "verified" &&
         state.graphIntegrityVerifiedRevision === 2,
     );
-
     assert.equal(row.graphIntegrityRevision, 2);
-    assert.equal(successPublications, 2);
-    assert.ok(pageQueries >= 2, "stale CAS must reload durable work");
   });
-
   it("does not let a stale retry-exhaustion failure poison a newer revision", async (t) => {
     root = mkdtempSync(join(tmpdir(), "sdl-bg-integrity-stale-failure-"));
     await initLadybugDb(join(root, "graph.lbug"));

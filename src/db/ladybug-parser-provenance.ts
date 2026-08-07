@@ -27,7 +27,10 @@ interface FileParserStateRow extends FileParserStateRecord {
   ownerRepoId: string | null;
 }
 
-interface RepoParserStateRow extends Omit<RepoParserStateRecord, "graphRevision"> {
+interface RepoParserStateRow extends Omit<
+  RepoParserStateRecord,
+  "graphRevision"
+> {
   graphRevision: unknown;
   ownerRepoId: string | null;
 }
@@ -142,12 +145,10 @@ export async function listFileParserStates(
   const fileIds = new Set<string>();
   for (const group of byStateId.values()) {
     const [row] = group;
-    if (
-      !row ||
-      group.length !== 1 ||
-      row.ownerRepoId !== repoId
-    ) {
-      throw parserCoverageError("file parser state must have exactly one owner");
+    if (!row || group.length !== 1 || row.ownerRepoId !== repoId) {
+      throw parserCoverageError(
+        "file parser state must have exactly one owner",
+      );
     }
     const state: FileParserStateRecord = {
       stateId: row.stateId,
@@ -166,6 +167,47 @@ export async function listFileParserStates(
     states.push(state);
   }
   return states;
+}
+
+export async function getFileParserState(
+  conn: Connection,
+  repoId: string,
+  fileId: string,
+): Promise<FileParserStateRecord | null> {
+  const stateId = JSON.stringify([repoId, fileId]);
+  const rows = await queryAll<FileParserStateRow>(
+    conn,
+    `MATCH (s:FileParserState {fileId: $fileId})
+     OPTIONAL MATCH (s)-[:FILE_PARSER_STATE_IN_REPO]->(owner:Repo)
+     RETURN s.stateId AS stateId, s.repoId AS repoId, s.fileId AS fileId,
+            s.engine AS engine, s.engineContract AS engineContract,
+            s.adapterKey AS adapterKey, s.language AS language,
+            owner.repoId AS ownerRepoId
+     ORDER BY s.stateId ASC, owner.repoId ASC`,
+    { fileId },
+  );
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  if (
+    rows.length !== 1 ||
+    row.stateId !== stateId ||
+    row.repoId !== repoId ||
+    row.fileId !== fileId ||
+    row.ownerRepoId !== repoId
+  ) {
+    throw parserCoverageError("file parser state ownership is inconsistent");
+  }
+  const state: FileParserStateRecord = {
+    stateId: row.stateId,
+    repoId: row.repoId,
+    fileId: row.fileId,
+    engine: row.engine,
+    engineContract: row.engineContract,
+    adapterKey: row.adapterKey,
+    language: row.language,
+  };
+  assertFileParserState(state);
+  return state;
 }
 
 export async function verifyExactParserCoverageInTransaction(
@@ -235,7 +277,9 @@ export async function getRepoParserState(
     { repoId },
   );
   if (toNumber(wrongOwner?.count ?? 0) !== 0) {
-    throw parserCoverageError("repository parser state ownership is inconsistent");
+    throw parserCoverageError(
+      "repository parser state ownership is inconsistent",
+    );
   }
 
   const rows = await queryAll<RepoParserStateRow>(
@@ -252,7 +296,9 @@ export async function getRepoParserState(
   );
   if (rows.length === 0) return null;
   if (rows.length !== 1 || rows[0]?.ownerRepoId !== repoId) {
-    throw parserCoverageError("repository parser state ownership is inconsistent");
+    throw parserCoverageError(
+      "repository parser state ownership is inconsistent",
+    );
   }
   const row = rows[0];
   const state: RepoParserStateRecord = {

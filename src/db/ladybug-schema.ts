@@ -629,6 +629,7 @@ const INDEXES: string[] = [
   `CREATE INDEX idx_symbol_name ON Symbol(name)`,
   `CREATE INDEX idx_symbol_repoId ON Symbol(repoId)`,
   `CREATE INDEX idx_file_relPath ON File(relPath)`,
+  `CREATE INDEX idx_file_parser_state_fileId ON FileParserState(fileId)`,
   `CREATE INDEX idx_file_directory ON File(directory)`,
   `CREATE INDEX idx_cluster_repoId ON Cluster(repoId)`,
   `CREATE INDEX idx_shadowcluster_repoId ON ShadowCluster(repoId)`,
