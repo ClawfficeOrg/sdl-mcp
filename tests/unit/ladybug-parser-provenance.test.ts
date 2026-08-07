@@ -90,13 +90,17 @@ describe("parser provenance persistence", () => {
     const f2 = parserState("r1", "f2");
     const expectedDigest = hashContent(
       JSON.stringify([
-        ["f1", "native", "native:1", "native:native:1", "typescript"],
+        "parser-coverage-v2",
+        ["f1", "f2"],
         [
-          "f2",
-          "typescript",
-          "typescript:1",
-          "builtin:typescript:typescript:1",
-          "typescript",
+          ["f1", "native", "native:1", "native:native:1", "typescript"],
+          [
+            "f2",
+            "typescript",
+            "typescript:1",
+            "builtin:typescript:typescript:1",
+            "typescript",
+          ],
         ],
       ]),
     );
@@ -177,6 +181,26 @@ describe("parser provenance persistence", () => {
       });
     });
   }
+
+  it("binds partial coverage digests to the expected file universe", async () => {
+    const repoId = "repo-partial-universe";
+    await seedRepo(repoId, ["f1", "f2"]);
+    const first = await withWriteConn(async (conn) => {
+      await upsertFileParserStatesInTransaction(conn, [
+        parserState(repoId, "f1"),
+      ]);
+      return summarizeParserCoverageInTransaction(conn, repoId);
+    });
+
+    await seedRepo(repoId, ["f3"]);
+    const second = await withWriteConn((conn) =>
+      summarizeParserCoverageInTransaction(conn, repoId),
+    );
+
+    assert.equal(first.coverageState, "partial");
+    assert.equal(second.coverageState, "partial");
+    assert.notEqual(first.coverageDigest, second.coverageDigest);
+  });
 
   for (const corruption of [
     "duplicate",

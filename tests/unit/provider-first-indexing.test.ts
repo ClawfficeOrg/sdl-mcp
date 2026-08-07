@@ -9217,13 +9217,14 @@ describe("provider-first indexing foundation", () => {
     }
   });
 
-  it("recomputes shadow parser coverage without copying active repository completeness", async () => {
+  it("recomputes shadow parser coverage without copying active repository completeness", async (t) => {
     const root = mkdtempSync(
       join(tmpdir(), "sdl-provider-first-parser-provenance-"),
     );
     const activeDbPath = join(root, "active.lbug");
     const completeShadowPath = join(root, "shadow-complete.lbug");
     const incompleteShadowPath = join(root, "shadow-incomplete.lbug");
+    const substitutedShadowPath = join(root, "shadow-substituted.lbug");
     const kuzu = await import("kuzu");
     const activeDb = new kuzu.Database(activeDbPath);
     const activeConn = new kuzu.Connection(activeDb);
@@ -9252,7 +9253,9 @@ describe("provider-first indexing foundation", () => {
     ];
     const expectedDigest = createHash("sha256")
       .update(
-        JSON.stringify(
+        JSON.stringify([
+          "parser-coverage-v2",
+          ["file-1", "file-2"],
           parserRows.map((row) => [
             row.fileId,
             row.engine,
@@ -9260,7 +9263,7 @@ describe("provider-first indexing foundation", () => {
             row.adapterKey,
             row.language,
           ]),
-        ),
+        ]),
       )
       .digest("hex");
 
@@ -9324,6 +9327,7 @@ describe("provider-first indexing foundation", () => {
       for (const shadowDbPath of [
         completeShadowPath,
         incompleteShadowPath,
+        substitutedShadowPath,
       ]) {
         const shadowDb = new kuzu.Database(shadowDbPath);
         const shadowConn = new kuzu.Connection(shadowDb);
@@ -9345,6 +9349,37 @@ describe("provider-first indexing foundation", () => {
           await shadowDb.close();
         }
       }
+
+      const originalQuery = Connection.prototype.query;
+      let substituteShadowParserState = false;
+      t.mock.method(
+        Connection.prototype,
+        "query",
+        async function (statement) {
+          if (
+            substituteShadowParserState &&
+            statement.includes("COPY FileParserState FROM")
+          ) {
+            substituteShadowParserState = false;
+            const parserStateCsvPath = join(
+              root,
+              "finalization",
+              "file-parser-states.csv",
+            );
+            const parserStateCsv = readFileSync(parserStateCsvPath, "utf8");
+            assert.match(parserStateCsv, /,typescript:1,/);
+            writeFileSync(
+              parserStateCsvPath,
+              parserStateCsv.replace(
+                ",typescript:1,",
+                ",typescript:substituted,",
+              ),
+              "utf8",
+            );
+          }
+          return originalQuery.call(this, statement);
+        },
+      );
 
       const complete = await finalizeProviderFirstShadowDb({
         activeConn,
@@ -9446,6 +9481,20 @@ describe("provider-first indexing foundation", () => {
         await partialConn.close();
         await partialDb.close();
       }
+
+      substituteShadowParserState = true;
+      const substituted = await finalizeProviderFirstShadowDb({
+        activeConn,
+        repoId,
+        versionId,
+        shadowDbPath: substitutedShadowPath,
+      });
+      assert.equal(substituteShadowParserState, false);
+      assert.equal(substituted.status, "failed");
+      assert.match(
+        substituted.reasons.join("\n"),
+        /parser provenance copy mismatch/i,
+      );
     } finally {
       await activeConn.close().catch(() => {});
       await activeDb.close().catch(() => {});

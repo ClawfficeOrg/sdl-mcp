@@ -28,6 +28,14 @@ export interface ParserCoverageSummary {
   coverageDigest: string;
 }
 
+export type FileParserStateTuple = readonly [
+  fileId: string,
+  engine: ParserEngine,
+  engineContract: string,
+  adapterKey: string,
+  language: string,
+];
+
 interface FileParserStateRow extends FileParserStateRecord {
   ownerRepoId: string | null;
 }
@@ -71,6 +79,22 @@ function assertFileParserState(row: FileParserStateRecord): void {
   if (row.stateId !== fileParserStateId(row.repoId, row.fileId)) {
     throw parserCoverageError("file parser state identity is inconsistent");
   }
+}
+
+/** Return the validated canonical tuples used by coverage digests and shadow-copy checks. */
+export function canonicalFileParserStateTuples(
+  states: readonly FileParserStateRecord[],
+): FileParserStateTuple[] {
+  return states.map((state) => {
+    assertFileParserState(state);
+    return [
+      state.fileId,
+      state.engine,
+      state.engineContract,
+      state.adapterKey,
+      state.language,
+    ];
+  });
 }
 
 function assertRepoParserState(row: RepoParserStateRecord): void {
@@ -244,15 +268,11 @@ export async function summarizeParserCoverageInTransaction(
       ? "partial"
       : "complete";
   const coverageDigest = hashContent(
-    JSON.stringify(
-      states.map((state) => [
-        state.fileId,
-        state.engine,
-        state.engineContract,
-        state.adapterKey,
-        state.language,
-      ]),
-    ),
+    JSON.stringify([
+      "parser-coverage-v2",
+      expectedFileIds,
+      canonicalFileParserStateTuples(states),
+    ]),
   );
   return { coverageState, coverageDigest };
 }

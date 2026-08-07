@@ -16,6 +16,7 @@ import {
   listGraphIntegrityFileStates,
 } from "./ladybug-graph-integrity.js";
 import {
+  canonicalFileParserStateTuples,
   deleteParserProvenanceForRepoInTransaction,
   listFileParserStates,
   summarizeParserCoverageInTransaction,
@@ -696,6 +697,8 @@ async function copyFinalizedRows(params: {
     params.activeConn,
     params.repoId,
   );
+  const activeFileParserStateTuples =
+    canonicalFileParserStateTuples(fileParserStates);
   const semanticProviderRuns = await readSemanticProviderRunsForRepo(
     params.activeConn,
     params.repoId,
@@ -1104,6 +1107,15 @@ async function copyFinalizedRows(params: {
     params.shadowConn,
     fallbackShadowClusterMembers,
   );
+  const shadowFileParserStateTuples = canonicalFileParserStateTuples(
+    await listFileParserStates(params.shadowConn, params.repoId),
+  );
+  if (
+    JSON.stringify(shadowFileParserStateTuples) !==
+    JSON.stringify(activeFileParserStateTuples)
+  ) {
+    throw new Error("Provider-first shadow parser provenance copy mismatch");
+  }
 
   const bulkLoad: ProviderFirstShadowFinalizationBulkLoadSummary = {
     status: "loaded",
