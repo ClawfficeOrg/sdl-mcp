@@ -18,6 +18,7 @@ import {
   isNativeAddonGloballyEnabled,
   loadNativeAddon,
 } from "../native/addon-loader.js";
+import { ConcurrencyLimiter } from "../util/concurrency.js";
 import { logger } from "../util/logger.js";
 import { normalizePath } from "../util/paths.js";
 import type { ExtractedImport } from "./treesitter/extractImports.js";
@@ -147,7 +148,7 @@ interface NativeProcess {
 
 interface NativeAddon {
   parseFiles(files: NativeFileInput[], threadCount: number): NativeParsedFile[];
-  parseContent?: (input: NativeContentInput) => NativeParsedFile;
+  parseContent?: (input: NativeContentInput) => Promise<NativeParsedFile>;
   parserIdentityContractVersion?: () => number;
   parseFilesAsync?(files: NativeFileInput[], threadCount: number): Promise<NativeParsedFile[]>;
   hashContentNative(content: string): string;
@@ -184,6 +185,7 @@ let nativeDisableLogged = false;
 let nativeDisabledForSession = false;
 let nativeAddonSourcePath: string | null = null;
 let nativeAddonReason = "not attempted";
+const nativeContentParseLimiter = new ConcurrencyLimiter({ maxConcurrency: 1 });
 
 export const EXPECTED_NATIVE_PARSER_IDENTITY_CONTRACT_VERSION = 1;
 
@@ -339,14 +341,15 @@ export interface RustParseResult {
   parseError: string | null;
 }
 
-export function parseContentRust(
+export async function parseContentRust(
   input: NativeContentInput,
-): NativeContentParseResult {
+): Promise<NativeContentParseResult> {
   const capability = getNativeContentParserCapability();
   if (!capability.available) return capability;
 
   const addon = loadRustNativeAddon();
-  if (!addon?.parseContent) {
+  const parseContent = addon?.parseContent;
+  if (!parseContent) {
     return {
       available: false,
       reason: "addon-unavailable",
@@ -358,7 +361,12 @@ export function parseContentRust(
     available: true,
     contract: "native:1",
     result: mapNativeResult(
-      addon.parseContent({ ...input, relPath: normalizePath(input.relPath) }),
+      await nativeContentParseLimiter.run(() =>
+        parseContent({
+          ...input,
+          relPath: normalizePath(input.relPath),
+        }),
+      ),
     ),
   };
 }

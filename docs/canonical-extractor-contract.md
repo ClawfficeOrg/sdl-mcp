@@ -7,6 +7,7 @@ This contract defines structural parity between the TypeScript tree-sitter extra
 - `symbolId` stays the graph identity and is derived from repo, path, kind, name, and AST fingerprint within one parser identity contract.
 - `astFingerprint` and `symbolId` are reported explicitly by the cross-engine parity harness but do not require TypeScript/Rust equality.
 - Native disk parsing and native `parseContent` must produce equal `symbolId`, `astFingerprint`, ranges, signatures, enrichment, imports, calls, content hashes, and parse errors for the same source.
+- Native `parseContent` runs asynchronously on one bounded 64 MiB worker, and TypeScript admits one native content task at a time so parsing neither uses the N-API thread's stack nor exhausts libuv workers.
 - `nodeId` is a per-file source-owner identity used inside one extraction result to connect calls to their owning symbol. It is not compared literally across engines.
 - Older TS extractors may emit legacy path/name node IDs while Rust emits stable `name:startLine:startCol` IDs. The parity harness resolves both to semantic owner keys: `kind:name@startLine:startCol`.
 - If a raw `nodeId` maps to multiple symbols, the harness chooses the containing symbol with the smallest source range. Unresolved owners are reported as `unresolved:<callerNodeId>`.

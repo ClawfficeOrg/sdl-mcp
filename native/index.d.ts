@@ -296,7 +296,7 @@ export declare function preloadWindowsLibrary(absolutePath: string): PreloadedWi
 export declare function releaseWindowsLibrary(token: number): void
 export declare function parserIdentityContractVersion(): number
 export declare function parseFiles(files: Array<NativeFileInput>, threadCount: number): Array<NativeParsedFile>
-export declare function parseContent(input: NativeContentInput): NativeParsedFile
+export declare function parseContent(input: NativeContentInput): Promise<NativeParsedFile>
 export declare function parseFilesAsync(files: Array<NativeFileInput>, threadCount: number): Promise<unknown>
 export declare function hashContentNative(content: string): string
 export declare function generateSymbolIdNative(repoId: string, relPath: string, kind: string, name: string, fingerprint: string): string

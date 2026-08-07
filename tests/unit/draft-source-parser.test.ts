@@ -31,7 +31,7 @@ function unavailableNativeDeps(reason = "addon-unavailable") {
       reason: reason as never,
       expectedContract: "native:1" as const,
     }),
-    parseContentRust: () => {
+    parseContentRust: async () => {
       throw new Error("native parser must not run");
     },
     getAdapterForExtension: () => {
@@ -115,7 +115,7 @@ test("maps a native draft extension to the addon's language token", async () => 
         available: true as const,
         contract: "native:1" as const,
       }),
-      parseContentRust: (input) => {
+      parseContentRust: async (input) => {
         receivedLanguage = input.language;
         return {
           available: true as const,
@@ -168,7 +168,7 @@ test("dispatches a builtin TypeScript contract to its recorded adapter", async (
       getNativeContentParserCapability: () => {
         throw new Error("native parser must not run");
       },
-      parseContentRust: () => {
+      parseContentRust: async () => {
         throw new Error("native parser must not run");
       },
       getAdapterForExtension: () => adapter as never,
@@ -206,7 +206,7 @@ test("dispatches a contract-bearing plugin to its recorded adapter", async () =>
     getNativeContentParserCapability: () => {
       throw new Error("native parser must not run");
     },
-    parseContentRust: () => {
+    parseContentRust: async () => {
       throw new Error("native parser must not run");
     },
     getAdapterForExtension: () => adapter as never,
@@ -230,7 +230,7 @@ test("rejects a native parse failure without falling back to the TypeScript adap
           available: true as const,
           contract: "native:1" as const,
         }),
-        parseContentRust: () => ({
+        parseContentRust: async () => ({
           available: true as const,
           contract: "native:1" as const,
           result: {

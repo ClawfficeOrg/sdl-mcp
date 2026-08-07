@@ -2,6 +2,7 @@ pub mod content_hash;
 pub mod file_reader;
 
 use std::panic;
+use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
@@ -15,6 +16,24 @@ use crate::types::{NativeContentInput, NativeFileInput, NativeParsedFile};
 /// (STATUS_STACK_BUFFER_OVERRUN on Windows). 64 MiB provides headroom for
 /// both tree-sitter C recursion and the Rust AST walkers.
 const RAYON_STACK_SIZE: usize = 64 * 1024 * 1024;
+
+// ponytail: one live-content worker bounds stack reservation and parser CPU.
+// Increase only if measured concurrent-draft latency justifies the memory cost.
+static CONTENT_PARSE_POOL: OnceLock<Result<rayon::ThreadPool, String>> = OnceLock::new();
+
+fn content_parse_pool() -> Result<&'static rayon::ThreadPool, &'static str> {
+    CONTENT_PARSE_POOL
+        .get_or_init(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .stack_size(RAYON_STACK_SIZE)
+                .thread_name(|index| format!("sdl-content-parser-{index}"))
+                .build()
+                .map_err(|error| format!("failed to build native content parser worker: {error}"))
+        })
+        .as_ref()
+        .map_err(String::as_str)
+}
 
 /// Maximum file size in bytes that the native parser will attempt to parse.
 /// Files larger than this are skipped with a parse error. This prevents
@@ -88,6 +107,13 @@ fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
 
 pub(crate) fn parse_content_value(input: NativeContentInput) -> NativeParsedFile {
     parse_source_safe(input)
+}
+
+pub(crate) fn parse_content_high_stack(
+    input: NativeContentInput,
+) -> Result<NativeParsedFile, String> {
+    let pool = content_parse_pool().map_err(str::to_owned)?;
+    Ok(pool.install(|| parse_content_value(input)))
 }
 
 fn parse_source_safe(input: NativeContentInput) -> NativeParsedFile {

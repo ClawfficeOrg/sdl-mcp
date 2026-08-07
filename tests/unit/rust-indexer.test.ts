@@ -219,13 +219,13 @@ describe("rustIndexer — native content capability", () => {
       },
     },
   ]) {
-    it(`reports ${testCase.name} without disabling disk parsing`, () => {
+    it(`reports ${testCase.name} without disabling disk parsing`, async () => {
       installAddon(testCase.addon);
 
       assert.strictEqual(isRustEngineAvailable(), true);
       assert.deepStrictEqual(getNativeContentParserCapability(), testCase.expected);
       assert.deepStrictEqual(
-        parseContentRust({
+        await parseContentRust({
           repoId: "repo",
           relPath: "src\\file.ts",
           language: "typescript",
@@ -236,12 +236,12 @@ describe("rustIndexer — native content capability", () => {
     });
   }
 
-  it("normalizes relPath and preserves native parse errors as available results", () => {
+  it("normalizes relPath and preserves native parse errors as available results", async () => {
     let receivedInput: Record<string, string> | undefined;
     installAddon(
       diskAddon({
         parserIdentityContractVersion: () => 1,
-        parseContent: (input: Record<string, string>) => {
+        parseContent: async (input: Record<string, string>) => {
           receivedInput = input;
           return {
             relPath: input.relPath,
@@ -261,7 +261,7 @@ describe("rustIndexer — native content capability", () => {
       contract: "native:1",
     });
     assert.deepStrictEqual(
-      parseContentRust({
+      await parseContentRust({
         repoId: "repo",
         relPath: "src\\file.ts",
         language: "typescript",
@@ -287,5 +287,44 @@ describe("rustIndexer — native content capability", () => {
       language: "typescript",
       content: "export const value = 1;",
     });
+  });
+
+  it("admits only one native content parse task at a time", async () => {
+    let active = 0;
+    let peakActive = 0;
+    installAddon(
+      diskAddon({
+        parserIdentityContractVersion: () => 1,
+        parseContent: async (input: Record<string, string>) => {
+          active++;
+          peakActive = Math.max(peakActive, active);
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          active--;
+          return {
+            relPath: input.relPath,
+            contentHash: "content-hash",
+            content: input.content,
+            symbols: [],
+            imports: [],
+            calls: [],
+            parseError: null,
+          };
+        },
+      }),
+    );
+
+    const input = {
+      repoId: "repo",
+      relPath: "src/file.ts",
+      language: "typescript",
+      content: "export const value = 1;",
+    };
+    await Promise.all([
+      parseContentRust(input),
+      parseContentRust(input),
+      parseContentRust(input),
+    ]);
+
+    assert.strictEqual(peakActive, 1);
   });
 });

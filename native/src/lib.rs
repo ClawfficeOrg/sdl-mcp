@@ -54,9 +54,32 @@ pub fn parse_files(files: Vec<NativeFileInput>, thread_count: u32) -> Vec<Native
     parse::parse_files_parallel(&files, count)
 }
 
+pub struct ParseContentTask {
+    input: Option<NativeContentInput>,
+}
+
 #[napi]
-pub fn parse_content(input: NativeContentInput) -> NativeParsedFile {
-    parse::parse_content_value(input)
+impl napi::Task for ParseContentTask {
+    type Output = NativeParsedFile;
+    type JsValue = NativeParsedFile;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        let input = self.input.take().ok_or_else(|| {
+            napi::Error::from_reason("native content parse task was already consumed")
+        })?;
+        parse::parse_content_high_stack(input).map_err(napi::Error::from_reason)
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi]
+pub fn parse_content(
+    input: NativeContentInput,
+) -> napi::bindgen_prelude::AsyncTask<ParseContentTask> {
+    napi::bindgen_prelude::AsyncTask::new(ParseContentTask { input: Some(input) })
 }
 
 pub struct ParseFilesTask {
