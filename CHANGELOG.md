@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+- **Cross-platform HNSW benchmark fixtures**: Derived benchmark source paths with Node's platform-native resolver so parser tests validate absolute paths on both Windows and Ubuntu.
 
 ## [0.13.2] - 2026-08-06
 

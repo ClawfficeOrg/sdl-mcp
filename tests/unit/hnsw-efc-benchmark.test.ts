@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it } from "node:test";
 
 import * as hnswBenchmark from "../../scripts/benchmark-hnsw-efc.ts";
@@ -9,11 +10,13 @@ import {
   summarizeHnswCandidate,
 } from "../../scripts/benchmark-hnsw-efc.ts";
 
+const sourcePath = resolve("candidate.lbug");
+
 describe("HNSW efc benchmark", () => {
   it("parses a source path and bounded benchmark controls", () => {
     const options = parseHnswBenchmarkArgs([
       "--source",
-      "F:\\graphs\\candidate.lbug",
+      sourcePath,
       "--efc",
       "200,100",
       "--queries",
@@ -23,7 +26,7 @@ describe("HNSW efc benchmark", () => {
     ]);
 
     assert.deepEqual(options, {
-      sourcePath: "F:\\graphs\\candidate.lbug",
+      sourcePath: sourcePath,
       loadMode: "create",
       efcValues: [200, 100],
       queryCount: 12,
@@ -37,7 +40,7 @@ describe("HNSW efc benchmark", () => {
     assert.equal(
       parseHnswBenchmarkArgs([
         "--source",
-        "F:\\graphs\\candidate.lbug",
+        sourcePath,
         "--load-mode",
         "update",
       ]).loadMode,
@@ -46,7 +49,7 @@ describe("HNSW efc benchmark", () => {
     assert.equal(
       parseHnswBenchmarkArgs([
         "--source",
-        "F:\\graphs\\candidate.lbug",
+        sourcePath,
         "--load-mode",
         "clone",
       ]).loadMode,
@@ -56,7 +59,7 @@ describe("HNSW efc benchmark", () => {
       () =>
         parseHnswBenchmarkArgs([
           "--source",
-          "F:\\graphs\\candidate.lbug",
+          sourcePath,
           "--load-mode",
           "copy",
         ]),
@@ -68,7 +71,7 @@ describe("HNSW efc benchmark", () => {
     assert.equal(
       parseHnswBenchmarkArgs([
         "--source",
-        "F:\\graphs\\candidate.lbug",
+        sourcePath,
         "--load-mode",
         "clone",
         "--index-name",
@@ -80,7 +83,7 @@ describe("HNSW efc benchmark", () => {
       () =>
         parseHnswBenchmarkArgs([
           "--source",
-          "F:\\graphs\\candidate.lbug",
+          sourcePath,
           "--index-name",
           "custom_jina_index",
         ]),
