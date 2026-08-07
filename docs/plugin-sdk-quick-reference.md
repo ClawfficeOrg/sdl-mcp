@@ -80,7 +80,7 @@ export const manifest = {
 };
 ```
 
-Declare both adapter identity fields for live-mutable files. The durable key includes plugin name, plugin package version, adapter identity, and adapter contract version. Contract-less plugins can still load and parse, but an index containing their files cannot publish complete provenance or a verified graph. Add the contract and safely rebuild the repository before live reconciliation.
+Declare both adapter identity fields for live-mutable files. The durable key includes plugin name, plugin package version, adapter identity, and adapter contract version. Contract-less plugins can still load and parse. Their files produce `partial` parser coverage while the matching graph can still verify, but existing files without a replayable contract are not live-mutable. Add the contract and safely rebuild the repository before live reconciliation.
 
 ## Adapter Implementation
 

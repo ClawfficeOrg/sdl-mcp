@@ -41,7 +41,7 @@ faster overlapped path.
 
 ### Engine Affinity After Indexing
 
-Every verified graph records the parser identity for each file and exact repository coverage for the same graph version and revision. Live drafts and saved-file reconciliation reuse that identity; SDL-MCP does not cross-fallback between native, built-in TypeScript, or plugin parsers after provenance exists. A missing or incompatible contract fails closed and requires a stopped safe rebuild.
+A verified graph publishes a version/revision-bound parser coverage summary that can be `complete` or `partial`. Files parsed with a replayable SDL-MCP contract record a `FileParserState`; provider-owned and contract-less files can lack one without blocking graph verification. Live drafts and saved-file reconciliation for an existing file require and reuse that durable identity. SDL-MCP does not cross-fallback between native, built-in TypeScript, or plugin parsers after provenance exists, and a missing or incompatible per-file contract fails closed.
 
 ---
 
@@ -253,8 +253,9 @@ Runtime plugins remain an overlay, not entries in the built-in list. A plugin
 can add an extension or override a built-in extension without needing a fake
 grammar or pass-2 registration. Live-mutable plugins must declare an adapter
 identity and adapter contract version; legacy contract-less plugins remain
-loadable for parsing, but an index containing their files cannot publish complete
-parser provenance or a verified graph.
+loadable for parsing. Their files produce `partial` parser coverage while the
+matching graph can still verify, but existing files without a replayable
+contract are not live-mutable.
 Validate a change with the Language Support parity test, adapter/plugin tests,
 harness and engine/native parity, then run
 `npm run docs:language-support:check`.
