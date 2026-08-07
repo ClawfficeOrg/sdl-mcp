@@ -20,7 +20,6 @@ import {
   type SummaryBatchResult,
 } from "../summary-generator.js";
 import type { IndexProgress } from "../indexer-init.js";
-import type { IndexRepoOptions } from "../indexer.js";
 import { logger } from "../../util/logger.js";
 
 export interface ProviderFirstSemanticReadinessDeferral {
@@ -92,7 +91,8 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
     snapshot: EmbeddingMemorySnapshot,
   ) => void;
   postIndexSessionTimeoutMs?: number;
-  jinaHnswFinalization?: IndexRepoOptions["jinaHnswFinalization"];
+  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
+  deferJinaVectorIndexCreate?: boolean;
   deps?: ProviderFirstSemanticReadinessRefreshDeps;
 }): Promise<ProviderFirstSemanticReadinessRefreshResult> {
   const semanticConfig = params.appConfig.semantic;
@@ -129,11 +129,11 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
   try {
     const modelPlan = resolveSemanticEmbeddingModelPlan(semanticConfig);
-    const jinaHnswFinalization = modelPlan.symbolEmbeddingModels.includes(
-      params.jinaHnswFinalization?.spec.model ?? "",
-    )
-      ? params.jinaHnswFinalization
-      : undefined;
+    const deferJinaVectorIndexCreate =
+      params.deferJinaVectorIndexCreate === true &&
+      modelPlan.symbolEmbeddingModels.includes(
+        "jina-embeddings-v2-base-code",
+      );
     if (modelPlan.unsupportedModels.length > 0) {
       logger.warn(
         `Unsupported semantic embedding models skipped: ${modelPlan.unsupportedModels.join(", ")}`,
@@ -181,10 +181,6 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
     for (const embModel of modelPlan.symbolEmbeddingModels) {
       const phaseName = `semanticReadiness.symbolEmbeddings:${embModel}`;
-      const matchingJinaFinalization =
-        jinaHnswFinalization?.spec.model === embModel
-          ? jinaHnswFinalization
-          : undefined;
       const stats = await measure(phaseName, () =>
         deps.refreshSymbolEmbeddings({
           repoId: params.repoId,
@@ -194,14 +190,9 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
           concurrency: semanticConfig.embeddingConcurrency,
           batchSize: semanticConfig.embeddingBatchSize,
           postIndexSessionTimeoutMs: params.postIndexSessionTimeoutMs,
-          ...(matchingJinaFinalization
-            ? {
-                jinaHnswSpec: matchingJinaFinalization.spec,
-                deferVectorIndexCreate: matchingJinaFinalization.deferCreate,
-                onVectorIndexMayBeAbsent:
-                  matchingJinaFinalization.onMayBeAbsent,
-              }
-            : {}),
+          deferVectorIndexCreate:
+            deferJinaVectorIndexCreate &&
+            embModel === "jina-embeddings-v2-base-code",
           recordTiming: (subphaseName, durationMs) =>
             params.recordTiming?.(`${phaseName}.${subphaseName}`, durationMs),
           recordMemorySnapshot: (subphaseName, snapshot) =>
@@ -220,15 +211,7 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
     await measure("semanticReadiness.deferredIndexes", () =>
       deps.buildDeferredIndexes({
-        deferSemanticVectorIndexes: false,
-        deferredVectorIndex:
-          jinaHnswFinalization?.deferCreate === true
-            ? {
-                tableName: "Symbol",
-                indexName: jinaHnswFinalization.spec.indexName,
-                property: jinaHnswFinalization.spec.vectorProperty,
-              }
-            : undefined,
+        deferSemanticVectorIndexes: deferJinaVectorIndexCreate,
         deferSemanticTextIndexes: false,
         recordTiming: (phaseName, durationMs) =>
           params.recordTiming?.(

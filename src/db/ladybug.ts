@@ -10,7 +10,6 @@ import { loadConfig } from "../config/loadConfig.js";
 import { DB_SHUTDOWN_DRAIN_TIMEOUT_MS } from "../config/constants.js";
 import { DatabaseError } from "../domain/errors.js";
 import { ConcurrencyLimiter } from "../util/concurrency.js";
-import type { DeferredVectorIndexIdentity } from "../retrieval/index-lifecycle.js";
 import {
   markExtensionLoaded,
   markExtensionUnavailable,
@@ -207,8 +206,6 @@ const CHECKPOINT_THRESHOLD_ENV = "SDL_MCP_LADYBUG_CHECKPOINT_THRESHOLD_BYTES";
 export interface LadybugDbInitOptions {
   bufferPoolBytes?: number | null;
   checkpointThresholdBytes?: number | null;
-  /** Leave one exact vector index absent for a lifecycle-owned finalizer. */
-  deferredVectorIndex?: DeferredVectorIndexIdentity;
 }
 
 /** @internal exported for focused config/env tests. */
@@ -1527,9 +1524,6 @@ async function initLadybugDbInternal(
           const indexResult = await ensureIndexes(
             indexConn,
             semanticConfig.retrieval,
-            {
-              deferredVectorIndex: options?.deferredVectorIndex,
-            },
           );
           const entityResult = await ensureEntityIndexes(indexConn);
           logger.info("Retrieval indexes bootstrapped", {
@@ -1693,7 +1687,6 @@ interface DeferredRetrievalEnsureOptions {
   includeVectorIndexes?: boolean;
   includeEntityFtsIndexes?: boolean;
   includeFileSummaryVectorIndexes?: boolean;
-  deferredVectorIndex?: DeferredVectorIndexIdentity;
   recordTiming?: DeferredIndexTimingRecorder;
 }
 
@@ -1747,7 +1740,6 @@ async function measureDeferredIndexPhase<T>(
 export interface BuildDeferredIndexesOptions {
   recordTiming?: DeferredIndexTimingRecorder;
   deferSemanticVectorIndexes?: boolean;
-  deferredVectorIndex?: DeferredVectorIndexIdentity;
   deferSemanticTextIndexes?: boolean;
   /** @internal test seam for failure-policy coverage without opening LadybugDB. */
   _dependenciesForTesting?: BuildDeferredIndexesDependencies;
@@ -1881,7 +1873,6 @@ export async function buildDeferredIndexes(
             const indexResult = await ensureIndexes(wConn, retrievalConfig, {
               includeFtsIndex: !options.deferSemanticTextIndexes,
               includeVectorIndexes: !options.deferSemanticVectorIndexes,
-              deferredVectorIndex: options.deferredVectorIndex,
               recordTiming: recordRetrievalIndexTiming,
             });
             const entityResult = await ensureEntityIndexes(wConn, {

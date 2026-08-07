@@ -41,6 +41,7 @@ import {
   type RepoConfig,
 } from "../config/types.js";
 import { loadConfig } from "../config/loadConfig.js";
+import { resolveSemanticEmbeddingModelPlan } from "../config/semantic-embedding-model-plan.js";
 import {
   buildDeferredIndexes,
   ensureCriticalSymbolFtsIndex,
@@ -80,7 +81,6 @@ import {
 } from "./index-mode.js";
 import { assertIndexStoragePreflight } from "./index-storage-preflight.js";
 import { withFullIndexSafetyBoundaries } from "./index-refresh-safety.js";
-import type { ConfiguredJinaHnswSpec } from "./jina-hnsw-finalization.js";
 import {
   fileIdForPath,
   loadExistingSymbolMaps,
@@ -492,14 +492,8 @@ export interface IndexRepoOptions {
   includeTimings?: boolean;
   /** @internal Allows destructive full writes only on a fresh rebuild path. */
   isolatedRebuild?: boolean;
-  /** @internal Defers this configured Jina HNSW index to a cold-reopen owner. */
-  jinaHnswFinalization?: {
-    spec: ConfiguredJinaHnswSpec;
-    deferCreate: true;
-    onMayBeAbsent?: () => void;
-  };
-  /** @internal The caller already applied resolveEffectiveIndexMode. */
-  effectiveModeAlreadyResolved?: true;
+  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
+  deferJinaVectorIndexCreate?: boolean;
   /** @internal Keeps compatibility benchmarks on the TypeScript-only pipeline. */
   forceLegacyPipeline?: boolean;
 }
@@ -2003,9 +1997,7 @@ export async function indexRepo(
       );
     }
 
-    const effectiveMode = options?.effectiveModeAlreadyResolved
-      ? mode
-      : await resolveEffectiveIndexMode(repoId, mode);
+    const effectiveMode = await resolveEffectiveIndexMode(repoId, mode);
     const preflightConn = await getLadybugConn();
     await assertIndexStoragePreflight(preflightConn, repoId, mode, options);
     const runEffectiveIndex = async (): Promise<IndexResult> => {
@@ -2245,7 +2237,12 @@ async function indexRepoImpl(
     "shadow staging skipped because repo.sourceFileListPath scopes this run to a benchmark subset";
 
   const appConfig: AppConfig = loadConfig();
-  const jinaHnswFinalization = options?.jinaHnswFinalization;
+  const deferJinaVectorIndexCreate =
+    options?.deferJinaVectorIndexCreate === true &&
+    appConfig.semantic?.enabled === true &&
+    resolveSemanticEmbeddingModelPlan(
+      appConfig.semantic,
+    ).symbolEmbeddingModels.includes("jina-embeddings-v2-base-code");
   const providerFirstConfig =
     appConfig.indexing?.providerFirst ??
     IndexingConfigSchema.parse({}).providerFirst;
@@ -2411,7 +2408,7 @@ async function indexRepoImpl(
         callResolutionTelemetry: params.callResolutionTelemetry,
         prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
         deferSemanticRefresh: params.deferSemanticRefresh,
-        jinaHnswFinalization,
+        deferJinaVectorIndexCreate,
         preFinalize: params.preFinalize,
         postIndexSessionTimeoutMs,
         onProgress,
@@ -2467,15 +2464,8 @@ async function indexRepoImpl(
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
             deferSemanticVectorIndexes:
-              finalizeResult.semanticDeferred,
-            deferredVectorIndex:
-              jinaHnswFinalization?.deferCreate === true
-                ? {
-                    tableName: "Symbol",
-                    indexName: jinaHnswFinalization.spec.indexName,
-                    property: jinaHnswFinalization.spec.vectorProperty,
-                  }
-                : undefined,
+              finalizeResult.semanticDeferred ||
+              deferJinaVectorIndexCreate,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });
@@ -2619,7 +2609,7 @@ async function indexRepoImpl(
       recordTiming: recordIndexSubphaseTiming,
       recordMemorySnapshot: phaseTimings ? recordMemorySnapshot : undefined,
       postIndexSessionTimeoutMs,
-      jinaHnswFinalization,
+      deferJinaVectorIndexCreate,
     });
     return {
       semanticDeferred: semanticRefresh.semanticDeferred || undefined,
@@ -4319,7 +4309,7 @@ async function indexRepoImpl(
         callResolutionTelemetry,
         prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
         deferSemanticRefresh,
-        jinaHnswFinalization,
+        deferJinaVectorIndexCreate,
         postIndexSessionTimeoutMs,
         onProgress,
       }),
@@ -4379,17 +4369,10 @@ async function indexRepoImpl(
         // --- Phase: build deferred indexes (fresh DB only) ---
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
-            // The lifecycle-owned Jina index is created after a cold reopen.
+            // The safe-rebuild Jina index is created after a cold reopen.
             deferSemanticVectorIndexes:
-              finalizeResult.semanticDeferred,
-            deferredVectorIndex:
-              jinaHnswFinalization?.deferCreate === true
-                ? {
-                    tableName: "Symbol",
-                    indexName: jinaHnswFinalization.spec.indexName,
-                    property: jinaHnswFinalization.spec.vectorProperty,
-                  }
-                : undefined,
+              finalizeResult.semanticDeferred ||
+              deferJinaVectorIndexCreate,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });

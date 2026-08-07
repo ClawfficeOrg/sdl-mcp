@@ -33,7 +33,6 @@ import {
 import {
   createVectorIndex,
   dropVectorIndex,
-  showIndexesStrict,
 } from "../retrieval/index-lifecycle.js";
 import {
   EMBEDDING_MODELS,
@@ -44,7 +43,6 @@ import { prepareSymbolEmbeddingInputs } from "./symbol-embedding-context.js";
 import { buildSymbolEmbeddingText } from "./symbol-embedding-text.js";
 import { IndexError } from "../domain/errors.js";
 import { runHnswRebuildCycle } from "./hnsw-rebuild-cycle.js";
-import type { ConfiguredJinaHnswSpec } from "./jina-hnsw-finalization.js";
 
 /** Legacy dimension constant — only used by MockEmbeddingProvider */
 export const EMBEDDING_DIMENSION = 64;
@@ -347,12 +345,8 @@ export async function refreshSymbolEmbeddings(params: {
   rebuildMinUncachedRows?: number;
   /** Preserve the repo-specific timeout for destructive rebuild sessions. */
   postIndexSessionTimeoutMs?: number;
-  /** @internal A lifecycle owner creates the Jina HNSW index after a cold reopen. */
+  /** @internal Safe rebuilds create the Jina HNSW index after a cold reopen. */
   deferVectorIndexCreate?: boolean;
-  /** @internal Exact Jina HNSW catalog object shared with the reopen owner. */
-  jinaHnswSpec?: ConfiguredJinaHnswSpec;
-  /** @internal Reports a successful drop or confirmed absence immediately. */
-  onVectorIndexMayBeAbsent?: () => void;
   /** @internal Allows tests to exercise provider degradation deterministically. */
   embeddingProvider?: EmbeddingProvider;
   /** Records internal phase durations for opt-in indexing diagnostics. */
@@ -479,13 +473,8 @@ export async function refreshSymbolEmbeddings(params: {
   // nothing is cached yet (bootstrap) always rebuild so small repositories
   // still get vectors. Deferred rows stay hash-uncached in the DB, so a
   // later refresh naturally picks them up.
-  const jinaHnswSpec =
-    params.jinaHnswSpec?.model === modelName ? params.jinaHnswSpec : undefined;
-  const vecProp = jinaHnswSpec?.vectorProperty ?? getVecPropertyName(modelName);
-  const indexName = jinaHnswSpec?.indexName ?? getVectorIndexName(modelName);
-  const vectorDimension =
-    jinaHnswSpec?.dimension ?? EMBEDDING_MODELS[modelName]?.dimension ?? null;
-  const vectorEfc = jinaHnswSpec?.efc;
+  const vecProp = getVecPropertyName(modelName);
+  const indexName = getVectorIndexName(modelName);
   const rebuildMinUncachedRows =
     params.rebuildMinUncachedRows ?? SYMBOL_VECTOR_REBUILD_MIN_ROWS;
   const bootstrapRebuild =
@@ -557,26 +546,9 @@ export async function refreshSymbolEmbeddings(params: {
     if (useRebuildPath) {
       // The outer HNSW lifecycle checkpoints before this session starts.
       const dropResult = await measure("hnsw.drop", () =>
-        withWriteConn(async (wConn) => {
-          const conflictingIndex = (await showIndexesStrict(wConn)).find(
-            (index) =>
-              index.name === indexName &&
-              (index.type !== "vector" ||
-                index.tableName !== "Symbol" ||
-                index.property !== vecProp),
-          );
-          if (conflictingIndex !== undefined) {
-            throw new IndexError(
-              `Refusing to drop vector index '${indexName}': catalog owns it as a ${conflictingIndex.type} index on ${conflictingIndex.tableName ?? "<unknown>"}.${conflictingIndex.property}; expected a vector index on Symbol.${vecProp}`,
-            );
-          }
-          return dropVectorIndex(wConn, "Symbol", indexName);
-        }),
+        withWriteConn((wConn) => dropVectorIndex(wConn, "Symbol", indexName)),
       );
       indexDropped = dropResult.status !== "failed";
-      if (indexDropped) {
-        params.onVectorIndexMayBeAbsent?.();
-      }
       if (dropResult.status === "dropped") {
         logger.info(
           `[embeddings] Bulk path: dropped vector index '${indexName}' for ${uncachedItems.length} writes (rebuild after)`,
@@ -842,8 +814,8 @@ export async function refreshSymbolEmbeddings(params: {
       }
 
       // P2: normal refreshes rebuild the dropped index regardless of write
-      // outcome. Lifecycle-owned deferrals leave the matching model index
-      // absent for finalization after a cold reopen.
+      // outcome. Safe rebuilds explicitly leave Jina absent for the cold-
+      // reopened finalizer below the indexing lifecycle.
       if (
         indexDropped &&
         vecProp !== null &&
@@ -856,61 +828,58 @@ export async function refreshSymbolEmbeddings(params: {
           current: Math.min(skipped + embedded, symbols.length),
           total: symbols.length,
           model: storageModel,
-          message: "deferred until cold reopen",
+          message: "deferred until safe-rebuild reopen",
         });
         logger.info(
-          `[embeddings] Vector index '${indexName}' creation deferred until cold reopen`,
+          `[embeddings] Vector index '${indexName}' creation deferred until safe-rebuild reopen`,
         );
-      } else if (
-        indexDropped &&
-        vecProp !== null &&
-        indexName !== null &&
-        vectorDimension !== null
-      ) {
-        recordMemorySnapshot("beforeHnsw");
-        params.onProgress?.({
-          stage: "embeddings",
-          substage: "symbolVectorIndex",
-          current: Math.min(skipped + embedded, symbols.length),
-          total: symbols.length,
-          model: storageModel,
-          message: "building HNSW",
-        });
-        let ok: boolean;
-        try {
-          ok = await measure("hnsw.create", () =>
-            withWriteConn((wConn) =>
-              createVectorIndex(
-                wConn,
-                "Symbol",
-                vecProp,
-                indexName,
-                vectorDimension,
-                vectorEfc,
+      } else if (indexDropped && vecProp !== null && indexName !== null) {
+        const modelInfo = EMBEDDING_MODELS[modelName];
+        if (modelInfo) {
+          recordMemorySnapshot("beforeHnsw");
+          params.onProgress?.({
+            stage: "embeddings",
+            substage: "symbolVectorIndex",
+            current: Math.min(skipped + embedded, symbols.length),
+            total: symbols.length,
+            model: storageModel,
+            message: "building HNSW",
+          });
+          let ok: boolean;
+          try {
+            ok = await measure("hnsw.create", () =>
+              withWriteConn((wConn) =>
+                createVectorIndex(
+                  wConn,
+                  "Symbol",
+                  vecProp,
+                  indexName,
+                  modelInfo.dimension,
+                ),
               ),
-            ),
-          );
-        } finally {
-          recordMemorySnapshot("afterHnsw");
+            );
+          } finally {
+            recordMemorySnapshot("afterHnsw");
+          }
+          params.onProgress?.({
+            stage: "embeddings",
+            substage: "symbolVectorIndex",
+            current: Math.min(skipped + embedded, symbols.length),
+            total: symbols.length,
+            model: storageModel,
+            message: ok ? "ready" : "rebuild failed",
+          });
+          if (ok) {
+            logger.info(
+              `[embeddings] Vector index '${indexName}' rebuilt after bulk write`,
+            );
+          } else {
+            logger.error(
+              `[embeddings] Vector index '${indexName}' rebuild FAILED — vector retrieval for ${modelName} will degrade until next refresh`,
+            );
+          }
+          // The outer HNSW lifecycle checkpoints after this session releases.
         }
-        params.onProgress?.({
-          stage: "embeddings",
-          substage: "symbolVectorIndex",
-          current: Math.min(skipped + embedded, symbols.length),
-          total: symbols.length,
-          model: storageModel,
-          message: ok ? "ready" : "rebuild failed",
-        });
-        if (ok) {
-          logger.info(
-            `[embeddings] Vector index '${indexName}' rebuilt after bulk write`,
-          );
-        } else {
-          logger.error(
-            `[embeddings] Vector index '${indexName}' rebuild FAILED — vector retrieval for ${modelName} will degrade until next refresh`,
-          );
-        }
-        // The outer HNSW lifecycle checkpoints after this session releases.
       }
     }
 

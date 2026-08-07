@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -979,27 +979,6 @@ describe("finalizeIndexing embedding model plan", () => {
       pass2Duration: 0,
     };
   }
-
-  it("threads the exact Jina finalization contract into legacy embedding refresh", () => {
-    const source = readFileSync(
-      join(process.cwd(), "src/indexer/metrics-updater.ts"),
-      "utf8",
-    );
-    const refreshStart = source.indexOf("refreshSymbolEmbeddings({");
-    const refreshEnd = source.indexOf("}),", refreshStart);
-    assert.ok(refreshStart !== -1 && refreshEnd > refreshStart);
-
-    const refreshCall = source.slice(refreshStart, refreshEnd);
-    assert.match(refreshCall, /jinaHnswSpec:\s*matchingJinaFinalization\.spec/);
-    assert.match(
-      refreshCall,
-      /deferVectorIndexCreate:\s*matchingJinaFinalization\.deferCreate/,
-    );
-    assert.match(
-      refreshCall,
-      /onVectorIndexMayBeAbsent:\s*matchingJinaFinalization\.onMayBeAbsent/,
-    );
-  });
 
   it("uses specialized defaults for Symbol and FileSummary embedding lanes", async () => {
     const { finalizeIndexing } = await import(

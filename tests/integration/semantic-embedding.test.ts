@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, it } from "node:test";
 import assert from "node:assert";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync } from "node:fs";
 
 import {
   initLadybugDb,
@@ -16,30 +16,11 @@ import {
   type EmbeddingProvider,
 } from "../../dist/indexer/embeddings.js";
 import { refreshFileSummaryEmbeddings } from "../../dist/indexer/file-summary-embeddings.js";
-import { AppConfigSchema } from "../../dist/config/types.js";
-import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
+import { readSafeRebuildJinaVectorProbe } from "../../dist/db/ladybug-safe-rebuild.js";
 import {
-  prepareReopenedJinaHnsw,
-  resolveConfiguredJinaHnswSpec,
-  validateReopenedJinaHnsw,
-} from "../../dist/indexer/jina-hnsw-finalization.js";
-import {
-  readDeterministicSymbolVectorProbe,
-  readRepoSymbolVectorProbe,
-  readSymbolNumericVector,
-} from "../../dist/db/ladybug-symbol-embeddings.js";
-import {
-  AGENTFEEDBACK_VECTOR_INDEX_NAMES,
-  FILESUMMARY_VECTOR_INDEX_NAMES,
-  createVectorIndex,
-  dropVectorIndex,
   queryVectorIndexProbe,
   showIndexesStrict,
 } from "../../dist/retrieval/index-lifecycle.js";
-import {
-  getLoggerDiagnostics,
-  setConsoleMirroring,
-} from "../../dist/util/logger.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -399,13 +380,6 @@ describe("Semantic Embedding Pipeline", () => {
       symbols,
       rebuildMinUncachedRows: 1,
       embeddingProvider: provider,
-      jinaHnswSpec: {
-        model: jinaModel,
-        indexName: "configured_jina_hnsw",
-        vectorProperty: "embeddingJinaCodeVec",
-        dimension: 768,
-        efc: 321,
-      },
       batchSize: 1,
       concurrency: 2,
       onProgress: ({ substage }) => progressSubstages.push(substage),
@@ -423,21 +397,7 @@ describe("Semantic Embedding Pipeline", () => {
         snapshot: Record<string, number>,
       ) => void;
     };
-    const previousConsoleMirroring = getLoggerDiagnostics().consoleMirroring;
-    const originalStderrWrite = process.stderr.write;
-    const createLogs: string[] = [];
-    process.stderr.write = ((data: string | Uint8Array) => {
-      createLogs.push(String(data));
-      return true;
-    }) as typeof process.stderr.write;
-    setConsoleMirroring(true);
-    let result: Awaited<ReturnType<typeof refreshSymbolEmbeddings>>;
-    try {
-      result = await refreshSymbolEmbeddings(refreshParams);
-    } finally {
-      setConsoleMirroring(previousConsoleMirroring);
-      process.stderr.write = originalStderrWrite;
-    }
+    const result = await refreshSymbolEmbeddings(refreshParams);
 
     assert.deepStrictEqual(result, {
       embedded: symbols.length,
@@ -446,11 +406,6 @@ describe("Semantic Embedding Pipeline", () => {
     assert.ok(
       progressSubstages.includes("symbolVectorIndex"),
       "the rebuild must expose HNSW construction after embedding progress",
-    );
-    assert.match(
-      createLogs.join(""),
-      /Vector index 'configured_jina_hnsw' created[\s\S]*efc=321/,
-      "the configured efc must reach the real createVectorIndex boundary",
     );
 
     const conn = await getLadybugConn();
@@ -515,13 +470,6 @@ describe("Semantic Embedding Pipeline", () => {
       symbols,
       rebuildMinUncachedRows: 1,
       embeddingProvider: provider,
-      jinaHnswSpec: {
-        model: jinaModel,
-        indexName: "symbol_vec_jina_code_v2",
-        vectorProperty: "embeddingJinaCodeVec",
-        dimension: 768,
-        efc: 200,
-      },
       deferVectorIndexCreate: true,
       recordTiming: (phaseName) => timings.push(phaseName),
       onProgress: ({ message }) => progressMessages.push(message),
@@ -537,10 +485,6 @@ describe("Semantic Embedding Pipeline", () => {
     );
     assert.equal(timings.includes("hnsw.create"), false);
     assert.equal(progressMessages.includes("ready"), false);
-    assert.equal(
-      progressMessages.includes("deferred until cold reopen"),
-      true,
-    );
     for (const symbol of symbols) {
       assert.ok(
         await ladybugDb.getSymbolEmbeddingFromNode(
@@ -552,231 +496,7 @@ describe("Semantic Embedding Pipeline", () => {
     }
   });
 
-  it("finalizes configured Jina HNSW through real normal-family cold reopens", async () => {
-    const { provider } = createRecordingProvider();
-    const nomicModel = "nomic-embed-text-v1.5";
-    const config = AppConfigSchema.parse({
-      repos: [{ repoId, rootPath: "/fake/embed-repo" }],
-      graphDatabase: { path: graphDbPath },
-      policy: {},
-      semantic: {
-        enabled: true,
-        provider: "local",
-        model: jinaModel,
-        retrieval: {
-          vector: {
-            enabled: true,
-            efc: 321,
-            indexes: {
-              [jinaModel]: { indexName: "configured_jina_hnsw" },
-              [nomicModel]: { indexName: "configured_nomic_hnsw" },
-            },
-          },
-        },
-      },
-      scip: { enabled: false },
-    });
-    const spec = resolveConfiguredJinaHnswSpec(config);
-    assert.ok(spec);
-    const configPath = join(testDir, "sdlmcp.config.json");
-    writeFileSync(configPath, JSON.stringify(config), "utf8");
-
-    let conn = await getLadybugConn();
-    const vector = makeDeterministicVector("non-jina bootstrap", 1, 0);
-    await upsertStandardFileSummaries(conn);
-    await ladybugDb.upsertAgentFeedback(conn, {
-      feedbackId: "feedback-bootstrap",
-      repoId,
-      versionId: "version-bootstrap",
-      sliceHandle: "slice-bootstrap",
-      usefulSymbolsJson: "[]",
-      missingSymbolsJson: "[]",
-      taskTagsJson: null,
-      taskType: "review",
-      taskText: "verify exact vector index deferral",
-      createdAt: "2026-08-06T00:00:00.000Z",
-    });
-    await ladybugDb.setSymbolEmbeddingOnNode(
-      conn,
-      symbols[0]!.symbolId,
-      nomicModel,
-      JSON.stringify(vector),
-      "nomic-card",
-      vector,
-    );
-    await ladybugDb.exec(
-      conn,
-      `MATCH (f:FileSummary {fileId: $fileId})
-       SET f.embeddingJinaCodeVec = $vector,
-           f.embeddingNomicVec = $vector`,
-      { fileId: "file1", vector },
-    );
-    await ladybugDb.exec(
-      conn,
-      `MATCH (f:AgentFeedback {feedbackId: $feedbackId})
-       SET f.embeddingJinaCodeVec = $vector,
-           f.embeddingNomicVec = $vector`,
-      { feedbackId: "feedback-bootstrap", vector },
-    );
-
-    await refreshSymbolEmbeddings({
-      repoId,
-      provider: "local",
-      model: jinaModel,
-      symbols,
-      rebuildMinUncachedRows: 1,
-      embeddingProvider: provider,
-      jinaHnswSpec: spec,
-      deferVectorIndexCreate: true,
-    });
-
-    const previousGraphEnv = new Map(
-      [
-        "SDL_CONFIG",
-        "SDL_CONFIG_PATH",
-        "SDL_GRAPH_DB_PATH",
-        "SDL_GRAPH_DB_DIR",
-        "SDL_DB_PATH",
-      ].map(
-        (name) => [name, process.env[name]] as const,
-      ),
-    );
-    for (const name of previousGraphEnv.keys()) delete process.env[name];
-    process.env.SDL_CONFIG = configPath;
-    invalidateConfigCache();
-
-    try {
-      const graphInit = await import("../../dist/db/initGraphDb.js");
-      await closeLadybugDb({ strict: true });
-      await graphInit.initGraphDb(config, configPath);
-      conn = await getLadybugConn();
-      const expectedVectorIndexes = [
-        { table: "Symbol", name: spec.indexName },
-        { table: "Symbol", name: "configured_nomic_hnsw" },
-        {
-          table: "FileSummary",
-          name: FILESUMMARY_VECTOR_INDEX_NAMES.jinaCode,
-        },
-        { table: "FileSummary", name: FILESUMMARY_VECTOR_INDEX_NAMES.nomic },
-        {
-          table: "AgentFeedback",
-          name: AGENTFEEDBACK_VECTOR_INDEX_NAMES.jinaCode,
-        },
-        {
-          table: "AgentFeedback",
-          name: AGENTFEEDBACK_VECTOR_INDEX_NAMES.nomic,
-        },
-      ] as const;
-      const defaultIndexes = await showIndexesStrict(conn);
-      for (const expected of expectedVectorIndexes) {
-        const actual = defaultIndexes.find(
-          (index) =>
-            index.name === expected.name && index.tableName === expected.table,
-        );
-        assert.equal(actual?.type, "vector");
-        assert.equal(actual?.status, "healthy");
-        assert.equal(actual?.extensionLoaded, true);
-        assert.deepStrictEqual(
-          await dropVectorIndex(conn, expected.table, expected.name),
-          { status: "dropped" },
-        );
-      }
-
-      const indexModule = await import("../../dist/cli/commands/index.js");
-      const lifecycle = (
-        indexModule as typeof indexModule & {
-          runDirectJinaHnswLifecycle?: (
-            params: {
-              config: typeof config;
-              configPath: string;
-              spec: typeof spec;
-              selectedFullRepoIds: readonly string[];
-              requireAbsent: boolean;
-            },
-            dependencies?: {
-              prepareReopenedJinaHnsw: typeof prepareReopenedJinaHnsw;
-            },
-          ) => Promise<{
-            outcome: string;
-            probe: Awaited<
-              ReturnType<typeof readDeterministicSymbolVectorProbe>
-            >;
-            queryMs: number;
-          }>;
-        }
-      ).runDirectJinaHnswLifecycle;
-      assert.strictEqual(typeof lifecycle, "function");
-      let observedSuppressedReopen = false;
-
-      const result = await lifecycle!(
-        {
-          config,
-          configPath,
-          spec,
-          selectedFullRepoIds: [repoId],
-          requireAbsent: true,
-        },
-        {
-          prepareReopenedJinaHnsw: async (params) => {
-            conn = await getLadybugConn();
-            const configuredIndexPresent = (
-              await showIndexesStrict(conn)
-            ).some((index) => index.name === spec.indexName);
-            if (configuredIndexPresent) {
-              // Exercise the real finalizer diagnostic if absence is violated.
-              return prepareReopenedJinaHnsw(params);
-            }
-            assert.equal(
-              configuredIndexPresent,
-              false,
-              "finalizer-owned cold reopen must suppress semantic vector bootstrap",
-            );
-            const reopenedIndexes = await showIndexesStrict(conn);
-            for (const expected of expectedVectorIndexes.slice(1)) {
-              const actual = reopenedIndexes.find(
-                (index) =>
-                  index.name === expected.name &&
-                  index.tableName === expected.table,
-              );
-              assert.equal(
-                actual?.type,
-                "vector",
-                `${expected.name} must still be ensured during Jina deferral`,
-              );
-              assert.equal(actual?.status, "healthy");
-              assert.equal(actual?.extensionLoaded, true);
-            }
-            observedSuppressedReopen = true;
-            return prepareReopenedJinaHnsw(params);
-          },
-        },
-      );
-
-      assert.strictEqual(result.outcome, "created");
-      assert.ok(result.probe);
-      assert.ok(result.queryMs >= 0);
-      assert.equal(observedSuppressedReopen, true);
-
-      const ladybug = await import("../../dist/db/ladybug.js");
-      assert.strictEqual(ladybug.getLadybugDbPath(), null);
-      await graphInit.initGraphDb(config, configPath);
-      assert.ok(
-        (await validateReopenedJinaHnsw({
-          spec,
-          probe: result.probe,
-        })) >= 0,
-      );
-    } finally {
-      await closeLadybugDb({ strict: true });
-      for (const [name, value] of previousGraphEnv) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
-      }
-      invalidateConfigCache();
-    }
-  });
-
-  it("reports the configured index may be absent before inference failure", async () => {
+  it("rejects an HNSW probe that cannot recover a near-zero neighbor", async () => {
     const { provider } = createRecordingProvider();
     await refreshSymbolEmbeddings({
       repoId,
@@ -786,348 +506,26 @@ describe("Semantic Embedding Pipeline", () => {
       rebuildMinUncachedRows: 1,
       embeddingProvider: provider,
     });
-    const events: string[] = [];
-    const changedSymbols = symbols.map((symbol) => ({
-      ...symbol,
-      astFingerprint: `${symbol.astFingerprint}-changed`,
-    }));
-
-    await assert.rejects(
-      refreshSymbolEmbeddings({
-        repoId,
-        provider: "local",
-        model: jinaModel,
-        symbols: changedSymbols,
-        rebuildMinUncachedRows: 1,
-        embeddingProvider: {
-          ...provider,
-          async embed(): Promise<number[][]> {
-            events.push("inference");
-            throw new Error("injected inference failure");
-          },
-        },
-        jinaHnswSpec: {
-          model: jinaModel,
-          indexName: "configured_jina_hnsw",
-          vectorProperty: "embeddingJinaCodeVec",
-          dimension: 768,
-          efc: 321,
-        },
-        deferVectorIndexCreate: true,
-        onVectorIndexMayBeAbsent: () => events.push("may-be-absent"),
-      }),
-      /Embedding failure rate exceeds 50%/,
-    );
-
-    assert.deepEqual(events, ["may-be-absent", "inference"]);
-    const conn = await getLadybugConn();
-    assert.equal(
-      (await showIndexesStrict(conn)).some(
-        (index) => index.name === "symbol_vec_jina_code_v2",
-      ),
-      true,
-      "the configured absent index must not fall back to dropping the mapping default",
-    );
-  });
-
-  it("keeps indexed writes and skips the callback when configured drop fails", async () => {
-    const { provider } = createRecordingProvider();
-    await refreshSymbolEmbeddings({
-      repoId,
-      provider: "local",
-      model: jinaModel,
-      symbols,
-      rebuildMinUncachedRows: 1,
-      embeddingProvider: provider,
-    });
-    const events: string[] = [];
-    const changedSymbols = symbols.map((symbol) => ({
-      ...symbol,
-      astFingerprint: `${symbol.astFingerprint}-changed`,
-    }));
-
-    const result = await refreshSymbolEmbeddings({
-      repoId,
-      provider: "local",
-      model: jinaModel,
-      symbols: changedSymbols,
-      rebuildMinUncachedRows: 1,
-      embeddingProvider: provider,
-      jinaHnswSpec: {
-        model: jinaModel,
-        indexName: "invalid-index-name",
-        vectorProperty: "embeddingJinaCodeVec",
-        dimension: 768,
-        efc: 321,
-      },
-      deferVectorIndexCreate: true,
-      onVectorIndexMayBeAbsent: () => events.push("may-be-absent"),
-    });
-
-    assert.deepEqual(result, { embedded: symbols.length, skipped: 0 });
-    assert.deepEqual(events, []);
-    const conn = await getLadybugConn();
-    assert.equal(
-      (await showIndexesStrict(conn)).some(
-        (index) => index.name === "symbol_vec_jina_code_v2",
-      ),
-      true,
-    );
-  });
-
-  it("refuses a configured Symbol vector index name owned by another property before DROP", async () => {
-    const { provider: nomicProvider } = createRecordingProvider();
-    const nomicModel = "nomic-embed-text-v1.5";
-    const collidingIndexName = "configured_jina_hnsw";
-    await refreshSymbolEmbeddings({
-      repoId,
-      provider: "local",
-      model: nomicModel,
-      symbols,
-      rebuildMinUncachedRows: 1,
-      embeddingProvider: nomicProvider,
-    });
 
     const conn = await getLadybugConn();
-    assert.deepStrictEqual(
-      await dropVectorIndex(conn, "Symbol", "symbol_vec_nomic_embed_v15"),
-      { status: "dropped" },
-    );
-    assert.equal(
-      await createVectorIndex(
-        conn,
-        "Symbol",
-        "embeddingNomicVec",
-        collidingIndexName,
-        768,
-        200,
-      ),
-      true,
-    );
-
-    const events: string[] = [];
-    const { provider: jinaProvider } = createRecordingProvider();
-    await assert.rejects(
-      refreshSymbolEmbeddings({
-        repoId,
-        provider: "local",
-        model: jinaModel,
-        symbols,
-        rebuildMinUncachedRows: 1,
-        embeddingProvider: {
-          ...jinaProvider,
-          async embed(texts): Promise<number[][]> {
-            events.push("inference");
-            return jinaProvider.embed(texts);
-          },
-        },
-        jinaHnswSpec: {
-          model: jinaModel,
-          indexName: collidingIndexName,
-          vectorProperty: "embeddingJinaCodeVec",
-          dimension: 768,
-          efc: 321,
-        },
-        deferVectorIndexCreate: true,
-        onVectorIndexMayBeAbsent: () => events.push("may-be-absent"),
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof Error);
-        assert.strictEqual(error.name, "IndexError");
-        assert.match(
-          error.message,
-          /configured_jina_hnsw.*Symbol\.embeddingNomicVec.*Symbol\.embeddingJinaCodeVec/,
-        );
-        return true;
-      },
-    );
-
-    assert.deepStrictEqual(events, []);
-    const preservedIndexes = (await showIndexesStrict(conn)).filter(
-      (index) => index.name === collidingIndexName,
-    );
-    assert.strictEqual(preservedIndexes.length, 1);
-    assert.strictEqual(preservedIndexes[0]?.type, "vector");
-    assert.strictEqual(preservedIndexes[0]?.tableName, "Symbol");
-    assert.strictEqual(preservedIndexes[0]?.property, "embeddingNomicVec");
-    for (const symbol of symbols) {
-      assert.strictEqual(
-        await ladybugDb.getSymbolEmbeddingFromNode(
-          conn,
-          symbol.symbolId,
-          jinaModel,
-        ),
-        null,
-        `${symbol.symbolId} must not receive a fallback Jina write`,
-      );
-    }
-  });
-
-  it("selects deterministic model-aware Symbol vector probes", async () => {
-    const conn = await getLadybugConn();
-    const noVector = await readRepoSymbolVectorProbe(conn, repoId, jinaModel);
-    assert.equal(noVector.symbolCount, symbols.length);
-    assert.equal(noVector.probe, null);
-
-    const emptyRepoId = "empty-probe-repo";
-    const now = new Date().toISOString();
-    await ladybugDb.upsertRepo(conn, {
-      repoId: emptyRepoId,
-      rootPath: "/fake/empty-probe-repo",
-      configJson: "{}",
-      createdAt: now,
-    });
-    assert.deepEqual(
-      await readRepoSymbolVectorProbe(conn, emptyRepoId, jinaModel),
-      {
-        symbolCount: 0,
-        probe: null,
-      },
-    );
-
-    const earlyRepoId = "aaa-probe-repo";
-    await ladybugDb.upsertRepo(conn, {
-      repoId: earlyRepoId,
-      rootPath: "/fake/aaa-probe-repo",
-      configJson: "{}",
-      createdAt: now,
-    });
-    await ladybugDb.upsertFile(conn, {
-      fileId: "probe-file",
-      repoId: earlyRepoId,
-      relPath: "src/probe.ts",
-      contentHash: "probe-hash",
-      language: "ts",
-      byteSize: 10,
-      lastIndexedAt: now,
-    });
-    const probeSymbols = Array.from(
-      { length: 34 },
-      (_, index): ladybugDb.SymbolRow => ({
-        ...symbols[0],
-        symbolId:
-          index === 33
-            ? "aab-valid"
-            : `aaa-invalid-${String(index).padStart(2, "0")}`,
-        repoId: earlyRepoId,
-        fileId: "probe-file",
-        name: `probe${index}`,
-        astFingerprint: `probe-fp-${index}`,
-      }),
-    );
-    await ladybugDb.upsertSymbolBatch(conn, probeSymbols);
-
-    const validVector = new Array<number>(768).fill(0);
-    validVector[0] = 1.25;
-    const invalidVector = [...validVector];
-    invalidVector[1] = Number.NaN;
-    await ladybugDb.setSymbolEmbeddingBatchOnNode(
-      conn,
-      jinaModel,
-      probeSymbols.map((symbol) => ({
-        symbolId: symbol.symbolId,
-        vector:
-          symbol.symbolId === "aab-valid" ? JSON.stringify(validVector) : "[]",
-        cardHash:
-          symbol.symbolId === "aab-valid" ? "valid-card" : "invalid-card",
-        vectorArray:
-          symbol.symbolId === "aab-valid" ? validVector : invalidVector,
-      })),
-    );
-    await ladybugDb.setSymbolEmbeddingOnNode(
-      conn,
-      "sym-auth",
-      jinaModel,
-      JSON.stringify(validVector),
-      "later-card",
-      validVector,
-    );
-
-    assert.deepEqual(
-      await readDeterministicSymbolVectorProbe(conn, jinaModel),
-      { repoId: earlyRepoId, symbolId: "aab-valid", vector: validVector },
-    );
-    assert.deepEqual(
-      await readRepoSymbolVectorProbe(conn, earlyRepoId, jinaModel),
-      {
-        symbolCount: 34,
-        probe: {
-          repoId: earlyRepoId,
-          symbolId: "aab-valid",
-          vector: validVector,
-        },
-      },
-    );
-    assert.deepEqual(
-      await readSymbolNumericVector(conn, "aab-valid", jinaModel),
-      validVector,
-    );
-  });
-
-  it("validates any matching logical Symbol among more than ten tied HNSW rows", async () => {
-    const tiedVector = new Array<number>(768).fill(0);
-    tiedVector[0] = 1;
-    const tiedSymbols = Array.from(
-      { length: 12 },
-      (_, index): ladybugDb.SymbolRow => ({
-        ...symbols[0],
-        symbolId: `tie-${String(index).padStart(2, "0")}`,
-        name: `tie${index}`,
-        astFingerprint: `tie-fp-${index}`,
-      }),
-    );
-    const conn = await getLadybugConn();
-    for (const symbol of tiedSymbols)
-      await ladybugDb.upsertSymbol(conn, symbol);
-    await refreshSymbolEmbeddings({
-      repoId,
-      provider: "local",
-      model: jinaModel,
-      symbols: tiedSymbols,
-      rebuildMinUncachedRows: 1,
-      embeddingProvider: {
-        async embed(texts: string[]): Promise<number[][]> {
-          return texts.map(() => [...tiedVector]);
-        },
-        getDimension: () => 768,
-        isMockFallback: () => false,
-      },
-    });
-
-    const probe = await readDeterministicSymbolVectorProbe(conn, jinaModel);
-    assert.ok(probe);
-    const rows = await queryVectorIndexProbe(
-      conn,
-      "symbol_vec_jina_code_v2",
-      probe.vector,
-    );
-    assert.ok(rows.length > 0 && rows.length <= 10);
+    const stored = await readSafeRebuildJinaVectorProbe(conn);
+    assert.ok(Array.isArray(stored));
     assert.ok(
-      rows.every(
-        (row) =>
-          row.symbolId.length > 0 &&
-          typeof row.distance === "number" &&
-          Number.isFinite(row.distance),
-      ),
+      (await queryVectorIndexProbe(
+        conn,
+        "symbol_vec_jina_code_v2",
+        stored,
+      )) > 0,
     );
-    const config = AppConfigSchema.parse({
-      repos: [],
-      policy: {},
-      semantic: {
-        enabled: true,
-        provider: "local",
-        model: jinaModel,
-        retrieval: { vector: { enabled: true } },
-      },
-    });
-    const spec = resolveConfiguredJinaHnswSpec(config);
-    assert.ok(spec);
-    assert.ok((await validateReopenedJinaHnsw({ spec, probe })) >= 0);
 
     const unrelated = new Array<number>(768).fill(0);
     unrelated[767] = 1;
     await assert.rejects(
-      queryVectorIndexProbe(conn, "symbol_vec_jina_code_v2", unrelated),
+      queryVectorIndexProbe(
+        conn,
+        "symbol_vec_jina_code_v2",
+        unrelated,
+      ),
       /near-zero/i,
     );
   });

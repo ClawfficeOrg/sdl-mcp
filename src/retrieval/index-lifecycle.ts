@@ -58,11 +58,6 @@ export interface IndexHealthResult {
   entityIndexes?: EntityIndexHealth[];
 }
 
-export interface VectorIndexProbeRow {
-  symbolId: string;
-  distance: number;
-}
-
 export interface IndexEnsureResult {
   created: string[];
   skipped: string[];
@@ -74,17 +69,9 @@ export type IndexLifecycleTimingRecorder = (
   durationMs: number,
 ) => void;
 
-/** One vector index whose creation is owned by an external finalizer. */
-export interface DeferredVectorIndexIdentity {
-  tableName: string;
-  indexName: string;
-  property: string;
-}
-
 export interface EnsureIndexesOptions {
   includeFtsIndex?: boolean;
   includeVectorIndexes?: boolean;
-  deferredVectorIndex?: DeferredVectorIndexIdentity;
   recordTiming?: IndexLifecycleTimingRecorder;
 }
 
@@ -369,7 +356,7 @@ export async function queryVectorIndexProbe(
   conn: Connection,
   indexName: string,
   embedding: number[],
-): Promise<VectorIndexProbeRow[]> {
+): Promise<number> {
   validateIdentifier(indexName, "index name");
   if (
     embedding.length === 0 ||
@@ -377,17 +364,14 @@ export async function queryVectorIndexProbe(
   ) {
     throw new Error("Vector index probe requires finite embedding values");
   }
-  const rows = await queryStoredProcAll<{
-    symbolId: unknown;
-    distance: unknown;
-  }>(
+  const rows = await queryStoredProcAll<{ id: unknown; distance: unknown }>(
     conn,
-    `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${JSON.stringify(embedding)}, 10, efs := 200) RETURN node.symbolId AS symbolId, distance`,
+    `CALL QUERY_VECTOR_INDEX('Symbol', '${indexName}', ${JSON.stringify(embedding)}, 10, efs := 200) RETURN node.symbolId AS id, distance`,
   );
   for (const row of rows) {
     if (
-      typeof row.symbolId !== "string" ||
-      row.symbolId.length === 0 ||
+      typeof row.id !== "string" ||
+      row.id.length === 0 ||
       typeof row.distance !== "number" ||
       !Number.isFinite(row.distance)
     ) {
@@ -403,10 +387,7 @@ export async function queryVectorIndexProbe(
   ) {
     throw new Error("Vector index probe returned no near-zero neighbor");
   }
-  return rows.map((row) => ({
-    symbolId: row.symbolId as string,
-    distance: row.distance as number,
-  }));
+  return rows.length;
 }
 
 /**
@@ -913,18 +894,6 @@ export async function ensureIndexes(
               configuredEntry?.indexName ??
               getVectorIndexName(model) ??
               `symbol_vec_${propName.toLowerCase()}`;
-
-            if (
-              options.deferredVectorIndex?.tableName === "Symbol" &&
-              options.deferredVectorIndex.indexName === indexName &&
-              options.deferredVectorIndex.property === propName
-            ) {
-              logger.debug(
-                `[index-lifecycle] Skipping finalizer-owned Symbol vector index '${indexName}'`,
-              );
-              result.skipped.push(indexName);
-              continue;
-            }
 
             if (indexExistsForTable(existing, "Symbol", indexName, "vector")) {
               logger.debug(

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import type { Connection } from "kuzu";
 import type { AppConfig } from "../../config/types.js";
+import { resolveSemanticEmbeddingModelPlan } from "../../config/semantic-embedding-model-plan.js";
 import {
   closeAndPublishSafeRebuildLadybugDb,
   closeLadybugDb,
@@ -26,6 +27,7 @@ import * as ladybugDb from "../../db/ladybug-queries.js";
 import {
   countInvalidSafeRebuildDependencyEndpoints,
   readSafeRebuildRepoMembershipCounts,
+  readSafeRebuildJinaVectorProbe,
   readSafeRebuildSymbolPointLookupSample,
   validateSafeRebuildCanonicalStrings,
 } from "../../db/ladybug-safe-rebuild.js";
@@ -40,12 +42,7 @@ import {
   type IndexProgress,
   type IndexResult,
 } from "../../indexer/indexer.js";
-import {
-  prepareReopenedJinaHnsw,
-  resolveConfiguredJinaHnswSpec,
-  validateReopenedJinaHnsw,
-  type ReopenedJinaHnswFinalizationResult,
-} from "../../indexer/jina-hnsw-finalization.js";
+import { runHnswRebuildCycle } from "../../indexer/hnsw-rebuild-cycle.js";
 import {
   waitForGraphIntegrityVerifier,
 } from "../../indexer/provider-first/background-graph-integrity-verifier.js";
@@ -55,9 +52,12 @@ import {
   createGraphIntegrityExpectationFromManifest,
 } from "../../indexer/provider-first/persisted-graph-integrity.js";
 import {
+  createVectorIndex,
   indexExistsForTable,
+  queryVectorIndexProbe,
   showIndexesStrict,
 } from "../../retrieval/index-lifecycle.js";
+import { EMBEDDING_MODELS } from "../../retrieval/model-mapping.js";
 import { buildFtsStoredProcQuery } from "../../retrieval/orchestrator.js";
 import { loadConfiguredAdapterPlugins } from "../../startup/plugins.js";
 import { getCurrentTimestamp } from "../../util/time.js";
@@ -70,6 +70,7 @@ import { normalizePath } from "../../util/paths.js";
 
 const EXTERNAL_OWNER_WARNING =
   "Precondition: no unsupported external LadybugDB owner may have the active database open; only SDL-MCP pidfile owners can be detected automatically.";
+const JINA_CODE_MODEL = "jina-embeddings-v2-base-code";
 
 export interface SafeRebuildRequest {
   options: IndexOptions;
@@ -95,7 +96,16 @@ export interface SafeRebuildResult {
   targetGraphDbPath: string;
   repoResults: Array<{ repoId: string; stats: IndexResult }>;
   validation: SafeRebuildCandidateValidation;
-  reopenedHnswCanary?: ReopenedJinaHnswFinalizationResult;
+  reopenedHnswCanary?: ReopenedHnswCanaryResult;
+}
+
+export interface ReopenedHnswCanaryResult {
+  model: string;
+  indexName: string;
+  efc: number;
+  createMs: number;
+  queryMs: number;
+  checkpointMs: number;
 }
 
 export type SafeRebuildLifecycleEvent =
@@ -132,10 +142,10 @@ export interface RunSafeRebuildParams {
   _beforeLineagePublicationForTesting?: () => void;
   /** @internal deterministic post-reopen failure seam. */
   _validateCandidateForTesting?: typeof validateSafeRebuildCandidate;
-  /** @internal deterministic post-reopen Jina HNSW preparation seam. */
-  _prepareReopenedJinaHnswForTesting?: typeof prepareReopenedJinaHnsw;
+  /** @internal deterministic post-reopen Jina HNSW build seam. */
+  _runReopenedHnswCanaryForTesting?: typeof runReopenedHnswCanary;
   /** @internal deterministic cold-reopen HNSW query-validation seam. */
-  _validateReopenedJinaHnswForTesting?: typeof validateReopenedJinaHnsw;
+  _validateColdReopenedJinaHnswForTesting?: typeof validateColdReopenedJinaHnsw;
   /** @internal deterministic per-repository storage failure seam. */
   _validateStorageAfterRepoForTesting?: (
     repoId: string,
@@ -383,6 +393,188 @@ async function validateFts(
   return indexName;
 }
 
+export function resolveSafeRebuildJinaVectorIndexName(
+  config: AppConfig,
+): string {
+  return (
+    config.semantic?.retrieval?.vector.indexes?.[JINA_CODE_MODEL]?.indexName ??
+    EMBEDDING_MODELS[JINA_CODE_MODEL].indexName
+  );
+}
+
+async function runReopenedHnswCanary(
+  config: AppConfig,
+): Promise<ReopenedHnswCanaryResult | undefined> {
+  const modelPlan = resolveSemanticEmbeddingModelPlan(config.semantic);
+  if (
+    !config.semantic?.enabled ||
+    config.semantic.retrieval?.vector.enabled === false ||
+    !modelPlan.symbolEmbeddingModels.includes(JINA_CODE_MODEL)
+  ) {
+    return undefined;
+  }
+
+  const modelInfo = EMBEDDING_MODELS[JINA_CODE_MODEL];
+  const indexName = resolveSafeRebuildJinaVectorIndexName(config);
+  const efc = config.semantic.retrieval?.vector.efc ?? 200;
+  let createMs = 0;
+  let checkpointMs = 0;
+  let ranCanary = false;
+
+  await runHnswRebuildCycle(
+    "safe-rebuild-reopened-jina-hnsw-build-pre",
+    "safe-rebuild-reopened-jina-hnsw-build-post",
+    () =>
+      withWriteConn(async (conn) => {
+        const probeVector = await readSafeRebuildJinaVectorProbe(conn);
+        if (probeVector === null) {
+          const symbols = await ladybugDb.assertPhysicalSymbolUniqueness(conn);
+          if (symbols.physicalTotal > 0) {
+            failCandidateValidation(
+              `non-empty candidate has ${symbols.physicalTotal} Symbol rows but no valid Jina vectors`,
+            );
+          }
+          return;
+        }
+        ranCanary = true;
+        if (
+          !Array.isArray(probeVector) ||
+          probeVector.length !== modelInfo.dimension ||
+          !probeVector.every(
+            (value) => typeof value === "number" && Number.isFinite(value),
+          )
+        ) {
+          failCandidateValidation(
+            `Post-reopen Jina HNSW build found an invalid ${modelInfo.vecProperty} probe vector`,
+          );
+        }
+
+        const requireExpectedIndex = async (): Promise<void> => {
+          const index = (await showIndexesStrict(conn)).find(
+            (candidate) =>
+              candidate.tableName === "Symbol" &&
+              candidate.name === indexName &&
+              candidate.type === "vector",
+          );
+          if (
+            !index ||
+            index.property !== modelInfo.vecProperty ||
+            index.status !== "healthy" ||
+            index.extensionLoaded === false
+          ) {
+            failCandidateValidation(
+              `required healthy Symbol vector index ${indexName} on ${modelInfo.vecProperty} is absent`,
+            );
+          }
+        };
+
+        const existingIndex = (await showIndexesStrict(conn)).find(
+          (candidate) =>
+            candidate.tableName === "Symbol" &&
+            candidate.name === indexName,
+        );
+        if (existingIndex) {
+          failCandidateValidation(
+            `Jina HNSW deferral failed: ${indexName} already exists after reopen`,
+          );
+        }
+
+        const startedAt = Date.now();
+        const created = await createVectorIndex(
+          conn,
+          "Symbol",
+          modelInfo.vecProperty,
+          indexName,
+          modelInfo.dimension,
+          efc,
+        );
+        createMs = Date.now() - startedAt;
+        if (!created) {
+          failCandidateValidation(
+            `Post-reopen Jina HNSW build could not create ${indexName}`,
+          );
+        }
+        await requireExpectedIndex();
+
+      }),
+    undefined,
+    (_phaseName, durationMs) => {
+      checkpointMs += durationMs;
+    },
+  );
+
+  // An all-empty candidate has no vector to probe and no HNSW mutation to time.
+  if (!ranCanary) return undefined;
+
+  return {
+    model: JINA_CODE_MODEL,
+    indexName,
+    efc,
+    createMs,
+    queryMs: 0,
+    checkpointMs,
+  };
+}
+
+async function validateColdReopenedJinaHnsw(
+  config: AppConfig,
+): Promise<number | undefined> {
+  const modelPlan = resolveSemanticEmbeddingModelPlan(config.semantic);
+  if (
+    !config.semantic?.enabled ||
+    config.semantic.retrieval?.vector.enabled === false ||
+    !modelPlan.symbolEmbeddingModels.includes(JINA_CODE_MODEL)
+  ) {
+    return undefined;
+  }
+
+  const modelInfo = EMBEDDING_MODELS[JINA_CODE_MODEL];
+  const indexName = resolveSafeRebuildJinaVectorIndexName(config);
+  const conn = await getLadybugConn();
+  const probeVector = await readSafeRebuildJinaVectorProbe(conn);
+  if (
+    !Array.isArray(probeVector) ||
+    probeVector.length !== modelInfo.dimension ||
+    !probeVector.every(
+      (value) => typeof value === "number" && Number.isFinite(value),
+    )
+  ) {
+    failCandidateValidation(
+      `Cold-reopened Jina HNSW validation found no valid ${modelInfo.vecProperty} probe vector`,
+    );
+  }
+  const index = (await showIndexesStrict(conn)).find(
+    (candidate) =>
+      candidate.tableName === "Symbol" &&
+      candidate.name === indexName &&
+      candidate.type === "vector",
+  );
+  if (
+    !index ||
+    index.property !== modelInfo.vecProperty ||
+    index.status !== "healthy" ||
+    index.extensionLoaded === false
+  ) {
+    failCandidateValidation(
+      `cold-reopened Symbol vector index ${indexName} is not healthy`,
+    );
+  }
+
+  const startedAt = Date.now();
+  const rowCount = await queryVectorIndexProbe(
+    conn,
+    indexName,
+    probeVector,
+  );
+  const queryMs = Date.now() - startedAt;
+  if (rowCount === 0) {
+    failCandidateValidation(
+      `Cold-reopened Jina HNSW query returned no rows from ${indexName}`,
+    );
+  }
+  return queryMs;
+}
+
 /**
  * Validate a candidate through the currently open, freshly reopened pool.
  * Callers must close the build pool before invoking this function.
@@ -484,19 +676,16 @@ export async function runSafeRebuild(
   params._beforeCandidateInitForTesting?.();
   const savedEnvironment = setCandidateGraphPath(request.targetGraphDbPath);
   const indexRepoImpl = params._indexRepoForTesting ?? indexRepo;
-  const jinaHnswSpec = resolveConfiguredJinaHnswSpec(params.config);
-  const jinaHnswFinalization = jinaHnswSpec
-    ? { spec: jinaHnswSpec, deferCreate: true as const }
-    : undefined;
   const validateCandidate =
     params._validateCandidateForTesting ?? validateSafeRebuildCandidate;
   const validateStorageAfterRepo =
     params._validateStorageAfterRepoForTesting ??
     validateSafeRebuildStorageAfterRepo;
-  const prepareReopenedJinaHnswImpl =
-    params._prepareReopenedJinaHnswForTesting ?? prepareReopenedJinaHnsw;
-  const validateReopenedJinaHnswImpl =
-    params._validateReopenedJinaHnswForTesting ?? validateReopenedJinaHnsw;
+  const runReopenedCanary =
+    params._runReopenedHnswCanaryForTesting ?? runReopenedHnswCanary;
+  const validateColdReopenedJinaHnswImpl =
+    params._validateColdReopenedJinaHnswForTesting ??
+    validateColdReopenedJinaHnsw;
   const repoResults: SafeRebuildResult["repoResults"] = [];
   let candidateOpen = false;
   let safeRebuildSession: SafeRebuildLadybugSession | null = null;
@@ -538,7 +727,7 @@ export async function runSafeRebuild(
         {
           includeTimings: Boolean(params.options.diagnostics),
           isolatedRebuild: true,
-          jinaHnswFinalization,
+          deferJinaVectorIndexCreate: true,
         },
       );
       // A COPY-built LadybugDB 0.18.1 Symbol table can lose earlier STRING
@@ -569,31 +758,11 @@ export async function runSafeRebuild(
       params.config,
       params.configPath,
       safeRebuildSession,
-      jinaHnswSpec
-        ? {
-            deferredVectorIndex: {
-              tableName: "Symbol",
-              indexName: jinaHnswSpec.indexName,
-              property: jinaHnswSpec.vectorProperty,
-            },
-          }
-        : undefined,
     );
     await params._afterCandidateOpenForTesting?.("reopen");
     params.onLifecycleEvent?.("candidate:reopened");
-    const reopenedHnswCanary = jinaHnswSpec
-      ? await prepareReopenedJinaHnswImpl({
-          spec: jinaHnswSpec,
-          selectedFullRepoIds: params.config.repos.map((repo) => repo.repoId),
-          requireAbsent: true,
-        })
-      : undefined;
-    if (reopenedHnswCanary?.catalogMutated) {
-      if (!reopenedHnswCanary.probe) {
-        throw new Error(
-          "Created Jina HNSW finalization result is missing its validation probe",
-        );
-      }
+    const reopenedHnswCanary = await runReopenedCanary(params.config);
+    if (reopenedHnswCanary) {
       await closeSafeRebuildBeforeReopen(safeRebuildSession);
       candidateOpen = false;
       params.onLifecycleEvent?.("candidate:closed-after-canary");
@@ -602,21 +771,12 @@ export async function runSafeRebuild(
         params.config,
         params.configPath,
         safeRebuildSession,
-        jinaHnswSpec
-          ? {
-              deferredVectorIndex: {
-                tableName: "Symbol",
-                indexName: jinaHnswSpec.indexName,
-                property: jinaHnswSpec.vectorProperty,
-              },
-            }
-          : undefined,
       );
       params.onLifecycleEvent?.("candidate:reopened-after-canary");
-      reopenedHnswCanary.queryMs = await validateReopenedJinaHnswImpl({
-        spec: reopenedHnswCanary,
-        probe: reopenedHnswCanary.probe,
-      });
+      const coldQueryMs = await validateColdReopenedJinaHnswImpl(params.config);
+      if (coldQueryMs !== undefined) {
+        reopenedHnswCanary.queryMs = coldQueryMs;
+      }
     }
     const validation = await validateCandidate(params.config);
     params.onLifecycleEvent?.("candidate:validated");

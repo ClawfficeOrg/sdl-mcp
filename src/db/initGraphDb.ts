@@ -53,12 +53,11 @@ export async function reopenSafeRebuildGraphDb(
   config: AppConfig,
   resolvedConfigPath: string,
   session: SafeRebuildLadybugSession,
-  options?: LadybugDbInitOptions,
 ): Promise<string> {
   const graphDbPath = resolveGraphDbPath(config, resolvedConfigPath);
   if (normalizePath(graphDbPath) !== session.dbPath) {
     throw new Error("Safe-rebuild reopen path does not match its family lease");
   }
-  await reopenSafeRebuildLadybugDb(session, graphDbOptions(config, options));
+  await reopenSafeRebuildLadybugDb(session, graphDbOptions(config));
   return normalizePath(graphDbPath);
 }

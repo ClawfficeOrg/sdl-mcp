@@ -27,10 +27,6 @@ const src = readFileSync(
   join(process.cwd(), "src/retrieval/index-lifecycle.ts"),
   "utf8",
 );
-const symbolEmbeddingSrc = readFileSync(
-  join(process.cwd(), "src/db/ladybug-symbol-embeddings.ts"),
-  "utf8",
-);
 
 // ---------------------------------------------------------------------------
 // IndexHealthResult structure
@@ -505,51 +501,17 @@ describe("createVectorIndex — current Kuzu API", () => {
     );
   });
 
-  it("returns validated logical rows from a fixed QUERY_VECTOR_INDEX probe", () => {
+  it("builds a validated literal probe for QUERY_VECTOR_INDEX", () => {
     const fnStart = src.indexOf("export async function queryVectorIndexProbe");
     assert.ok(fnStart !== -1, "queryVectorIndexProbe function must exist");
     const fnBody = src.slice(fnStart, fnStart + 1_400);
     assert.ok(fnBody.includes("validateIdentifier(indexName"));
     assert.ok(fnBody.includes("Number.isFinite"));
     assert.ok(fnBody.includes("QUERY_VECTOR_INDEX"));
-    assert.ok(fnBody.includes("node.symbolId AS symbolId"));
-    assert.ok(fnBody.includes("10, efs := 200"));
-    assert.ok(fnBody.includes("Promise<VectorIndexProbeRow[]>"));
-    assert.ok(fnBody.includes("return rows"));
-    assert.ok(fnBody.includes("row.symbolId"));
+    assert.ok(fnBody.includes("node.symbolId AS id"));
     assert.ok(fnBody.includes("row.distance"));
     assert.ok(fnBody.includes("near-zero"));
     assert.ok(src.includes("@param efc - HNSW ef_construction"));
-  });
-});
-
-describe("Symbol numeric-vector probes", () => {
-  it("pages a deterministic global probe by repoId then logical symbolId", () => {
-    const fnStart = symbolEmbeddingSrc.indexOf(
-      "export async function readDeterministicSymbolVectorProbe",
-    );
-    assert.ok(fnStart !== -1);
-    const fnBody = symbolEmbeddingSrc.slice(fnStart, fnStart + 3_000);
-    assert.ok(symbolEmbeddingSrc.includes("ORDER BY s.repoId, s.symbolId"));
-    assert.ok(symbolEmbeddingSrc.includes("SYMBOL_VECTOR_PROBE_PAGE_SIZE"));
-    assert.ok(fnBody.includes("repoId"));
-    assert.ok(fnBody.includes("symbolId"));
-    assert.ok(fnBody.includes("vector"));
-  });
-
-  it("exposes selected-repo counts and logical Symbol point lookup", () => {
-    assert.ok(
-      symbolEmbeddingSrc.includes(
-        "export async function readRepoSymbolVectorProbe",
-      ),
-    );
-    assert.ok(
-      symbolEmbeddingSrc.includes(
-        "export async function readSymbolNumericVector",
-      ),
-    );
-    assert.match(symbolEmbeddingSrc, /count\(s\) AS symbolCount/);
-    assert.match(symbolEmbeddingSrc, /symbolId: \$symbolId/);
   });
 });
 
