@@ -1155,6 +1155,11 @@ codex_hooks = true
 `;
 }
 
+function buildNodeHookCommand(hookPath: string): string {
+  const encodedPath = Buffer.from(hookPath, "utf8").toString("hex");
+  return `node -e "import(require('node:url').pathToFileURL(Buffer.from(process.argv[1],'hex').toString('utf8')).href)" ${encodedPath}`;
+}
+
 function buildCodexHooksJson(repoRoot: string): string {
   const sessionHookPath = normalizePath(
     join(repoRoot, ".codex", "hooks", "load-sdl-skill.mjs"),
@@ -1169,7 +1174,7 @@ function buildCodexHooksJson(repoRoot: string): string {
           hooks: [
             {
               type: "command",
-              command: `node "${sessionHookPath.replace(/"/g, '\\"')}"`,
+              command: buildNodeHookCommand(sessionHookPath),
               timeout: 5,
               statusMessage: "Loading SDL-MCP workflow skill",
             },
@@ -1182,7 +1187,7 @@ function buildCodexHooksJson(repoRoot: string): string {
           hooks: [
             {
               type: "command",
-              command: `node "${hookPath.replace(/"/g, '\\"')}"`,
+              command: buildNodeHookCommand(hookPath),
               timeout: 10,
               statusMessage: "Checking SDL-MCP tool policy",
             },

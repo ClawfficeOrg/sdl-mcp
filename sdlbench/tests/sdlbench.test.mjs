@@ -14,6 +14,7 @@ import {
   importTranscript,
   inspectCodexSessionSterility,
   runBenchmark,
+  trimSlash,
 } from "../src/sdlbench.mjs";
 import { prepareOpencodeSterileRuntime } from "../src/agents/opencode-runtime.mjs";
 import { serveViewer } from "../src/cli.mjs";
@@ -28,6 +29,13 @@ import { extractCursorSessionUsage } from "../src/agents/cursor.mjs";
 import { extractAiderSessionUsage } from "../src/agents/aider.mjs";
 import { extractOpencodeSessionUsage } from "../src/agents/opencode.mjs";
 import { runScalingCurve } from "../src/scaling.mjs";
+
+test("trimSlash stays linear on a non-matching slash suffix", () => {
+  const value = "/".repeat(40_000) + "x";
+  const started = performance.now();
+  assert.equal(trimSlash(value), value);
+  assert.ok(performance.now() - started < 250);
+});
 
 async function fakeTokenizer(root) {
   const path = join(root, "fake-tokenizer.mjs");

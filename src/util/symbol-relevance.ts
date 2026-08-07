@@ -11,12 +11,21 @@
  * Exported for testability.
  */
 export function splitCamelSubwords(s: string): string[] {
-  const words = s.match(
-    /[A-Z]+\d+[A-Z]+(?=[A-Z][a-z]|[^a-zA-Z0-9]|$)|[A-Z]{2,}(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|[A-Z]+|\d+/g,
-  );
-  return (words ?? [s])
-    .map((w) => w.toLowerCase())
-    .filter((w) => w.length >= 2);
+  const words = s
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .flatMap((part) => {
+      if (/^[A-Z]+\d+[A-Z]+$/.test(part)) return [part];
+      return part
+        .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+        .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+        .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+        .replace(/(\d)([a-zA-Z])/g, "$1 $2")
+        .split(" ");
+    });
+  return (words.length > 0 ? words : [s])
+    .map((word) => word.toLowerCase())
+    .filter((word) => word.length >= 2);
 }
 
 /**
@@ -115,13 +124,7 @@ export function computeRelevance(name: string, query: string): number {
   const triSim = trigramSimilarity(nl, ql);
   if (triSim >= 0.3) return 0.1 + 0.3 * triSim;
   // Weak: individual word overlap
-  const nameWords = (
-    nl.match(
-      /[A-Z]+\d+[A-Z]+(?=[A-Z][a-z]|[^a-zA-Z0-9]|$)|[A-Z]{2,}(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|[A-Z]+|\d+/gi,
-    ) ?? [nl]
-  )
-    .map((w) => w.toLowerCase())
-    .filter((w) => w.length >= 3);
+  const nameWords = splitCamelSubwords(name).filter((word) => word.length >= 3);
   const overlap = nameWords.filter((w) => ql.includes(w)).length;
   if (overlap > 0)
     return 0.1 + 0.15 * (overlap / Math.max(nameWords.length, 1));

@@ -20,6 +20,11 @@ describe("splitCamelSubwords", () => {
     assert.ok(parts.includes("request"), `Expected 'request' in ${JSON.stringify(parts)}`);
   });
 
+  it("handles digit-embedded acronyms without backtracking", () => {
+    assert.deepEqual(splitCamelSubwords("E2E"), ["e2e"]);
+    assert.deepEqual(splitCamelSubwords("HTTP2Server"), ["http", "server"]);
+  });
+
   it("filters out single-char words", () => {
     const parts = splitCamelSubwords("aB");
     assert.ok(parts.length <= 2);

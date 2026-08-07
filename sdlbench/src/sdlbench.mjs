@@ -1120,8 +1120,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function trimSlash(value) {
-  return String(value).replace(/\/+$/, "");
+export function trimSlash(value) {
+  const text = String(value);
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 47) end--;
+  return text.slice(0, end);
 }
 
 function countSessionTokens(task, variant, tokenizerCommand, sdlContext, outputOverride, tokenizerOptions = {}) {

@@ -18,7 +18,10 @@ describe("init agent enforcement", () => {
   let originalSDLConfigPath: string | undefined;
 
   beforeEach(() => {
-    tempRoot = join(tmpdir(), `sdl-mcp-init-enforce-test-${Date.now()}`);
+    tempRoot = join(
+      tmpdir(),
+      `sdl-mcp-init-%PATH%-$(echo injected)-${Date.now()}`,
+    );
     // The parent path intentionally contains a source-extension substring.
     tempDir = join(tempRoot, ".codex", "repo");
     mkdirSync(tempDir, { recursive: true });
@@ -306,10 +309,21 @@ describe("init agent enforcement", () => {
       readFileSync(join(tempDir, ".codex", "hooks.json"), "utf8"),
     );
     assert.strictEqual(hooks.hooks.SessionStart[0].hooks[0].timeout, 5);
-    assert.match(
+    assert.doesNotMatch(
       hooks.hooks.SessionStart[0].hooks[0].command,
-      /load-sdl-skill\.mjs/,
+      /%PATH%|\$\(/,
     );
+    const configuredHookRun = spawnSync(
+      hooks.hooks.SessionStart[0].hooks[0].command,
+      {
+        cwd: tempDir,
+        input: JSON.stringify({ hook_event_name: "SessionStart", cwd: tempDir }),
+        encoding: "utf8",
+        shell: true,
+      },
+    );
+    assert.strictEqual(configuredHookRun.status, 0, configuredHookRun.stderr);
+    assert.match(JSON.parse(configuredHookRun.stdout).systemMessage, /SDL-MCP/);
     assert.strictEqual(hooks.hooks.PreToolUse[0].matcher, ".*");
     assert.strictEqual(hooks.hooks.PostToolUse, undefined);
 
