@@ -14,6 +14,11 @@ export enum ErrorCode {
   NOT_FOUND = "NOT_FOUND",
   POLICY_ERROR = "POLICY_ERROR",
   RUNTIME_ERROR = "RUNTIME_ERROR",
+  PARSER_PROVENANCE_INCOMPLETE = "PARSER_PROVENANCE_INCOMPLETE",
+  PARSER_FILE_STATE_MISSING = "PARSER_FILE_STATE_MISSING",
+  PARSER_ENGINE_UNAVAILABLE = "PARSER_ENGINE_UNAVAILABLE",
+  PARSER_CONTRACT_MISMATCH = "PARSER_CONTRACT_MISMATCH",
+  PARSER_SYMBOL_REMAP = "PARSER_SYMBOL_REMAP",
 }
 
 export class ConfigError extends Error {
@@ -201,5 +206,125 @@ export class ScipSymbolMatchError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ScipSymbolMatchError";
+  }
+}
+
+export class ParserProvenanceIncompleteError extends IndexError {
+  readonly code = ErrorCode.PARSER_PROVENANCE_INCOMPLETE;
+  readonly recoveryAction = "rebuild";
+  readonly details: Record<string, string>;
+  constructor(
+    readonly repoRelativePath: string,
+    readonly requiredContract: string,
+  ) {
+    super(
+      "Parser provenance is incomplete for " +
+        repoRelativePath +
+        "; required contract " +
+        requiredContract +
+        ". Rebuild parser provenance.",
+    );
+    this.name = "ParserProvenanceIncompleteError";
+    this.details = {
+      repoRelativePath,
+      requiredContract,
+      recoveryAction: this.recoveryAction,
+    };
+  }
+}
+
+export class ParserFileStateMissingError extends IndexError {
+  readonly code = ErrorCode.PARSER_FILE_STATE_MISSING;
+  readonly recoveryAction = "rebuild";
+  readonly details: Record<string, string>;
+  constructor(
+    readonly repoRelativePath: string,
+    readonly requiredContract: string,
+  ) {
+    super(
+      "Parser file state is missing for " +
+        repoRelativePath +
+        "; required contract " +
+        requiredContract +
+        ". Rebuild parser provenance.",
+    );
+    this.name = "ParserFileStateMissingError";
+    this.details = {
+      repoRelativePath,
+      requiredContract,
+      recoveryAction: this.recoveryAction,
+    };
+  }
+}
+
+export class ParserEngineUnavailableError extends IndexError {
+  readonly code = ErrorCode.PARSER_ENGINE_UNAVAILABLE;
+  readonly recoveryAction = "rebuild";
+  readonly details: Record<string, string>;
+  constructor(
+    readonly repoRelativePath: string,
+    readonly requiredContract: string,
+  ) {
+    super(
+      "Parser engine is unavailable for " +
+        repoRelativePath +
+        "; required contract " +
+        requiredContract +
+        ". Rebuild parser provenance.",
+    );
+    this.name = "ParserEngineUnavailableError";
+    this.details = {
+      repoRelativePath,
+      requiredContract,
+      recoveryAction: this.recoveryAction,
+    };
+  }
+}
+
+export class ParserContractMismatchError extends IndexError {
+  readonly code = ErrorCode.PARSER_CONTRACT_MISMATCH;
+  readonly recoveryAction = "rebuild";
+  readonly details: Record<string, string>;
+  constructor(
+    readonly repoRelativePath: string,
+    readonly requiredContract: string,
+  ) {
+    super(
+      "Parser contract does not match for " +
+        repoRelativePath +
+        "; required contract " +
+        requiredContract +
+        ". Rebuild parser provenance.",
+    );
+    this.name = "ParserContractMismatchError";
+    this.details = {
+      repoRelativePath,
+      requiredContract,
+      recoveryAction: this.recoveryAction,
+    };
+  }
+}
+
+export class ParserSymbolRemapError extends IndexError {
+  readonly code = ErrorCode.PARSER_SYMBOL_REMAP;
+  readonly recoveryAction = "rebuild";
+  readonly details: Record<string, string>;
+  constructor(
+    readonly repoRelativePath: string,
+    readonly requiredContract: string,
+  ) {
+    super(
+      "Parser symbol remap failed for " +
+        repoRelativePath +
+        "; required contract " +
+        requiredContract +
+        ". Rebuild parser provenance.",
+    );
+    this.name = "ParserSymbolRemapError";
+    this.details = {
+      repoRelativePath,
+      requiredContract,
+      recoveryAction: this.recoveryAction,
+    };
   }
 }
