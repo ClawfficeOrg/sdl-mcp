@@ -73,10 +73,14 @@ export const manifest = {
     {
       extension: ".mylang",
       languageId: "mylang",
+      adapterIdentity: "my-lang-tree-sitter",
+      adapterContractVersion: "1",
     },
   ],
 };
 ```
+
+Declare both adapter identity fields for live-mutable files. The durable key includes plugin name, plugin package version, adapter identity, and adapter contract version. Contract-less plugins can still load and parse, but an index containing their files cannot publish complete provenance or a verified graph. Add the contract and safely rebuild the repository before live reconciliation.
 
 ## Adapter Implementation
 

@@ -1,13 +1,21 @@
 # Canonical Extractor Contract
 
-This contract defines parity between the TypeScript tree-sitter extractors and the Rust native Pass-1 extractor. Strict parity is the CI target: a residual difference must be classified as a compatibility fix, a canonical upgrade, or a defer-with-proof item.
+This contract defines structural parity between the TypeScript tree-sitter extractors and the Rust native Pass-1 extractor. Residual structural differences must be classified as compatibility fixes, canonical upgrades, or defer-with-proof items. Engine-owned identity differences are diagnostic across engines, while native disk-versus-content parsing remains a hard equality gate.
 
 ## Identity
 
-- `symbolId` stays the graph identity and is derived from repo, path, kind, name, and AST fingerprint.
+- `symbolId` stays the graph identity and is derived from repo, path, kind, name, and AST fingerprint within one parser identity contract.
+- `astFingerprint` and `symbolId` are reported explicitly by the cross-engine parity harness but do not require TypeScript/Rust equality.
+- Native disk parsing and native `parseContent` must produce equal `symbolId`, `astFingerprint`, ranges, signatures, enrichment, imports, calls, content hashes, and parse errors for the same source.
 - `nodeId` is a per-file source-owner identity used inside one extraction result to connect calls to their owning symbol. It is not compared literally across engines.
 - Older TS extractors may emit legacy path/name node IDs while Rust emits stable `name:startLine:startCol` IDs. The parity harness resolves both to semantic owner keys: `kind:name@startLine:startCol`.
 - If a raw `nodeId` maps to multiple symbols, the harness chooses the containing symbol with the smallest source range. Unresolved owners are reported as `unresolved:<callerNodeId>`.
+
+## Parser Identity
+
+Every live-mutable file records `engine`, `engineContract`, `adapterKey`, and `language`. The native contract is `native:1`; built-in TypeScript uses its explicit built-in adapter identity. A plugin adapter key deterministically includes plugin identity, plugin package version, adapter identity, and adapter contract version. Changing any component creates a new contract and requires a rebuild instead of cross-engine fallback.
+
+The selected engine remains authoritative for symbol identity, AST fingerprint, kind, name, range, signature, language, test-case facet, source-facing enrichment, imports, calls, and parse errors. Live reconciliation may preserve a durable ID only for a unique same-contract `kind:name:startLine:startCol` match.
 
 ## Caller Ownership
 

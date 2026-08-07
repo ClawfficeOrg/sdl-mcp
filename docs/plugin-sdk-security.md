@@ -579,6 +579,7 @@ ssh root@vm "sdl-mcp index"
 // - Field types correct
 // - API version compatible
 // - Adapter extensions unique
+// - Adapter identity fields are strings when provided
 ```
 
 **2. Adapter Validation**:
@@ -590,6 +591,8 @@ ssh root@vm "sdl-mcp index"
 // - factory function is callable
 // - Adapter implements LanguageAdapter interface
 ```
+
+For live-mutable files, SDL-MCP binds parser provenance to the plugin name, plugin package version, adapter identity, and adapter contract version. A changed or missing component is a contract mismatch, not a reason to run another parser. Preserve the graph and use stopped safe rebuild recovery after installing the intended plugin version.
 
 **3. Runtime Checks**:
 

@@ -44,7 +44,7 @@ flowchart TD
     Editor["Editor (VSCode, etc.)"]
     Push["sdl.buffer.push<br/>(full buffer content)"]
     Overlay["Overlay Store (in-memory)"]
-    Parse["Background AST Parse<br/>(tree-sitter)"]
+    Parse["Engine-affine parse<br/>(recorded native or adapter contract)"]
     Cache["Draft Symbol Cache"]
 
     subgraph "MCP Tool Query"
@@ -85,10 +85,18 @@ flowchart TD
 ### How It Works
 
 1. **Buffer Push**: Your editor extension sends the full file content on every keystroke (debounced) via `sdl.buffer.push`.
-2. **Background Parse**: The overlay store queues a tree-sitter parse to extract symbols from the draft content.
+2. **Background Parse**: The overlay store queues a parse with the durable file's recorded contract, or selects one after provenance preflight for a genuinely new file.
 3. **Overlay Merge**: When any tool queries the database (search, getCard, slice.build), the overlay symbols are merged on top of the durable DB results. Draft symbols shadow their durable counterparts.
-4. **Checkpoint**: On file save or manual checkpoint (`sdl.buffer.checkpoint`), the overlay is written to the durable LadybugDB graph.
+4. **Checkpoint**: On file save or manual checkpoint (`sdl.buffer.checkpoint`), SDL-MCP reconciles the overlay through the owned graph-integrity revision.
 5. **Reconciliation**: A background reconciler ensures overlay and durable state converge, cleaning up stale drafts.
+
+### Engine Affinity and Recovery
+
+Full indexing stores one `FileParserState` for each indexed file and one exact `RepoParserState` coverage record for the verified graph version and revision. Existing files always reuse that recorded engine, engine contract, adapter key, and language. A genuinely new file selects a contract only after repository provenance preflight succeeds.
+
+The native engine parses live content through the in-memory `parseContent` capability and the `native:1` identity contract. SDL-MCP never falls back from a recorded native contract to TypeScript, or between plugin adapters, because that could change symbol IDs, AST fingerprints, and ranges. Contract-bearing plugins identify live parsing with the plugin name, package version, adapter identity, and adapter contract version.
+
+Saved-file reconciliation atomically commits file, symbol, edge, parser-provenance, manifest, and revision changes in one foreground transaction. A separate background transaction publishes complete parser coverage and `graphIntegrityState: "verified"` together only after exact coverage and graph checks pass. Missing provenance, unavailable engines, contract mismatches, remap ambiguity, or phase failures stop the mutation; preserve the database and run a stopped `index --force --safe-rebuild <absolute-new-path>` for pre-provenance or failed graphs.
 
 ### What Gets Overlaid
 

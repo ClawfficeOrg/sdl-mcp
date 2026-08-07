@@ -12,15 +12,16 @@ Provider-first indexing is the new large-repository path that plans SCIP and LSP
 
 ### Native Rust Engine (Default)
 
-A high-performance, multi-threaded Rust addon compiled via `napi-rs`. This is the **default engine** (`indexing.engine` defaults to `"rust"`). It handles pass-1 symbol extraction at near-native speed. Falls back to the TypeScript engine automatically if the native addon is unavailable.
+A high-performance, multi-threaded Rust addon compiled via `napi-rs`. This is the **default engine** (`indexing.engine` defaults to `"rust"`). It handles pass-1 symbol extraction at near-native speed. A full index may select the TypeScript engine when the addon is unavailable before parser provenance is established.
 
 - Multi-threaded file parsing
+- In-memory live parsing through `parseContent` with the `native:1` identity contract
 - ~18MB DLL on Windows
 - Distributed as per-platform npm packages (`sdl-mcp-native`)
 
 ### Tree-sitter TypeScript Engine (Fallback)
 
-A pure Node.js engine using tree-sitter grammars for AST parsing. This is the **fallback engine** used when the native Rust addon is unavailable. It works everywhere Node.js runs.
+A pure Node.js engine using tree-sitter grammars for AST parsing. This is the **full-index fallback engine** used when the native Rust addon is unavailable. It works everywhere Node.js runs.
 
 Select explicitly via config:
 
@@ -37,6 +38,10 @@ default. That avoids native LadybugDB access violations seen when parser work
 overlaps with background batch commits, at the cost of slower pass-1 throughput.
 Use `SDL_MCP_PASS1_STABLE_DB_WRITES=0` only when intentionally benchmarking the
 faster overlapped path.
+
+### Engine Affinity After Indexing
+
+Every verified graph records the parser identity for each file and exact repository coverage for the same graph version and revision. Live drafts and saved-file reconciliation reuse that identity; SDL-MCP does not cross-fallback between native, built-in TypeScript, or plugin parsers after provenance exists. A missing or incompatible contract fails closed and requires a stopped safe rebuild.
 
 ---
 
@@ -246,8 +251,12 @@ factory; Java/Kotlin and C/C++ use this pattern today.
 
 Runtime plugins remain an overlay, not entries in the built-in list. A plugin
 can add an extension or override a built-in extension without needing a fake
-grammar or pass-2 registration. Validate a change with the Language Support
-parity test, adapter/plugin tests, harness and engine/native parity, then run
+grammar or pass-2 registration. Live-mutable plugins must declare an adapter
+identity and adapter contract version; legacy contract-less plugins remain
+loadable for parsing, but an index containing their files cannot publish complete
+parser provenance or a verified graph.
+Validate a change with the Language Support parity test, adapter/plugin tests,
+harness and engine/native parity, then run
 `npm run docs:language-support:check`.
 
 ---

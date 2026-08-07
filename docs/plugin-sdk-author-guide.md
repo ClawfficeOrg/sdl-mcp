@@ -104,6 +104,8 @@ export const manifest = {
     {
       extension: ".mylang",
       languageId: "mylang",
+      adapterIdentity: "my-lang-tree-sitter",
+      adapterContractVersion: "1",
     },
   ],
 };
@@ -123,6 +125,8 @@ export default { manifest, createAdapters };
 ```
 
 `structuralMatcher` is optional. Provide it only when your adapter returns a real tree-sitter tree and can compile grammar-native queries; SDL-MCP then enables `search.edit` `targeting:"identifier"` and `targeting:"structural"` for your plugin language.
+
+`adapterIdentity` and `adapterContractVersion` are required when the plugin must support live-mutable files. SDL-MCP combines them with `manifest.name` and `manifest.version` to create the durable adapter key. A legacy plugin may omit them for load and parse compatibility, but an index containing those files cannot publish complete parser provenance or a verified graph.
 
 ## Creating a Plugin
 
@@ -213,6 +217,8 @@ export const manifest = {
     {
       extension: ".mylang",
       languageId: "mylang",
+      adapterIdentity: "my-lang-tree-sitter",
+      adapterContractVersion: "1",
     },
   ],
 };

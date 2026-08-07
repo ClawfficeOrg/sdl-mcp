@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+
+- **Engine-affine live parsing and graph integrity**: Added the native `parseContent` `native:1` contract, persisted exact file/repository parser provenance, and made live drafts and saved-file reconciliation reuse the engine that created durable symbols without cross-engine fallback. Graph verification and complete parser coverage now publish together for the same version/revision, while phase failures and contract mismatches fail closed. Migration 25 creates the provenance schema, but pre-provenance indexes require SDL-MCP to be stopped and rebuilt with `sdl-mcp index --force --safe-rebuild <absolute-new-path>`.
 - **Cross-platform HNSW benchmark fixtures**: Derived benchmark source paths with Node's platform-native resolver so parser tests validate absolute paths on both Windows and Ubuntu.
 - **Code-scanning hardening**: Replaced polynomial regex paths with linear processing and encoded generated Codex hook paths before shell execution.
 

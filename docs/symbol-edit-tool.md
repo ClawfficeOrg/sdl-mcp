@@ -43,11 +43,13 @@ Apply rejects stale symbols, stale files, stale canonical target identities, and
 
 For TypeScript, TSX, JavaScript, and JSX, preview uses the TypeScript-family Tree-sitter parser before and after the edit. For other indexed languages, V1 permits only whole-symbol and adjacent insert operations when the language adapter can parse before and after the edit. A parse-after failure rejects the plan before any file or draft update. Apply rechecks the symbol snapshot and file or draft preconditions before writing.
 
+Preview validation does not choose the durable graph parser. After a saved write, live reconciliation loads the file's recorded parser contract and uses that engine without cross-engine fallback. Missing provenance, an unavailable engine, a contract mismatch, or ambiguous symbol remapping leaves graph reconciliation unapplied and requires the recovery guidance returned by the tool.
+
 If a saved-file write succeeds but graph or live-index sync fails, SDL-MCP keeps the file write and returns the existing `indexUpdate.applied = false` guidance instead of rolling the file back.
 
 ## Graph integrity after a saved edit
 
-A successful saved-file apply commits the graph patch, its independently constructed manifest changes, and one new graph-integrity revision in the same LadybugDB transaction. The edit returns after that commit. A repository-owned worker then verifies the exact revision from a stable read-only snapshot and publishes the result through a Version-and-revision compare-and-set.
+A successful saved-file apply atomically commits file, symbol, edge, parser-provenance, manifest, and one owned graph-integrity revision in one foreground LadybugDB transaction. A repository-owned worker then verifies the exact graph and parser coverage from a stable read-only snapshot and publishes complete `RepoParserState` coverage together with the verified graph state.
 
 Call `sdl.repo.status` after the edit when your task needs verification state. Read `graphIntegrityVersionId` and `graphIntegrityRevision` as the current manifest ownership, and read `graphIntegrityVerifiedRevision` only as the most recently verified revision. A null or older verified revision does not make a current manifest-backed graph unavailable.
 

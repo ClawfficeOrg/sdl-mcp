@@ -152,7 +152,7 @@ Per-file, parallelizable. Each file produces:
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
 flowchart TD
-    Source["Source file<br/>.ts, .py, .go, ..."] e1@--> Engine["Indexer engine<br/>Rust native or Tree-sitter fallback"]
+    Source["Source file<br/>.ts, .py, .go, ..."] e1@--> Engine["Selected parser contract<br/>Rust native or language adapter"]
     Engine e2@--> Symbols["Symbols<br/>name, kind, range, signature"]
     Engine e3@--> Imports["Imports<br/>module, alias, source"]
     Engine e4@--> Calls["Calls<br/>raw identifiers"]
@@ -173,6 +173,10 @@ flowchart TD
 - `typescript.ts` (shared by TS/JS), `python.ts`, `go.ts`, `java.ts`, `rust.ts`, `csharp.ts`, `c.ts`, `cpp.ts`, `php.ts`, `kotlin.ts`, `shell.ts`
 
 **Native Rust engine** (`native/src/extract/`) — optional, mirrors all TS adapters at near-native speed via napi-rs.
+
+Pass 1 persists a `FileParserState` beside each file row in the same accumulator transaction. The state records the engine, engine contract, adapter key, and language that created the file's canonical symbols. The native `parseContent` entry point uses the same `native:1` identity contract as disk parsing.
+
+Full verification checks exact file/parser-state membership and binds `RepoParserState` coverage to the graph version and revision. Live parsing reuses the recorded contract and never cross-falls back, so symbol IDs and AST fingerprints remain engine-affine.
 
 ### Semantic test-case facets
 
@@ -233,7 +237,7 @@ SDL-MCP uses LadybugDB (Kuzu engine, npm alias `kuzu`) as the sole persistence l
 
 An existing normal family opens only when its receipt matches the exact Ladybug driver and storage versions, canonical primary identity, and streaming SHA-256 inventory of the primary plus known persistent WAL. Old-format, missing, stale, copied, moved, or replaced families fail before native construction. Fresh normal creation, safe rebuild, qualification clones, and externally fingerprint-validated clones use separate capabilities; callers cannot select a generic lineage purpose or write receipts directly. Safe rebuild reserves the primary name, rechecks the whole family before reopen and after final close, then publishes the receipt atomically while the lease remains held.
 
-**Schema** (`src/db/ladybug-schema.ts`) — idempotent DDL and versioned migrations run on startup. Schema version 24 adds semantic test-case metadata to symbol and version records, but the nullable migration cannot backfill synthetic symbols from already indexed source. Stop SDL-MCP and build a fresh graph with `sdl-mcp index --force --safe-rebuild <absolute-new-path>` after upgrading; use a new absolute candidate path rather than rebuilding the active graph in place.
+**Schema** (`src/db/ladybug-schema.ts`) — idempotent DDL and versioned migrations run on startup. Migration 24 adds semantic test-case metadata, and migration 25 creates parser-provenance storage. Neither migration can reconstruct canonical symbols or parser identity for an existing graph. Stop SDL-MCP and build a fresh graph with `sdl-mcp index --force --safe-rebuild <absolute-new-path>` after upgrading; use a new absolute candidate path rather than rebuilding the active graph in place.
 
 **Connection pool:**
 
@@ -289,6 +293,8 @@ Read pool enables concurrent multi-session reads (4-6 MCP sessions). Write seria
 | **SchemaVersion** | version, appliedAt                                                                                       |
 | **GraphIntegrityFileState** | stateId, repoId, fileId, relPath, symbolCount, digest, filelessReferencesJson |
 | **GraphIntegrityFilelessState** | stateId, repoId, symbolId, canonicalSymbolJson, referenceCount |
+| **FileParserState** | stateId, repoId, fileId, engine, engineContract, adapterKey, language |
+| **RepoParserState** | repoId, coverageState, graphVersionId, graphRevision, coverageDigest |
 
 **Semantic nodes:**
 
@@ -308,7 +314,7 @@ Read pool enables concurrent multi-session reads (4-6 MCP sessions). Write seria
 | **Memory**         | memoryId, repoId, type, title, content, tags, createdAt   |
 | **UsageSnapshot**  | snapshotId, sessionId, totalSdlTokens, totalRawEquivalent |
 
-**Edge tables (14):**
+**Edge tables (18):**
 
 | Edge Table               | From → To          | Key Fields                                         |
 | :----------------------- | :----------------- | :------------------------------------------------- |
@@ -328,6 +334,8 @@ Read pool enables concurrent multi-session reads (4-6 MCP sessions). Write seria
 | **SUMMARY_OF_FILE**      | FileSummary → File | —                                                  |
 | **GRAPH_INTEGRITY_FILE_STATE_IN_REPO** | GraphIntegrityFileState → Repo | —                              |
 | **GRAPH_INTEGRITY_FILELESS_STATE_IN_REPO** | GraphIntegrityFilelessState → Repo | —                      |
+| **FILE_PARSER_STATE_IN_REPO** | FileParserState → Repo | —                                              |
+| **REPO_PARSER_STATE_IN_REPO** | RepoParserState → Repo | —                                              |
 
 ### Query Modules
 
@@ -348,16 +356,17 @@ Each module owns a specific domain of queries:
 | `ladybug-slices.ts`            | Slice handles, lease expiry                                                         |
 | `ladybug-memories.ts`          | Memory nodes, symbol/file links, staleness                                          |
 | `ladybug-file-summaries.ts`    | FileSummary nodes — file-level summaries with searchText and embeddings             |
-| `ladybug-graph-integrity.ts`   | File and fileless manifest rows, revision ownership checks, and atomic patch helpers |
+| `ladybug-graph-integrity.ts`   | File and fileless manifest rows and revision ownership helpers                       |
+| `ladybug-parser-provenance.ts` | File/repository parser identity, exact coverage, and publication                     |
 | `ladybug-usage.ts`             | Token usage tracking, savings metrics                                               |
 
 ### Persisted graph integrity ownership
 
-Fresh full indexing and ordinary incremental indexing build file and fileless manifest rows from independent index output and verify them synchronously. A populated active graph rejects destructive full refreshes; whole-database recovery builds all configured repositories in a fresh candidate and validates it after reopen. `DerivedState.graphIntegrityManifestEstablished` records successful manifest replacement, including a valid empty manifest, so a saved-file edit can distinguish an omitted symbol-free file from missing legacy manifest state. A saved-file edit validates the affected trusted file state, then uses one serialized foreground transaction to commit the graph patch, canonical dependency-placeholder rows, file-manifest changes, fileless-manifest changes, and one monotonic `DerivedState.graphIntegrityRevision`. The transaction marks the exact Version and revision as `verifying`, preserves `graphIntegrityVerifiedRevision`, and lets the edit return immediately after the commit.
+Fresh full indexing and ordinary incremental indexing build file and fileless manifest rows from independent index output and verify them synchronously. A populated active graph rejects destructive full refreshes; whole-database recovery builds all configured repositories in a fresh candidate and validates it after reopen. `DerivedState.graphIntegrityManifestEstablished` records successful manifest replacement, including a valid empty manifest, so a saved-file edit can distinguish an omitted symbol-free file from missing legacy manifest state. A saved-file edit validates graph integrity and complete parser provenance, then atomically commits file, symbol, edge, parser-provenance, manifest, and revision changes in one foreground transaction. Each phase retains exact Version/revision ownership, and any failure marks the revision failed.
 
 Each repository owns at most one running background verifier and one coalesced latest wake. The verifier leases an exclusive read connection, opens one read-only transaction, and reads both manifest tables plus canonical Symbol rows in deterministic pages from the same stable snapshot. The verifier closes the snapshot and connection before it publishes a result.
 
-The publication compare-and-set requires the captured Version and revision to remain current. A successful check publishes `verified` and advances `graphIntegrityVerifiedRevision`; a failed check publishes `failed` and preserves the last verified revision. If a newer Version or revision owns the repository, the compare-and-set performs no write, and the coalesced wake leaves the newer owner responsible for verification.
+The publication compare-and-set requires the captured Version and revision to remain current. A successful check publishes complete `RepoParserState` coverage and `verified` graph state in one transaction, then advances `graphIntegrityVerifiedRevision`; a failed check publishes `failed` and preserves the last verified revision. If a newer Version or revision owns the repository, the compare-and-set performs no write, and the coalesced wake leaves the newer owner responsible for verification.
 
 Startup recovery scans persisted `verifying` rows after migrations and repository bootstrap, then requeues each exact Version and revision. Foreground no-op checks also recover a durable pending revision when its in-process wakeup was lost. Full-index candidate finalization, unregister, database close, and shutdown first block new verifier admission, then cancel active work between page queries and wait for the snapshot connection to close before they swap, delete, or close graph state.
 
@@ -366,7 +375,7 @@ Startup recovery scans persisted `verifying` rows after migrations and repositor
 ```mermaid
 sequenceDiagram
     accTitle: Saved-file graph integrity verification lifecycle
-    accDescr: A foreground edit commits graph and manifest ownership atomically and returns. A background verifier checks one exclusive snapshot, publishes only for the exact Version and revision, recovers pending work at startup, reports current and verified state, and closes its snapshot before destructive lifecycle work.
+    accDescr: A foreground edit atomically commits graph, parser provenance, manifests, and one owned revision. A separate background transaction publishes parser coverage and graph verification together only for that Version and revision. A background verifier checks one exclusive snapshot, publishes parser coverage and graph verification together only for the exact Version and revision, recovers pending work at startup, reports current and verified state, and closes its snapshot before destructive lifecycle work.
     participant C as Caller
     participant F as Foreground edit
     participant D as LadybugDB
@@ -375,16 +384,16 @@ sequenceDiagram
     participant S as repo.status
 
     C->>F: Apply saved-file edit
-    F->>D: Commit graph, file and fileless manifests, revision N, state verifying
-    D-->>F: Atomic commit succeeds
-    F-->>C: Return immediately
+    F->>D: Commit graph, provenance, manifests, revision N, state verifying
+    D-->>F: Atomic foreground transaction succeeds
+    F-->>C: Return after commit
     F->>V: Coalesce wake for Version V and revision N
     V->>D: Lease exclusive connection and begin read-only snapshot
     D-->>V: Stable manifests and canonical graph pages
     V->>D: Close snapshot and release connection
     alt Version V and revision N still own current state
         alt Verification succeeds
-            V->>D: CAS state verified and verified revision N
+            V->>D: Publish complete parser coverage and verified revision N together
         else Verification fails
             V->>D: CAS state failed and preserve verified revision
         end
@@ -541,6 +550,8 @@ flowchart TD
 ## Live Indexing
 
 The live index system (`src/live-index/`) provides draft-aware code intelligence for unsaved editor buffers.
+
+Existing files parse with their durable `FileParserState` contract. New files select a contract only after the repository's `RepoParserState` matches the verified graph. Typed provenance, engine, contract, and symbol-remap errors fail before mutation and direct pre-provenance graphs to stopped safe rebuild recovery.
 
 ```mermaid
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
