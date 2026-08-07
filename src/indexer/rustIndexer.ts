@@ -38,6 +38,13 @@ interface NativeFileInput {
   language: string;
 }
 
+export interface NativeContentInput {
+  repoId: string;
+  relPath: string;
+  language: string;
+  content: string;
+}
+
 interface NativeRange {
   startLine: number;
   startCol: number;
@@ -140,6 +147,8 @@ interface NativeProcess {
 
 interface NativeAddon {
   parseFiles(files: NativeFileInput[], threadCount: number): NativeParsedFile[];
+  parseContent?: (input: NativeContentInput) => NativeParsedFile;
+  parserIdentityContractVersion?: () => number;
   parseFilesAsync?(files: NativeFileInput[], threadCount: number): Promise<NativeParsedFile[]>;
   hashContentNative(content: string): string;
   generateSymbolIdNative(
@@ -175,6 +184,27 @@ let nativeDisableLogged = false;
 let nativeDisabledForSession = false;
 let nativeAddonSourcePath: string | null = null;
 let nativeAddonReason = "not attempted";
+
+export const EXPECTED_NATIVE_PARSER_IDENTITY_CONTRACT_VERSION = 1;
+
+export type NativeContentUnavailableReason =
+  | "addon-unavailable"
+  | "parse-content-missing"
+  | "contract-version-missing"
+  | "contract-version-mismatch";
+
+export type NativeContentParserCapability =
+  | { available: true; contract: "native:1" }
+  | {
+      available: false;
+      reason: NativeContentUnavailableReason;
+      expectedContract: "native:1";
+      reportedContract?: number;
+    };
+
+export type NativeContentParseResult =
+  | { available: true; contract: "native:1"; result: RustParseResult }
+  | Extract<NativeContentParserCapability, { available: false }>;
 
 function isCompatibleNativeAddon(addon: unknown): addon is NativeAddon {
   if (!addon || typeof addon !== "object") return false;
@@ -221,6 +251,49 @@ function loadRustNativeAddon(): NativeAddon | null {
 
 // --- Public API ---
 
+export function _resetRustIndexerForTests(): void {
+  nativeDisableLogged = false;
+  nativeDisabledForSession = false;
+  nativeAddonSourcePath = null;
+  nativeAddonReason = "not attempted";
+}
+
+export function getNativeContentParserCapability(): NativeContentParserCapability {
+  const addon = loadRustNativeAddon();
+  if (!addon) {
+    return {
+      available: false,
+      reason: "addon-unavailable",
+      expectedContract: "native:1",
+    };
+  }
+  if (typeof addon.parseContent !== "function") {
+    return {
+      available: false,
+      reason: "parse-content-missing",
+      expectedContract: "native:1",
+    };
+  }
+  if (typeof addon.parserIdentityContractVersion !== "function") {
+    return {
+      available: false,
+      reason: "contract-version-missing",
+      expectedContract: "native:1",
+    };
+  }
+
+  const reportedContract = addon.parserIdentityContractVersion();
+  if (reportedContract !== EXPECTED_NATIVE_PARSER_IDENTITY_CONTRACT_VERSION) {
+    return {
+      available: false,
+      reason: "contract-version-mismatch",
+      expectedContract: "native:1",
+      reportedContract,
+    };
+  }
+  return { available: true, contract: "native:1" };
+}
+
 /**
  * Check if the native Rust indexer is available.
  */
@@ -264,6 +337,30 @@ export interface RustParseResult {
   imports: ExtractedImport[];
   calls: ExtractedCall[];
   parseError: string | null;
+}
+
+export function parseContentRust(
+  input: NativeContentInput,
+): NativeContentParseResult {
+  const capability = getNativeContentParserCapability();
+  if (!capability.available) return capability;
+
+  const addon = loadRustNativeAddon();
+  if (!addon?.parseContent) {
+    return {
+      available: false,
+      reason: "addon-unavailable",
+      expectedContract: "native:1",
+    };
+  }
+
+  return {
+    available: true,
+    contract: "native:1",
+    result: mapNativeResult(
+      addon.parseContent({ ...input, relPath: normalizePath(input.relPath) }),
+    ),
+  };
 }
 
 // Native extraction supports all languages with dedicated Rust extractors.
