@@ -2,6 +2,12 @@ import type {
   LanguageAdapter,
   StructuralMatcherDescriptor,
 } from "./LanguageAdapter.js";
+import { ParserAdapterContractError } from "../../domain/errors.js";
+import {
+  BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+  createPluginParserContract,
+  type ParserContract,
+} from "../parser-provenance.js";
 import { loadPluginsFromConfig, getPluginAdapters } from "./plugin/index.js";
 import { logger } from "../../util/logger.js";
 import { LANGUAGE_SUPPORT } from "../language-support.js";
@@ -14,6 +20,7 @@ interface AdapterEntry {
   adapter: LanguageAdapter | null;
   source: "builtin" | "plugin";
   pluginName?: string;
+  parserContract?: ParserContract;
   structuralMatcher?: StructuralMatcherDescriptor;
 }
 
@@ -42,6 +49,10 @@ function loadBuiltInAdapters(): void {
         factory: support.adapterFactory,
         adapter: null,
         source: "builtin",
+        parserContract:
+          support.language === "typescript"
+            ? BUILTIN_TYPESCRIPT_PARSER_CONTRACT
+            : undefined,
         ...(support.structuralMatcher
           ? { structuralMatcher: support.structuralMatcher }
           : {}),
@@ -90,6 +101,13 @@ async function loadPlugins(
           adapter: null,
           source: "plugin",
           pluginName: plugin.manifest.name,
+          parserContract: createPluginParserContract({
+            pluginIdentity: plugin.manifest.name,
+            pluginPackageVersion: plugin.manifest.version,
+            adapterIdentity: adapter.adapterIdentity,
+            adapterContractVersion: adapter.adapterContractVersion,
+            language: adapter.languageId,
+          }),
           ...(adapter.structuralMatcher
             ? { structuralMatcher: adapter.structuralMatcher }
             : {}),
@@ -142,6 +160,10 @@ function registerAdapter(
     adapter: null,
     source,
     pluginName,
+    parserContract:
+      source === "builtin" && languageId === "typescript"
+        ? BUILTIN_TYPESCRIPT_PARSER_CONTRACT
+        : undefined,
     ...(structuralMatcher ? { structuralMatcher } : {}),
   });
 }
@@ -227,6 +249,26 @@ function getAdapterInfo(ext: string): {
       };
 }
 
+function getAdapterParserContract(
+  extension: string,
+): ParserContract | undefined {
+  return getEntryForExtension(extension)?.parserContract;
+}
+
+function requireLiveMutableParserContract(
+  extension: string,
+  repoRelativePath: string,
+): ParserContract {
+  const contract = getAdapterParserContract(extension);
+  if (!contract) {
+    throw new ParserAdapterContractError(
+      repoRelativePath,
+      "declared parser adapter contract",
+    );
+  }
+  return contract;
+}
+
 function resetRegistry(): void {
   ADAPTER_REGISTRY.clear();
   builtInAdaptersLoaded = false;
@@ -244,5 +286,7 @@ export {
   loadPlugins,
   loadPluginsSync,
   getAdapterInfo,
+  getAdapterParserContract,
+  requireLiveMutableParserContract,
   resetRegistry,
 };

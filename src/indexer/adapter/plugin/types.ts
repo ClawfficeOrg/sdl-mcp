@@ -18,6 +18,8 @@ export const PluginManifestSchema = z.object({
     z.object({
       extension: z.string().min(1),
       languageId: z.string().min(1),
+      adapterIdentity: z.string().min(1).optional(),
+      adapterContractVersion: z.string().min(1).optional(),
     }),
   ),
 });
@@ -27,6 +29,8 @@ export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 export interface PluginAdapter {
   extension: string;
   languageId: string;
+  adapterIdentity?: string;
+  adapterContractVersion?: string;
   factory: () => LanguageAdapter;
   structuralMatcher?: StructuralMatcherDescriptor;
 }

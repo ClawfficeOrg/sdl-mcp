@@ -67,6 +67,10 @@ describe("Plugin Loader", () => {
       assert.strictEqual(result.plugin.manifest.name, "valid-plugin");
       assert.strictEqual(result.errors.length, 0);
       assert.ok(isPluginLoaded(pluginPath));
+
+      const [adapter] = await getPluginAdapters(result.plugin);
+      assert.equal(adapter?.adapterIdentity, undefined);
+      assert.equal(adapter?.adapterContractVersion, undefined);
     });
 
     it("should fail to load non-existent plugin", async () => {
@@ -275,7 +279,12 @@ describe("Plugin Loader", () => {
           version: "1.0.0",
           apiVersion: "${getHostApiVersion()}",
           adapters: [
-            { extension: ".test1", languageId: "test-lang1" },
+            {
+              extension: ".test1",
+              languageId: "test-lang1",
+              adapterIdentity: "lang-one-adapter",
+              adapterContractVersion: "2"
+            },
             { extension: ".test2", languageId: "test-lang2" }
           ]
         };
@@ -323,6 +332,10 @@ describe("Plugin Loader", () => {
       assert.strictEqual(adapters.length, 2);
       assert.strictEqual(adapters[0].extension, ".test1");
       assert.strictEqual(adapters[1].extension, ".test2");
+      assert.equal(adapters[0]?.adapterIdentity, "lang-one-adapter");
+      assert.equal(adapters[0]?.adapterContractVersion, "2");
+      assert.equal(adapters[1]?.adapterIdentity, undefined);
+      assert.equal(adapters[1]?.adapterContractVersion, undefined);
     });
 
     it("should throw error for invalid adapter structure", async () => {

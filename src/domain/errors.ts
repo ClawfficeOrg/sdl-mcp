@@ -9,6 +9,7 @@ export enum ErrorCode {
   CONFIG_ERROR = "CONFIG_ERROR",
   DATABASE_ERROR = "DATABASE_ERROR",
   INDEX_ERROR = "INDEX_ERROR",
+  PARSER_ADAPTER_CONTRACT_ERROR = "PARSER_ADAPTER_CONTRACT_ERROR",
   VALIDATION_ERROR = "VALIDATION_ERROR",
   NOT_FOUND = "NOT_FOUND",
   POLICY_ERROR = "POLICY_ERROR",
@@ -40,10 +41,26 @@ export class StorageIntegrityError extends DatabaseError {
 }
 
 export class IndexError extends Error {
-  readonly code = ErrorCode.INDEX_ERROR;
+  readonly code: ErrorCode = ErrorCode.INDEX_ERROR;
   constructor(message: string) {
     super(message);
     this.name = "IndexError";
+  }
+}
+
+export class ParserAdapterContractError extends IndexError {
+  override readonly code: ErrorCode =
+    ErrorCode.PARSER_ADAPTER_CONTRACT_ERROR;
+  readonly recoveryAction = "rebuild";
+
+  constructor(
+    readonly repoRelativePath: string,
+    readonly requiredContract: string,
+  ) {
+    super(
+      `Parser adapter contract ${requiredContract} is unavailable for ${repoRelativePath}; rebuild required`,
+    );
+    this.name = "ParserAdapterContractError";
   }
 }
 

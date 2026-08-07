@@ -237,7 +237,19 @@ export async function getPluginAdapters(
       validateStructuralMatcherShape(adapter);
     }
 
-    return adapters;
+    return adapters.map((adapter) => {
+      const declared = plugin.manifest.adapters.find(
+        (candidate) =>
+          candidate.extension.toLowerCase() ===
+            adapter.extension.toLowerCase() &&
+          candidate.languageId === adapter.languageId,
+      );
+      return {
+        ...adapter,
+        adapterIdentity: declared?.adapterIdentity,
+        adapterContractVersion: declared?.adapterContractVersion,
+      };
+    });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error("Failed to create adapters from plugin", {

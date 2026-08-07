@@ -11,8 +11,11 @@ import {
   getLanguageIdForExtension,
   loadPlugins,
   getAdapterInfo,
+  getAdapterParserContract,
+  requireLiveMutableParserContract,
   resetRegistry,
 } from "../../dist/indexer/adapter/registry.js";
+import { ParserAdapterContractError } from "../../dist/domain/errors.js";
 import { getHostApiVersion, clearLoadedPlugins } from "../../dist/indexer/adapter/plugin/loader.js";
 
 const TEST_PLUGINS_DIR = path.join(process.cwd(), "test-registry-plugins");
@@ -57,7 +60,7 @@ describe("Registry with Plugin Integration", () => {
                 languageId: "custom-lang",
                 fileExtensions: [".custom"],
                 getParser: () => null,
-                parse: () => null,
+                parse: () => ({ rootNode: { type: "program" } }),
                 extractSymbols: () => [],
                 extractImports: () => [],
                 extractCalls: () => []
@@ -75,6 +78,91 @@ describe("Registry with Plugin Integration", () => {
       const adapter = getAdapterForExtension(".custom");
       assert.ok(adapter);
       assert.strictEqual(adapter.languageId, "custom-lang");
+
+      const content = "legacy source";
+      const repoRelativePath = "src/example.custom";
+      const tree = adapter.parse(content, repoRelativePath);
+      assert.ok(tree);
+      assert.deepEqual(
+        adapter.extractSymbols(tree, content, repoRelativePath),
+        [],
+      );
+      assert.deepEqual(
+        adapter.extractImports(tree, content, repoRelativePath),
+        [],
+      );
+      assert.deepEqual(
+        adapter.extractCalls(tree, content, repoRelativePath, []),
+        [],
+      );
+
+      assert.equal(getAdapterParserContract(".custom"), undefined);
+      assert.throws(
+        () =>
+          requireLiveMutableParserContract(
+            ".custom",
+            "src/example.custom",
+          ),
+        (error: unknown) =>
+          error instanceof ParserAdapterContractError &&
+          error.code === "PARSER_ADAPTER_CONTRACT_ERROR" &&
+          error.repoRelativePath === "src/example.custom" &&
+          error.recoveryAction === "rebuild",
+      );
+    });
+
+    it("exposes contract metadata for a contract-bearing plugin adapter", async () => {
+      const pluginPath = path.join(
+        TEST_PLUGINS_DIR,
+        "contract-plugin.mjs",
+      );
+      const pluginContent = `
+        export const manifest = {
+          name: "contract-plugin",
+          version: "2.0.0",
+          apiVersion: "${getHostApiVersion()}",
+          adapters: [{
+            extension: ".contract",
+            languageId: "contract-lang",
+            adapterIdentity: "contract-adapter",
+            adapterContractVersion: "3"
+          }]
+        };
+
+        export function createAdapters() {
+          return [{
+            extension: ".contract",
+            languageId: "contract-lang",
+            factory: () => ({
+              languageId: "contract-lang",
+              fileExtensions: [".contract"],
+              getParser: () => null,
+              parse: () => null,
+              extractSymbols: () => [],
+              extractImports: () => [],
+              extractCalls: () => []
+            })
+          }];
+        }
+
+        export default { manifest, createAdapters };
+      `;
+      writeFileSync(pluginPath, pluginContent);
+
+      await loadPlugins([pluginPath]);
+
+      assert.deepEqual(getAdapterParserContract(".contract"), {
+        engine: "typescript",
+        engineContract: "3",
+        adapterKey: JSON.stringify([
+          "plugin",
+          "contract-plugin",
+          "2.0.0",
+          "contract-adapter",
+          "3",
+        ]),
+        language: "contract-lang",
+      });
     });
 
     it("should register multiple adapters from single plugin", async () => {
@@ -209,6 +297,12 @@ describe("Registry with Plugin Integration", () => {
       assert.strictEqual(info.languageId, "typescript");
       assert.strictEqual(info.source, "builtin");
       assert.strictEqual(info.pluginName, undefined);
+      assert.deepEqual(getAdapterParserContract(".ts"), {
+        engine: "typescript",
+        engineContract: "typescript:1",
+        adapterKey: "builtin:typescript:typescript:1",
+        language: "typescript",
+      });
     });
 
     it("should return info for plugin adapter", async () => {
