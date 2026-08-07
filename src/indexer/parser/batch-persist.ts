@@ -11,6 +11,11 @@ import type {
 } from "../../db/ladybug-edges.js";
 import type { SymbolReferenceRow } from "../../db/ladybug-embeddings.js";
 import type { FileRow } from "../../db/ladybug-repos.js";
+import {
+  deleteFileParserStatesByFileIdsInTransaction,
+  type FileParserStateRecord,
+  upsertFileParserStatesInTransaction,
+} from "../../db/ladybug-parser-provenance.js";
 import { classifyDependencyTarget } from "../../db/symbol-placeholders.js";
 import { logger } from "../../util/logger.js";
 import { canonicalizeLanguageId } from "../language.js";
@@ -18,6 +23,7 @@ import { canonicalizeLanguageId } from "../language.js";
 export interface FileUpsertEntry {
   file: Omit<FileRow, "directory">;
   existingFileId: string | null;
+  parserState?: FileParserStateRecord;
 }
 
 interface FlushBatch {
@@ -556,6 +562,7 @@ export class BatchPersistAccumulator {
   addFile(
     file: Omit<FileRow, "directory">,
     existingFileId: string | null,
+    parserState?: FileParserStateRecord,
   ): void {
     this.files.push({
       file: {
@@ -563,6 +570,7 @@ export class BatchPersistAccumulator {
         language: canonicalizeLanguageId(file.language, file.relPath),
       },
       existingFileId,
+      ...(parserState ? { parserState } : {}),
     });
     this.pendingCount++;
     this.maybeEnqueue();
@@ -743,6 +751,16 @@ export class BatchPersistAccumulator {
             txConn,
             batch.files.map((entry) => entry.file),
           );
+          await deleteFileParserStatesByFileIdsInTransaction(
+            txConn,
+            batch.files.map((entry) => entry.file.fileId),
+          );
+          await upsertFileParserStatesInTransaction(
+            txConn,
+            batch.files.flatMap((entry) =>
+              entry.parserState ? [entry.parserState] : [],
+            ),
+          );
         });
 
         await timePhase(
@@ -802,6 +820,16 @@ export class BatchPersistAccumulator {
           await ladybugDb.upsertFileBatch(
             txConn,
             batch.files.map((entry) => entry.file),
+          );
+          await deleteFileParserStatesByFileIdsInTransaction(
+            txConn,
+            batch.files.map((entry) => entry.file.fileId),
+          );
+          await upsertFileParserStatesInTransaction(
+            txConn,
+            batch.files.flatMap((entry) =>
+              entry.parserState ? [entry.parserState] : [],
+            ),
           );
         });
 

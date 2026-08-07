@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
   closeLadybugDb,
+  getLadybugConn,
   initLadybugDb,
   withWriteConn,
 } from "../../dist/db/ladybug.js";
@@ -1000,5 +1001,106 @@ describe("BatchPersistAccumulator", () => {
       quoteTarget,
       newlineTarget,
     ]);
+  });
+});
+
+
+describe("BatchPersistAccumulator parser provenance", () => {
+  let root = "";
+
+  const file = {
+    fileId: "f1",
+    repoId: "r1",
+    relPath: "src/a.ts",
+    contentHash: "a".repeat(64),
+    language: "typescript",
+    byteSize: 100,
+    lastIndexedAt: "2026-08-07T00:00:00.000Z",
+  };
+  const parserState = {
+    stateId: JSON.stringify(["r1", "f1"]),
+    repoId: "r1",
+    fileId: "f1",
+    engine: "typescript" as const,
+    engineContract: "typescript:1",
+    adapterKey: "builtin:typescript:typescript:1",
+    language: "typescript",
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "sdl-batch-parser-state-"));
+    await initLadybugDb(join(root, "graph.lbug"));
+    await withWriteConn((conn) =>
+      ladybugDb.upsertRepo(conn, {
+        repoId: "r1",
+        rootPath: root,
+        configJson: "{}",
+        createdAt: "2026-08-07T00:00:00.000Z",
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    await closeLadybugDb().catch(() => {});
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it("persists parser provenance in the file batch transaction", async () => {
+    const accumulator = new BatchPersistAccumulator(10, {
+      autoDrain: false,
+    });
+    accumulator.addFile(file, null, parserState);
+
+    await accumulator.drain();
+
+    assert.deepEqual(
+      await ladybugDb.listFileParserStates(await getLadybugConn(), "r1"),
+      [parserState],
+    );
+  });
+
+  it("rolls back the file write when parser provenance fails", async () => {
+    const accumulator = new BatchPersistAccumulator(10, {
+      autoDrain: false,
+    });
+    accumulator.addFile(file, null, {
+      ...parserState,
+      stateId: "invalid",
+    });
+
+    await assert.rejects(accumulator.drain(), /parser coverage/i);
+    const row = await querySingle<{ count: unknown }>(
+      await getLadybugConn(),
+      "MATCH (f:File {fileId: 'f1'}) RETURN count(f) AS count",
+    );
+    assert.equal(ladybugDb.toNumber(row?.count ?? 0), 0);
+    assert.deepEqual(
+      await ladybugDb.listFileParserStates(await getLadybugConn(), "r1"),
+      [],
+    );
+  });
+
+  it("clears stale provenance when a changed file has no contract", async () => {
+    await withWriteConn(async (conn) => {
+      await ladybugDb.upsertFile(conn, file);
+      await ladybugDb.upsertFileParserStatesInTransaction(conn, [parserState]);
+    });
+
+    const accumulator = new BatchPersistAccumulator(10, {
+      autoDrain: false,
+    });
+    accumulator.addFile(
+      {
+        ...file,
+        contentHash: "b".repeat(64),
+      },
+      file.fileId,
+    );
+    await accumulator.drain();
+
+    assert.deepEqual(
+      await ladybugDb.listFileParserStates(await getLadybugConn(), "r1"),
+      [],
+    );
   });
 });

@@ -8,6 +8,7 @@ import {
 } from "../edge-builder.js";
 import { extractConfigEdgesFromTree, type ConfigEdge } from "../configEdges.js";
 import { canonicalizeLanguageId } from "../language.js";
+import { getAdapterParserContract } from "../adapter/registry.js";
 import { buildSymbolAndEdgeRows } from "./build-rows.js";
 import {
   PASS1_KNOWN_ENDPOINT_COPY_THRESHOLD,
@@ -78,6 +79,15 @@ export async function processFile(
     });
     if (fileResult.status === "skip") return fileResult.result;
     const { data: fileData, adapter } = fileResult;
+    const parserContract = getAdapterParserContract(fileData.extWithDot);
+    const parserState = parserContract
+      ? {
+          stateId: JSON.stringify([repoId, fileData.fileId]),
+          repoId,
+          fileId: fileData.fileId,
+          ...parserContract,
+        }
+      : undefined;
 
     // ── Phase 3: Parse and extract ───────────────────────────────
     const parseResult = await parseAndExtract({
@@ -245,6 +255,7 @@ export async function processFile(
           lastIndexedAt: new Date().toISOString(),
         },
         existingFile?.fileId ?? null,
+        parserState,
       );
       if (symbolReferences.length > 0) {
         batchAccumulator.addSymbolReferences(symbolReferences);
@@ -288,6 +299,14 @@ export async function processFile(
             byteSize: fileMeta.size,
             lastIndexedAt: new Date().toISOString(),
           });
+          await ladybugDb.deleteFileParserStatesByFileIdsInTransaction(
+            txConn,
+            [fileData.fileId],
+          );
+          await ladybugDb.upsertFileParserStatesInTransaction(
+            txConn,
+            parserState ? [parserState] : [],
+          );
 
           if (existingFile) {
             await ladybugDb.deleteSymbolReferencesByFileId(

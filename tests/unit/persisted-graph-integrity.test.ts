@@ -81,6 +81,18 @@ function symbolRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function parserState(fileId: string) {
+  return {
+    stateId: JSON.stringify(["repo", fileId]),
+    repoId: "repo",
+    fileId,
+    engine: "typescript" as const,
+    engineContract: "builtin:typescript:v1",
+    adapterKey: "builtin:typescript",
+    language: "typescript",
+  };
+}
+
 function externalSymbolRow(symbolId: string, name: string) {
   return {
     symbolId,
@@ -192,6 +204,7 @@ async function seedVersionedGraph(root: string): Promise<void> {
       byteSize: 10,
       lastIndexedAt: "2026-07-16T00:00:00.000Z",
     });
+    await ladybugDb.upsertFileParserStatesInTransaction(conn, [parserState(row.fileId)]);
     await ladybugDb.upsertKnownFileSymbols(conn, [row]);
     await ladybugDb.createVersion(conn, {
       versionId: "v1",
@@ -1547,6 +1560,9 @@ describe("persisted graph integrity", () => {
         byteSize: 10,
         lastIndexedAt: "2026-07-16T00:00:00.000Z",
       });
+      await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+        parserState(refreshedSource.fileId),
+      ]);
       await ladybugDb.upsertKnownFileSymbols(conn, [
         refreshedSource,
         untouchedSource,
@@ -1703,6 +1719,10 @@ describe("persisted graph integrity", () => {
         byteSize: 10,
         lastIndexedAt: "2026-07-16T00:00:00.000Z",
       });
+      await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+        parserState(changedSource.fileId),
+        parserState(importerSource.fileId),
+      ]);
       await ladybugDb.upsertKnownFileSymbols(conn, [
         changedSource,
         importerSource,
@@ -1996,6 +2016,9 @@ describe("persisted graph integrity", () => {
           [promotedId],
         );
         await ladybugDb.upsertFile(conn, file);
+        await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+          parserState(fileId),
+        ]);
         await ladybugDb.upsertKnownFileSymbols(conn, [promoted]);
         await ladybugDb.createVersion(conn, {
           versionId: "v2",
@@ -2920,6 +2943,123 @@ describe("persisted graph integrity", () => {
     assert.equal(compare(expected, actual), null);
   });
 
+  it("publishes matching parser coverage with graph integrity", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-parser-coverage-publish-"));
+    await seedVersionedGraph(root);
+    const expected = await capturePersistedGraphIntegrity(
+      await getLadybugConn(),
+      "repo",
+    );
+    const coverageDigest = await withWriteConn(async (conn) => {
+      await derivedState.beginGraphIntegrityVersion(
+        conn,
+        "repo",
+        "v1",
+        expected.digest,
+        true,
+      );
+      return ladybugDb.verifyExactParserCoverageInTransaction(conn, "repo");
+    });
+    await markGraphIntegrityVerifying("repo", "v1");
+
+    await completeGraphIntegrityVerification("repo", "v1", expected);
+
+    const state = await derivedState.getDerivedState("repo");
+    assert.equal(state?.graphIntegrityState, "verified");
+    assert.deepEqual(
+      await ladybugDb.getRepoParserState(await getLadybugConn(), "repo"),
+      {
+        repoId: "repo",
+        coverageState: "complete",
+        graphVersionId: "v1",
+        graphRevision: state?.graphIntegrityVerifiedRevision,
+        coverageDigest,
+      },
+    );
+  });
+
+  it("fails graph completion when parser coverage is incomplete", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-parser-coverage-incomplete-"));
+    await seedVersionedGraph(root);
+    const expected = await capturePersistedGraphIntegrity(
+      await getLadybugConn(),
+      "repo",
+    );
+    await withWriteConn(async (conn) => {
+      await ladybugDb.deleteFileParserStatesByFileIdsInTransaction(conn, [
+        "repo:src/alpha.ts",
+      ]);
+      await derivedState.beginGraphIntegrityVersion(
+        conn,
+        "repo",
+        "v1",
+        expected.digest,
+        true,
+      );
+    });
+    await markGraphIntegrityVerifying("repo", "v1");
+
+    await assert.rejects(
+      completeGraphIntegrityVerification("repo", "v1", expected),
+      /^Error: Persisted graph integrity verification failed$/,
+    );
+
+    assert.equal(
+      (await derivedState.getDerivedState("repo"))?.graphIntegrityState,
+      "failed",
+    );
+    assert.equal(
+      await ladybugDb.getRepoParserState(await getLadybugConn(), "repo"),
+      null,
+    );
+  });
+
+  for (const phase of [
+    "beforeRepoParserState",
+    "afterRepoParserState",
+    "afterGraphPublication",
+  ] as const) {
+    it("rolls back atomic publication when " + phase + " fails", async () => {
+      root = mkdtempSync(join(tmpdir(), "sdl-parser-publication-" + phase + "-"));
+      await seedVersionedGraph(root);
+      const expected = await capturePersistedGraphIntegrity(
+        await getLadybugConn(),
+        "repo",
+      );
+      await withWriteConn((conn) =>
+        derivedState.beginGraphIntegrityVersion(
+          conn,
+          "repo",
+          "v1",
+          expected.digest,
+          true,
+        ),
+      );
+      await markGraphIntegrityVerifying("repo", "v1");
+      const before = await derivedState.getDerivedState("repo");
+
+      await assert.rejects(
+        completeGraphIntegrityVerification("repo", "v1", expected, {
+          publicationHook(currentPhase: typeof phase) {
+            if (currentPhase === phase) throw new Error("injected " + phase);
+          },
+          persistFailureState: async () => false,
+        }),
+        /^Error: Persisted graph integrity verification failed$/,
+      );
+
+      const after = await derivedState.getDerivedState("repo");
+      assert.equal(after?.graphIntegrityState, "verifying");
+      assert.equal(after?.graphIntegrityVersionId, before?.graphIntegrityVersionId);
+      assert.equal(after?.graphIntegrityRevision, before?.graphIntegrityRevision);
+      assert.equal(
+        await ladybugDb.getRepoParserState(await getLadybugConn(), "repo"),
+        null,
+      );
+    });
+  }
+
+
   it("fails verification and records failed state on a persisted tuple mismatch", async () => {
     root = mkdtempSync(join(tmpdir(), "sdl-graph-integrity-mismatch-"));
     await initLadybugDb(join(root, "mismatch.lbug"));
@@ -3167,6 +3307,9 @@ describe("persisted graph integrity", () => {
         byteSize: 10,
         lastIndexedAt: "2026-07-16T00:00:00.000Z",
       });
+      await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+        parserState(expectedRow.fileId),
+      ]);
       await ladybugDb.upsertKnownFileSymbols(conn, [expectedRow]);
     });
     await markVerifying("repo", "v1");
@@ -3204,6 +3347,10 @@ describe("persisted graph integrity", () => {
     assert.equal(row?.graphIntegrityVersionId, "v2");
     assert.equal(row?.graphIntegrityDigest, "b".repeat(64));
     assert.equal(row?.graphIntegrityError, null);
+    assert.equal(
+      await ladybugDb.getRepoParserState(await getLadybugConn(), "repo"),
+      null,
+    );
   });
 
   it("requires verified integrity for the latest graph version", () => {

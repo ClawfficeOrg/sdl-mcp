@@ -13,6 +13,7 @@ import {
   resolveImportTargets,
 } from "../edge-builder.js";
 import { canonicalizeLanguageId } from "../language.js";
+import { NATIVE_PARSER_CONTRACT } from "../parser-provenance.js";
 import type {
   PendingCallEdge,
   SymbolIndex,
@@ -197,6 +198,15 @@ export async function processFileFromRustResult(params: {
       adapter?.languageId ?? ext,
       relPath,
     );
+    const parserState =
+      languageId === NATIVE_PARSER_CONTRACT.language
+        ? {
+            stateId: JSON.stringify([repoId, fileId]),
+            repoId,
+            fileId,
+            ...NATIVE_PARSER_CONTRACT,
+          }
+        : undefined;
     const filePath = join(repoRoot, fileMeta.path);
     // Fix 1: Use content from Rust result to avoid double file read.
     // Falls back to async read for older addon versions without content.
@@ -446,6 +456,7 @@ export async function processFileFromRustResult(params: {
           lastIndexedAt: new Date().toISOString(),
         },
         existingFile?.fileId ?? null,
+        parserState,
       );
       params.batchAccumulator.addSymbolReferences(symbolReferences);
       params.batchAccumulator.addSymbols(symbolsToUpsert);

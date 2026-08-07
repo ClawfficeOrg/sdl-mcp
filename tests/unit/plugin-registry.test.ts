@@ -16,6 +16,9 @@ import {
   resetRegistry,
 } from "../../dist/indexer/adapter/registry.js";
 import { ParserAdapterContractError } from "../../dist/domain/errors.js";
+import { closeLadybugDb, initLadybugDb } from "../../dist/db/ladybug.js";
+import { BatchPersistAccumulator } from "../../dist/indexer/parser/batch-persist.js";
+import { processFile } from "../../dist/indexer/parser/process-file.js";
 import { getHostApiVersion, clearLoadedPlugins } from "../../dist/indexer/adapter/plugin/loader.js";
 
 const TEST_PLUGINS_DIR = path.join(process.cwd(), "test-registry-plugins");
@@ -109,6 +112,38 @@ describe("Registry with Plugin Integration", () => {
           error.repoRelativePath === "src/example.custom" &&
           error.recoveryAction === "rebuild",
       );
+
+      let capturedParserState: unknown;
+      class CapturingAccumulator extends BatchPersistAccumulator {
+        override addFile(
+          ...args: Parameters<BatchPersistAccumulator["addFile"]>
+        ): void {
+          capturedParserState = args[2];
+          super.addFile(...args);
+        }
+      }
+      writeFileSync(path.join(TEST_PLUGINS_DIR, "example.custom"), content);
+      try {
+        await initLadybugDb(path.join(TEST_PLUGINS_DIR, "legacy.lbug"));
+        const result = await processFile({
+          repoId: "legacy-plugin-repo",
+          repoRoot: TEST_PLUGINS_DIR,
+          fileMeta: {
+            path: "example.custom",
+            size: content.length,
+            mtime: Date.now(),
+          },
+          languages: ["custom"],
+          mode: "full",
+          batchAccumulator: new CapturingAccumulator(10_000, {
+            autoDrain: false,
+          }),
+        });
+        assert.equal(result.changed, true);
+        assert.equal(capturedParserState, undefined);
+      } finally {
+        await closeLadybugDb().catch(() => {});
+      }
     });
 
     it("exposes contract metadata for a contract-bearing plugin adapter", async () => {
@@ -137,7 +172,7 @@ describe("Registry with Plugin Integration", () => {
               languageId: "contract-lang",
               fileExtensions: [".contract"],
               getParser: () => null,
-              parse: () => null,
+              parse: () => ({ rootNode: { type: "program" } }),
               extractSymbols: () => [],
               extractImports: () => [],
               extractCalls: () => []
@@ -151,8 +186,9 @@ describe("Registry with Plugin Integration", () => {
 
       await loadPlugins([pluginPath]);
 
-      assert.deepEqual(getAdapterParserContract(".contract"), {
-        engine: "typescript",
+
+      const expectedContract = {
+        engine: "typescript" as const,
         engineContract: "3",
         adapterKey: JSON.stringify([
           "plugin",
@@ -162,7 +198,50 @@ describe("Registry with Plugin Integration", () => {
           "3",
         ]),
         language: "contract-lang",
-      });
+      };
+      assert.deepEqual(
+        getAdapterParserContract(".contract"),
+        expectedContract,
+      );
+
+      let capturedParserState: unknown;
+      class CapturingAccumulator extends BatchPersistAccumulator {
+        override addFile(
+          ...args: Parameters<BatchPersistAccumulator["addFile"]>
+        ): void {
+          capturedParserState = args[2];
+          super.addFile(...args);
+        }
+      }
+      const content = "contract source";
+      writeFileSync(path.join(TEST_PLUGINS_DIR, "example.contract"), content);
+      try {
+        await initLadybugDb(path.join(TEST_PLUGINS_DIR, "contract.lbug"));
+        const result = await processFile({
+          repoId: "contract-plugin-repo",
+          repoRoot: TEST_PLUGINS_DIR,
+          fileMeta: {
+            path: "example.contract",
+            size: content.length,
+            mtime: Date.now(),
+          },
+          languages: ["contract"],
+          mode: "full",
+          batchAccumulator: new CapturingAccumulator(10_000, {
+            autoDrain: false,
+          }),
+        });
+        const fileId = "contract-plugin-repo:example.contract";
+        assert.equal(result.changed, true);
+        assert.deepEqual(capturedParserState, {
+          stateId: JSON.stringify(["contract-plugin-repo", fileId]),
+          repoId: "contract-plugin-repo",
+          fileId,
+          ...expectedContract,
+        });
+      } finally {
+        await closeLadybugDb().catch(() => {});
+      }
     });
 
     it("should register multiple adapters from single plugin", async () => {

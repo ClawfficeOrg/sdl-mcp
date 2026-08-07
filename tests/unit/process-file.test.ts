@@ -14,11 +14,14 @@ import {
 import {
   getAdapterForExtension,
   loadBuiltInAdapters,
+  registerAdapter,
 } from "../../dist/indexer/adapter/registry.js";
 import {
   processFile,
   type ProcessFileParams,
 } from "../../dist/indexer/parser/process-file.js";
+import { BUILTIN_TYPESCRIPT_PARSER_CONTRACT } from "../../dist/indexer/parser-provenance.js";
+import { BatchPersistAccumulator } from "../../dist/indexer/parser/batch-persist.js";
 
 describe("process-file helpers — isTestFile", () => {
   const languages = ["ts", "tsx", "js", "jsx"];
@@ -178,6 +181,213 @@ describe("process-file — binary skip cleanup", () => {
 
     const symbols = await ladybugDb.getSymbolsByFile(conn, fileId);
     assert.deepStrictEqual(symbols, []);
+  });
+});
+
+
+describe("process-file parser provenance", () => {
+  const repoId = "process-file-parser-state";
+  const graphDbPath = mkdtempSync(join(tmpdir(), "sdl-process-parser-db-"));
+  const repoRoot = mkdtempSync(join(tmpdir(), "sdl-process-parser-repo-"));
+  const now = "2026-08-07T00:00:00.000Z";
+
+  before(async () => {
+    mkdirSync(join(repoRoot, "src"), { recursive: true });
+    await closeLadybugDb();
+    await initLadybugDb(graphDbPath);
+    await ladybugDb.upsertRepo(await getLadybugConn(), {
+      repoId,
+      rootPath: repoRoot,
+      configJson: "{}",
+      createdAt: now,
+    });
+  });
+
+  after(async () => {
+    await closeLadybugDb();
+    rmSync(graphDbPath, { recursive: true, force: true });
+    rmSync(graphDbPath + ".sdl-lineage.json", { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+
+  it("retains durable parser state when an unchanged file is skipped", async () => {
+    const relPath = "src/unchanged.ts";
+    const fileId = `${repoId}:${relPath}`;
+    const content = "export const unchanged = true;\n";
+    const contentHash = "unchanged-hash";
+    writeFileSync(join(repoRoot, relPath), content);
+    await ladybugDb.upsertFile(await getLadybugConn(), {
+      fileId,
+      repoId,
+      relPath,
+      contentHash,
+      language: "typescript",
+      byteSize: content.length,
+      lastIndexedAt: now,
+    });
+    const nativeState = {
+      stateId: JSON.stringify([repoId, fileId]),
+      repoId,
+      fileId,
+      engine: "native" as const,
+      engineContract: "native:1",
+      adapterKey: "native:native:1",
+      language: "typescript",
+    };
+    await ladybugDb.upsertFileParserStatesInTransaction(
+      await getLadybugConn(),
+      [nativeState],
+    );
+
+    let addFileCalled = false;
+    class CapturingAccumulator extends BatchPersistAccumulator {
+      override addFile(
+        ...args: Parameters<BatchPersistAccumulator["addFile"]>
+      ): void {
+        addFileCalled = true;
+        super.addFile(...args);
+      }
+    }
+    const result = await processFile({
+      repoId,
+      repoRoot,
+      fileMeta: {
+        path: relPath,
+        size: content.length,
+        mtime: Date.now(),
+        contentHash,
+      },
+      languages: ["ts"],
+      mode: "incremental",
+      existingFile: {
+        fileId,
+        contentHash,
+        lastIndexedAt: null,
+      },
+      batchAccumulator: new CapturingAccumulator(10_000, {
+        autoDrain: false,
+      }),
+    });
+
+    assert.equal(result.changed, false);
+    assert.equal(addFileCalled, false);
+    assert.deepEqual(
+      (
+        await ladybugDb.listFileParserStates(await getLadybugConn(), repoId)
+      ).filter((state) => state.fileId === fileId),
+      [nativeState],
+    );
+  });
+
+  it("persists the built-in parser contract on the direct write path", async () => {
+    const relPath = "src/direct.ts";
+    const content = "export function direct(): number { return 1; }\n";
+    writeFileSync(join(repoRoot, relPath), content);
+    loadBuiltInAdapters();
+
+    const result = await processFile({
+      repoId,
+      repoRoot,
+      fileMeta: {
+        path: relPath,
+        size: content.length,
+        mtime: Date.now(),
+      },
+      languages: ["ts"],
+      mode: "full",
+    });
+
+    const fileId = `${repoId}:${relPath}`;
+    assert.equal(result.changed, true);
+    assert.deepEqual(
+      (
+        await ladybugDb.listFileParserStates(await getLadybugConn(), repoId)
+      ).filter((state) => state.fileId === fileId),
+      [
+        {
+          stateId: JSON.stringify([repoId, fileId]),
+          repoId,
+          fileId,
+          ...BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+        },
+      ],
+    );
+  });
+
+  it("clears stale provenance for a changed contract-less adapter", async () => {
+    const relPath = "src/direct.legacy";
+    const fileId = `${repoId}:${relPath}`;
+    const oldContent = "old";
+    const newContent = "new";
+    writeFileSync(join(repoRoot, relPath), newContent);
+    registerAdapter(
+      ".legacy",
+      "legacy",
+      () => ({
+        languageId: "legacy",
+        fileExtensions: [".legacy"],
+        getParser: () => null,
+        parse: () => ({ rootNode: { type: "program" } }),
+        extractSymbols: () => [],
+        extractImports: () => [],
+        extractCalls: () => [],
+      }),
+      "plugin",
+      "legacy-direct",
+    );
+    await ladybugDb.upsertFile(await getLadybugConn(), {
+      fileId,
+      repoId,
+      relPath,
+      contentHash: oldContent,
+      language: "typescript",
+      byteSize: oldContent.length,
+      lastIndexedAt: now,
+    });
+    await ladybugDb.upsertFileParserStatesInTransaction(
+      await getLadybugConn(),
+      [
+        {
+          stateId: JSON.stringify([repoId, fileId]),
+          repoId,
+          fileId,
+          ...BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+        },
+      ],
+    );
+
+    const result = await processFile({
+      repoId,
+      repoRoot,
+      fileMeta: {
+        path: relPath,
+        size: newContent.length,
+        mtime: Date.now(),
+      },
+      languages: ["legacy"],
+      mode: "incremental",
+      existingFile: {
+        fileId,
+        contentHash: oldContent,
+        lastIndexedAt: now,
+      },
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(
+      (
+        await ladybugDb.listFileParserStates(await getLadybugConn(), repoId)
+      ).filter((state) => state.fileId === fileId),
+      [],
+    );
+    await assert.rejects(
+      ladybugDb.verifyExactParserCoverageInTransaction(
+        await getLadybugConn(),
+        repoId,
+      ),
+      /parser coverage/i,
+    );
   });
 });
 

@@ -17,7 +17,7 @@ export const BUILTIN_TYPESCRIPT_PARSER_CONTRACT: ParserContract = {
   language: "typescript",
 };
 
-const NATIVE_PARSER_CONTRACT: ParserContract = {
+export const NATIVE_PARSER_CONTRACT: ParserContract = {
   engine: "native",
   engineContract: "native:1",
   adapterKey: "native:native:1",

@@ -12,8 +12,10 @@ import {
   graphIntegrityIsVerifiedForVersion,
   markCurrentGraphIntegrityRevisionFailed,
   markGraphIntegrityFailedIfVerifying,
+  graphIntegrityVerificationIsOwnedInTransaction,
   markGraphIntegrityVerifying,
   markGraphIntegrityVerifiedIfVerifying,
+  markGraphIntegrityVerifiedInTransactionIfVerifying,
   initializeGraphIntegrityRevisionIfVerifying,
   initializeGraphIntegrityVersionInTransaction,
   markUnrevisionedGraphIntegrityFailedIfVerifying,
@@ -227,6 +229,13 @@ export interface GraphIntegrityVerificationOptions {
   afterCapture?: () => Promise<void>;
   /** Exact synchronous session revision; never adopt a newer durable revision. */
   expectedRevision?: number;
+  /** Test-only failure barrier proving atomic publication rollback. */
+  publicationHook?: (
+    phase:
+      | "beforeRepoParserState"
+      | "afterRepoParserState"
+      | "afterGraphPublication",
+  ) => void | Promise<void>;
 }
 
 interface GraphIntegrityReferenceCount {
@@ -1928,19 +1937,50 @@ export async function completeGraphIntegrityVerification(
       });
       throw new GraphIntegrityVerificationError();
     }
-    const published = await markGraphIntegrityVerifiedIfVerifying(
-      repoId,
-      versionId,
-      verificationRevision,
-      actual.digest,
+    await withWriteConn((conn) =>
+      ladybugDb.withTransaction(conn, async (txConn) => {
+        const owner =
+          await graphIntegrityVerificationIsOwnedInTransaction(
+            txConn,
+            repoId,
+            versionId,
+            verificationRevision,
+          );
+        if (!owner) {
+          logger.error("Persisted graph integrity publish lost verification state", {
+            repoId,
+            versionId,
+          });
+          throw new GraphIntegrityVerificationError();
+        }
+        const coverageDigest =
+          await ladybugDb.verifyExactParserCoverageInTransaction(
+            txConn,
+            repoId,
+          );
+        await options.publicationHook?.("beforeRepoParserState");
+        await ladybugDb.upsertRepoParserStateInTransaction(txConn, {
+          repoId,
+          coverageState: "complete",
+          graphVersionId: versionId,
+          graphRevision: verificationRevision,
+          coverageDigest,
+        });
+        await options.publicationHook?.("afterRepoParserState");
+        if (
+          !(await markGraphIntegrityVerifiedInTransactionIfVerifying(
+            txConn,
+            repoId,
+            versionId,
+            verificationRevision,
+            actual.digest,
+          ))
+        ) {
+          throw new GraphIntegrityVerificationError();
+        }
+        await options.publicationHook?.("afterGraphPublication");
+      }),
     );
-    if (!published) {
-      logger.error("Persisted graph integrity publish lost verification state", {
-        repoId,
-        versionId,
-      });
-      throw new GraphIntegrityVerificationError();
-    }
     logger.info("Persisted graph integrity verified", {
       repoId,
       versionId,

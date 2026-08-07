@@ -458,6 +458,27 @@ export async function markGraphIntegrityVerified(
   });
 }
 
+/** Recheck exact verification ownership on the caller's transaction. */
+export async function graphIntegrityVerificationIsOwnedInTransaction(
+  conn: Connection,
+  repoId: string,
+  versionId: string,
+  revision: number,
+): Promise<boolean> {
+  assertSafeInt(revision, "revision");
+  return (
+    (await querySingle<{ repoId: string }>(
+      conn,
+      `MATCH (d:DerivedState {repoId: $repoId})
+       WHERE d.graphIntegrityState = 'verifying'
+         AND d.graphIntegrityVersionId = $versionId
+         AND d.graphIntegrityRevision = $revision
+       RETURN d.repoId AS repoId`,
+      { repoId, versionId, revision },
+    )) !== null
+  );
+}
+
 /** Publish a digest only while the same verification attempt still owns state. */
 export async function markGraphIntegrityVerifiedInTransactionIfVerifying(
   conn: Connection,

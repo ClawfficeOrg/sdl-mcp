@@ -72,6 +72,8 @@ import { validateProviderFirstGraphRows } from "../../dist/indexer/provider-firs
 import { resolveProviderFirstPipeline } from "../../dist/indexer/provider-first/planner.js";
 import { normalizeScipProviderFacts } from "../../dist/indexer/provider-first/scip-normalizer.js";
 import { BatchPersistAccumulator } from "../../dist/indexer/parser/batch-persist.js";
+import { processFile } from "../../dist/indexer/parser/process-file.js";
+import { BUILTIN_TYPESCRIPT_PARSER_CONTRACT } from "../../dist/indexer/parser-provenance.js";
 import { processFileFromRustResult } from "../../dist/indexer/parser/rust-process-file.js";
 import { detectTypeScriptTestCases } from "../../dist/indexer/typescript-test-cases.js";
 import {
@@ -166,11 +168,71 @@ describe("provider-first indexing foundation", () => {
     assert.equal(config.watchProvider, "auto");
   });
 
+
+  it("records the built-in TypeScript parser contract for fallback parsing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "sdl-typescript-parser-state-"));
+    const sourceDir = join(root, "src");
+    mkdirSync(sourceDir, { recursive: true });
+    writeFileSync(
+      join(sourceDir, "example.ts"),
+      "export function example(): number { return 1; }\n",
+    );
+    let capturedParserState: unknown;
+    class CapturingAccumulator extends BatchPersistAccumulator {
+      override addFile(
+        ...args: Parameters<BatchPersistAccumulator["addFile"]>
+      ): void {
+        capturedParserState = args[2];
+        super.addFile(...args);
+      }
+    }
+
+    try {
+      await initLadybugDb(join(root, "graph.lbug"));
+      loadBuiltInAdapters();
+      const result = await processFile({
+        repoId: "repo-typescript",
+        repoRoot: root,
+        fileMeta: {
+          path: "src/example.ts",
+          size: 48,
+          mtime: Date.now(),
+        },
+        languages: ["ts"],
+        mode: "full",
+        batchAccumulator: new CapturingAccumulator(10_000, {
+          autoDrain: false,
+        }),
+      });
+
+      const fileId = "repo-typescript:src/example.ts";
+      assert.equal(result.changed, true);
+      assert.ok(result.symbolsIndexed > 0);
+      assert.deepEqual(capturedParserState, {
+        stateId: JSON.stringify(["repo-typescript", fileId]),
+        repoId: "repo-typescript",
+        fileId,
+        ...BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+      });
+    } finally {
+      await closeLadybugDb().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("reconstructs semantic test facets from RustExtractedSymbol rows", async () => {
     const root = mkdtempSync(join(tmpdir(), "sdl-rust-test-case-row-"));
     const dbPath = join(root, "graph.lbug");
     const capturedSymbols: SymbolRow[] = [];
+    let capturedParserState: unknown;
     class CapturingAccumulator extends BatchPersistAccumulator {
+      override addFile(
+        ...args: Parameters<BatchPersistAccumulator["addFile"]>
+      ): void {
+        capturedParserState = args[2];
+        super.addFile(...args);
+      }
+
       override addSymbols(rows: SymbolRow[]): void {
         capturedSymbols.push(...rows);
         super.addSymbols(rows);
@@ -241,6 +303,16 @@ describe("provider-first indexing foundation", () => {
       });
 
       assert.equal(capturedSymbols[0]?.testCaseJson, TEST_CASE_JSON);
+      const fileId = "repo-rust-test-case:src/sample.ts";
+      assert.deepEqual(capturedParserState, {
+        stateId: JSON.stringify(["repo-rust-test-case", fileId]),
+        repoId: "repo-rust-test-case",
+        fileId,
+        engine: "native",
+        engineContract: "native:1",
+        adapterKey: "native:native:1",
+        language: "typescript",
+      });
     } finally {
       await closeLadybugDb().catch(() => {});
       rmSync(root, { recursive: true, force: true });
@@ -9447,6 +9519,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -9597,6 +9670,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -9721,6 +9795,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -9861,6 +9936,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -10044,6 +10120,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -10360,6 +10437,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -10517,6 +10595,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -10639,6 +10718,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -10805,6 +10885,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await seedRepoFileAndSourceSymbol(shadowConn, {
         repoId,
@@ -10919,6 +11000,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await dbExec(
         shadowConn,
@@ -11057,6 +11139,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId: fallbackSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await dbExec(
         shadowConn,
@@ -11181,6 +11264,7 @@ describe("provider-first indexing foundation", () => {
         fileId,
         sourceSymbolId: fallbackSymbolId,
         now,
+        verifiedVersionId: versionId,
       });
       await dbExec(
         shadowConn,
@@ -12627,6 +12711,7 @@ async function seedRepoFileAndSourceSymbol(
     fileId: string;
     sourceSymbolId: string;
     now: string;
+    verifiedVersionId?: string;
   },
 ): Promise<void> {
   await dbExec(
@@ -12677,6 +12762,26 @@ async function seedRepoFileAndSourceSymbol(
      MERGE (s)-[:SYMBOL_IN_REPO]->(r)`,
     { ...params, testCaseJson: TEST_CASE_JSON },
   );
+  if (params.verifiedVersionId) {
+    await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+      {
+        stateId: JSON.stringify([params.repoId, params.fileId]),
+        repoId: params.repoId,
+        fileId: params.fileId,
+        engine: "typescript",
+        engineContract: "typescript:1",
+        adapterKey: "builtin:typescript:typescript:1",
+        language: "typescript",
+      },
+    ]);
+    await derivedState.beginGraphIntegrityVersion(
+      conn,
+      params.repoId,
+      params.verifiedVersionId,
+      "a".repeat(64),
+      true,
+    );
+  }
 }
 
 function providerFactSet(
