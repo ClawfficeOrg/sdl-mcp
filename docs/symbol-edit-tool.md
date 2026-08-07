@@ -49,7 +49,7 @@ If a saved-file write succeeds but graph or live-index sync fails, SDL-MCP keeps
 
 ## Graph integrity after a saved edit
 
-A successful saved-file apply atomically commits file, symbol, edge, parser-provenance, manifest, and one owned graph-integrity revision in one foreground LadybugDB transaction. A repository-owned worker then verifies the exact graph and parser coverage from a stable read-only snapshot and publishes complete `RepoParserState` coverage together with the verified graph state.
+A successful saved-file apply atomically commits file, symbol, edge, parser-provenance, manifest, and one owned graph-integrity revision in one foreground LadybugDB transaction. A repository-owned worker then verifies the exact graph and parser-provenance structure from a stable read-only snapshot and publishes the version/revision-bound `complete` or `partial` `RepoParserState` summary together with the verified graph state. Existing durable files remain fail-closed unless their `FileParserState` is present, valid, available, and matches the recorded parser contract.
 
 Call `sdl.repo.status` after the edit when your task needs verification state. Read `graphIntegrityVersionId` and `graphIntegrityRevision` as the current manifest ownership, and read `graphIntegrityVerifiedRevision` only as the most recently verified revision. A null or older verified revision does not make a current manifest-backed graph unavailable.
 

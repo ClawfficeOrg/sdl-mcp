@@ -174,9 +174,9 @@ flowchart TD
 
 **Native Rust engine** (`native/src/extract/`) — optional, mirrors all TS adapters at near-native speed via napi-rs.
 
-Pass 1 persists a `FileParserState` beside each file row in the same accumulator transaction. The state records the engine, engine contract, adapter key, and language that created the file's canonical symbols. The native `parseContent` entry point uses the same `native:1` identity contract as disk parsing.
+Parser pass 1 persists a `FileParserState` beside each file it parses in the same accumulator transaction. The state records the engine, engine contract, adapter key, and language that created the file's canonical symbols. Provider-owned files without a replayable SDL-MCP parser contract intentionally have no file parser state. The native `parseContent` entry point uses the same `native:1` identity contract as disk parsing.
 
-Full verification checks exact file/parser-state membership and binds `RepoParserState` coverage to the graph version and revision. Live parsing reuses the recorded contract and never cross-falls back, so symbol IDs and AST fingerprints remain engine-affine.
+Full verification validates parser-provenance structure, summarizes file/parser-state membership as `complete` or `partial`, and binds that `RepoParserState` summary to the verified graph version and revision. The explicit exact-coverage verifier remains complete-only. Live parsing of an existing durable file requires and reuses its valid `FileParserState` contract without cross-fallback, so symbol IDs and AST fingerprints remain engine-affine.
 
 ### Semantic test-case facets
 
@@ -357,16 +357,16 @@ Each module owns a specific domain of queries:
 | `ladybug-memories.ts`          | Memory nodes, symbol/file links, staleness                                          |
 | `ladybug-file-summaries.ts`    | FileSummary nodes — file-level summaries with searchText and embeddings             |
 | `ladybug-graph-integrity.ts`   | File and fileless manifest rows and revision ownership helpers                       |
-| `ladybug-parser-provenance.ts` | File/repository parser identity, exact coverage, and publication                     |
+| `ladybug-parser-provenance.ts` | File/repository parser identity, complete/partial coverage summaries, complete-only exact verification, and publication |
 | `ladybug-usage.ts`             | Token usage tracking, savings metrics                                               |
 
 ### Persisted graph integrity ownership
 
-Fresh full indexing and ordinary incremental indexing build file and fileless manifest rows from independent index output and verify them synchronously. A populated active graph rejects destructive full refreshes; whole-database recovery builds all configured repositories in a fresh candidate and validates it after reopen. `DerivedState.graphIntegrityManifestEstablished` records successful manifest replacement, including a valid empty manifest, so a saved-file edit can distinguish an omitted symbol-free file from missing legacy manifest state. A saved-file edit validates graph integrity and complete parser provenance, then atomically commits file, symbol, edge, parser-provenance, manifest, and revision changes in one foreground transaction. Each phase retains exact Version/revision ownership, and any failure marks the revision failed.
+Fresh full indexing and ordinary incremental indexing build file and fileless manifest rows from independent index output and verify them synchronously. A populated active graph rejects destructive full refreshes; whole-database recovery builds all configured repositories in a fresh candidate and validates it after reopen. `DerivedState.graphIntegrityManifestEstablished` records successful manifest replacement, including a valid empty manifest, so a saved-file edit can distinguish an omitted symbol-free file from missing legacy manifest state. A saved-file edit validates graph integrity and a version/revision-bound repository parser summary; an existing durable file must also have a valid, available, matching `FileParserState`. It then atomically commits file, symbol, edge, parser-provenance, manifest, and revision changes in one foreground transaction. Each phase retains exact Version/revision ownership, and any failure marks the revision failed.
 
 Each repository owns at most one running background verifier and one coalesced latest wake. The verifier leases an exclusive read connection, opens one read-only transaction, and reads both manifest tables plus canonical Symbol rows in deterministic pages from the same stable snapshot. The verifier closes the snapshot and connection before it publishes a result.
 
-The publication compare-and-set requires the captured Version and revision to remain current. A successful check publishes complete `RepoParserState` coverage and `verified` graph state in one transaction, then advances `graphIntegrityVerifiedRevision`; a failed check publishes `failed` and preserves the last verified revision. If a newer Version or revision owns the repository, the compare-and-set performs no write, and the coalesced wake leaves the newer owner responsible for verification.
+The publication compare-and-set requires the captured Version and revision to remain current. A successful check publishes the deterministic `complete` or `partial` `RepoParserState` summary and `verified` graph state in one transaction, then advances `graphIntegrityVerifiedRevision`; a failed check publishes `failed` and preserves the last verified revision. If a newer Version or revision owns the repository, the compare-and-set performs no write, and the coalesced wake leaves the newer owner responsible for verification.
 
 Startup recovery scans persisted `verifying` rows after migrations and repository bootstrap, then requeues each exact Version and revision. Foreground no-op checks also recover a durable pending revision when its in-process wakeup was lost. Full-index candidate finalization, unregister, database close, and shutdown first block new verifier admission, then cancel active work between page queries and wait for the snapshot connection to close before they swap, delete, or close graph state.
 
@@ -393,7 +393,7 @@ sequenceDiagram
     V->>D: Close snapshot and release connection
     alt Version V and revision N still own current state
         alt Verification succeeds
-            V->>D: Publish complete parser coverage and verified revision N together
+            V->>D: Publish complete/partial parser coverage and verified revision N together
         else Verification fails
             V->>D: CAS state failed and preserve verified revision
         end

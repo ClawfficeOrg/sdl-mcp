@@ -182,6 +182,7 @@ describe("parser provenance persistence", () => {
     "duplicate",
     "orphan",
     "cross-repository",
+    "null-repo-id",
     "malformed-identity",
     "invalid-record",
   ] as const) {
@@ -229,6 +230,13 @@ describe("parser provenance persistence", () => {
              MATCH (r:Repo {repoId: $otherRepoId})
              CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
             { stateId: JSON.stringify([repoId, "f1"]), otherRepoId },
+          );
+        } else if (corruption === "null-repo-id") {
+          await exec(
+            conn,
+            `MATCH (s:FileParserState {stateId: $stateId})
+             SET s.repoId = NULL`,
+            { stateId: JSON.stringify([repoId, "f1"]) },
           );
         } else {
           await exec(

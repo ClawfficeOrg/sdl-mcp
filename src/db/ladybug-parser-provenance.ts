@@ -124,7 +124,7 @@ export async function listFileParserStates(
   const wrongOwner = await querySingle<{ count: unknown }>(
     conn,
     `MATCH (s:FileParserState)-[:FILE_PARSER_STATE_IN_REPO]->(:Repo {repoId: $repoId})
-     WHERE s.repoId <> $repoId
+     WHERE s.repoId IS NULL OR s.repoId <> $repoId
      RETURN count(s) AS count`,
     { repoId },
   );
