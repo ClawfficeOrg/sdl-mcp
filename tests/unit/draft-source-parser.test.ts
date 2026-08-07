@@ -103,6 +103,42 @@ test("rejects a recorded native contract that the installed engine does not prov
   );
 });
 
+test("maps a native draft extension to the addon's language token", async () => {
+  let receivedLanguage: string | undefined;
+  const result = await parseDraftSource(
+    {
+      ...parserInput(NATIVE_PARSER_CONTRACT),
+      repoRelativePath: "scripts/run-tests.mjs",
+    },
+    {
+      getNativeContentParserCapability: () => ({
+        available: true as const,
+        contract: "native:1" as const,
+      }),
+      parseContentRust: (input) => {
+        receivedLanguage = input.language;
+        return {
+          available: true as const,
+          contract: "native:1" as const,
+          result: {
+            symbols: [],
+            imports: [],
+            calls: [],
+            parseError: null,
+          } as never,
+        };
+      },
+      getAdapterForExtension: () => {
+        throw new Error("adapter parser must not run");
+      },
+      getAdapterParserContract: () => undefined,
+    },
+  );
+
+  assert.equal(receivedLanguage, "js");
+  assert.equal(result.contract, NATIVE_PARSER_CONTRACT);
+});
+
 test("dispatches a builtin TypeScript contract to its recorded adapter", async () => {
   const tree = { kind: "typescript-tree" };
   const symbols = [{ nodeId: "answer:1:0", name: "answer" }];

@@ -42,6 +42,7 @@ export interface ParityResult {
   symbolDiffs: ParityDiff[];
   importDiffs: ParityDiff[];
   callDiffs: ParityDiff[];
+  engineIdentityDiffs: ParityDiff[];
   testCaseIdentityDiffs?: ParityDiff[];
   skipped?: string;
 }
@@ -345,19 +346,19 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
 
   // Rust Pass-1
   if (!isRustEngineAvailable()) {
-    return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: "native-addon-unavailable" };
+    return { symbolDiffs: [], importDiffs: [], callDiffs: [], engineIdentityDiffs: [], skipped: "native-addon-unavailable" };
   }
   if (RUST_UNSUPPORTED_EXTENSIONS.has(ext)) {
-    return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: `rust-unsupported:${ext}` };
+    return { symbolDiffs: [], importDiffs: [], callDiffs: [], engineIdentityDiffs: [], skipped: `rust-unsupported:${ext}` };
   }
   const fileMeta: FileMetadata = { path: relPath, size: Buffer.byteLength(content, "utf8"), mtime: Date.now() };
   const rustResults = parseFilesRust("parity-harness", absRepoRoot, [fileMeta]);
   if (!rustResults || rustResults.length === 0 || rustResults[0] === null) {
-    return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: "rust-returned-null" };
+    return { symbolDiffs: [], importDiffs: [], callDiffs: [], engineIdentityDiffs: [], skipped: "rust-returned-null" };
   }
   const rustResult: RustParseResult = rustResults[0]!;
   if (rustResult.parseError) {
-    return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: `rust-parse-error` };
+    return { symbolDiffs: [], importDiffs: [], callDiffs: [], engineIdentityDiffs: [], skipped: `rust-parse-error` };
   }
 
   const normalizedRust = applyTestCaseCandidates({
@@ -382,6 +383,7 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   }).map((detail) => ({
     ...detail.extractedSymbol,
     symbolId: detail.symbolId,
+    astFingerprint: detail.astFingerprint,
   }));
   const normalizedTsSymbolsWithIds = buildSymbolDetails({
     symbolsWithNodeIds: normalizedTs.symbols,
@@ -391,9 +393,20 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   }).map((detail) => ({
     ...detail.extractedSymbol,
     symbolId: detail.symbolId,
+    astFingerprint: detail.astFingerprint,
   }));
 
   return {
+    engineIdentityDiffs: diffArrays(
+      sortByRange(normalizedTsSymbolsWithIds),
+      sortByRange(normalizedRust.symbols),
+      (symbol) => ({
+        symbolId: (symbol as { symbolId?: unknown }).symbolId,
+        astFingerprint: (symbol as { astFingerprint?: unknown }).astFingerprint,
+      }),
+      (symbol) =>
+        `${symbol.kind}:${symbol.name}@${symbol.range.startLine}:${symbol.range.startCol}`,
+    ),
     testCaseIdentityDiffs: [
       ...attachedIdentityDiffs(
         rawTsSymbolsWithIds,

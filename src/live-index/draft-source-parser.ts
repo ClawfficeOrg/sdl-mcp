@@ -14,6 +14,7 @@ import {
   type ParserContract,
 } from "../indexer/parser-provenance.js";
 import {
+  extensionToLanguage,
   getNativeContentParserCapability,
   parseContentRust,
   type RustExtractedSymbol,
@@ -112,7 +113,9 @@ export async function parseDraftSource(
       parsed = await deps.parseContentRust({
         repoId: input.repoId,
         relPath: repoRelativePath,
-        language: input.contract.language,
+        language: extensionToLanguage(
+          extname(repoRelativePath).slice(1).toLowerCase(),
+        ),
         content: input.content,
       });
     } catch {

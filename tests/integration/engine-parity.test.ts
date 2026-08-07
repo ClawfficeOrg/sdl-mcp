@@ -27,11 +27,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { RepoConfigSchema } from "../../dist/config/types.js";
+import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import type { SymbolRow } from "../../dist/db/ladybug-queries.js";
 import {
   closeLadybugDb,
+  getLadybugConn,
   initLadybugDb,
 } from "../../dist/db/ladybug.js";
+import { markGraphIntegrityVerified } from "../../dist/db/ladybug-derived-state.js";
 import { isRustEngineAvailable } from "../../dist/indexer/rustIndexer.js";
 import { applyTestCaseCandidates } from "../../dist/indexer/test-case-normalizer.js";
 import {
@@ -44,6 +47,7 @@ import { parseAndExtract } from "../../dist/indexer/parser/parse-and-extract.js"
 import { processFileFromRustResult } from "../../dist/indexer/parser/rust-process-file.js";
 import { buildSymbolDetails } from "../../dist/indexer/parser/symbol-mapping.js";
 import { providerFactsToGraphRows } from "../../dist/indexer/provider-first/materializer.js";
+import { capturePersistedGraphIntegrity } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
 import type { ProviderFactSet } from "../../dist/indexer/provider-first/types.js";
 import type { ParserWorkerPool } from "../../dist/indexer/workerPool.js";
 import { serializeTestCaseFacet } from "../../dist/util/test-case.js";
@@ -140,6 +144,13 @@ describe("Engine parity: TS Pass-1 vs Rust Pass-1 (Task 1.13)", () => {
         // Parity is skipped for this fixture (unsupported language, parse
         // error, etc.). Not a failure.
         return;
+      }
+      assert.ok(Array.isArray(result.engineIdentityDiffs));
+      if (BASELINE_MODE && result.engineIdentityDiffs.length > 0) {
+        console.warn(
+          `[parity-identity] ${label}: ${result.engineIdentityDiffs.length} diagnostic difference(s)`,
+          JSON.stringify(result.engineIdentityDiffs.slice(0, 3), null, 2),
+        );
       }
       const diffCount = totalDiffs(result);
       if (diffCount === 0) return;
@@ -345,6 +356,37 @@ it("emits exact semantic case projections across indexing pipelines", async () =
 
   const nativeRoot = mkdtempSync(join(tmpdir(), "sdl-semantic-parity-"));
   await initLadybugDb(join(nativeRoot, "graph.lbug"));
+  const conn = await getLadybugConn();
+  const indexedAt = "2026-08-07T00:00:00.000Z";
+  await ladybugDb.upsertRepo(conn, {
+    repoId,
+    rootPath: REPO_ROOT,
+    configJson: JSON.stringify({ repoId, rootPath: REPO_ROOT, languages: ["ts"] }),
+    createdAt: indexedAt,
+  });
+  await ladybugDb.createVersion(conn, {
+    versionId: "v1",
+    repoId,
+    createdAt: indexedAt,
+    reason: "engine parity baseline",
+    prevVersionHash: null,
+    versionHash: null,
+  });
+  await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, repoId, {
+    files: [],
+    fileless: [],
+  });
+  const baseline = await capturePersistedGraphIntegrity(conn, repoId);
+  const coverageDigest =
+    await ladybugDb.verifyExactParserCoverageInTransaction(conn, repoId);
+  await ladybugDb.upsertRepoParserStateInTransaction(conn, {
+    repoId,
+    coverageState: "complete",
+    graphVersionId: "v1",
+    graphRevision: 0,
+    coverageDigest,
+  });
+  await markGraphIntegrityVerified(repoId, "v1", baseline.digest);
   const draft = await parseDraftFile({
     repoId,
     repoRoot: REPO_ROOT,
@@ -450,17 +492,20 @@ it("emits exact semantic case projections across indexing pipelines", async () =
 
   const syncProjection = projectParsed(sync.data);
   const projections = {
+    sync: syncProjection,
     worker: projectParsed(worker.data),
     native: projectRows(nativeRows),
     draft: projectRows(draft.symbols),
     provider: projectRows(providerRows.symbols),
   };
+  const projectSemantics = ({
+    order,
+    range,
+    testCaseJson,
+  }: SemanticProjection) => ({ order, range, testCaseJson });
+  const expectedSemantics = syncProjection.map(projectSemantics);
   assert.deepEqual(
-    syncProjection.map(({ order, range, testCaseJson }) => ({
-      order,
-      range,
-      testCaseJson,
-    })),
+    expectedSemantics,
     [
       {
         order: 0,
@@ -476,19 +521,18 @@ it("emits exact semantic case projections across indexing pipelines", async () =
       },
     ],
   );
-  assert.ok(
-    syncProjection.every(
-      (projection) =>
-        projection.symbolId.length > 0 &&
-        projection.astFingerprint.length > 0,
-    ),
-  );
-  assert.notEqual(syncProjection[0]?.symbolId, syncProjection[1]?.symbolId);
   for (const [pipeline, projection] of Object.entries(projections)) {
     assert.deepEqual(
-      projection,
-      syncProjection,
+      projection.map(projectSemantics),
+      expectedSemantics,
       `${pipeline} semantic projection diverged from sync`,
     );
+    assert.ok(
+      projection.every(
+        (item) =>
+          item.symbolId.length > 0 && item.astFingerprint.length > 0,
+      ),
+    );
+    assert.notEqual(projection[0]?.symbolId, projection[1]?.symbolId);
   }
 });

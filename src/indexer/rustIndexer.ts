@@ -385,7 +385,7 @@ const NATIVE_EXTRACTION_LANGUAGES = new Set([
 /**
  * Map file extension to language identifier.
  */
-function extensionToLanguage(ext: string): string {
+export function extensionToLanguage(ext: string): string {
   const map: Record<string, string> = {
     ts: "ts",
     tsx: "tsx",
