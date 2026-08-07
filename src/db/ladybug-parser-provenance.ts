@@ -17,9 +17,14 @@ export interface FileParserStateRecord {
 
 export interface RepoParserStateRecord {
   repoId: string;
-  coverageState: "complete";
+  coverageState: "complete" | "partial";
   graphVersionId: string;
   graphRevision: number;
+  coverageDigest: string;
+}
+
+export interface ParserCoverageSummary {
+  coverageState: "complete" | "partial";
   coverageDigest: string;
 }
 
@@ -72,8 +77,13 @@ function assertRepoParserState(row: RepoParserStateRecord): void {
   assertNonEmpty(row.repoId, "repoId");
   assertNonEmpty(row.graphVersionId, "graphVersionId");
   assertNonEmpty(row.coverageDigest, "coverageDigest");
-  if (row.coverageState !== "complete") {
-    throw parserCoverageError("repository coverage state must be complete");
+  if (
+    row.coverageState !== "complete" &&
+    row.coverageState !== "partial"
+  ) {
+    throw parserCoverageError(
+      "repository coverage state must be complete or partial",
+    );
   }
   if (!Number.isSafeInteger(row.graphRevision)) {
     throw parserCoverageError("graphRevision must be a safe integer");
@@ -210,10 +220,11 @@ export async function getFileParserState(
   return state;
 }
 
-export async function verifyExactParserCoverageInTransaction(
+/** Validate provenance structure while treating membership gaps as partial coverage. */
+export async function summarizeParserCoverageInTransaction(
   conn: Connection,
   repoId: string,
-): Promise<string> {
+): Promise<ParserCoverageSummary> {
   const files = await queryAll<{ fileId: string }>(
     conn,
     `MATCH (:Repo {repoId: $repoId})<-[:FILE_IN_REPO]-(f:File)
@@ -227,14 +238,12 @@ export async function verifyExactParserCoverageInTransaction(
   }
 
   const states = await listFileParserStates(conn, repoId);
-  if (
+  const coverageState =
     states.length !== expectedFileIds.length ||
     states.some((state, index) => state.fileId !== expectedFileIds[index])
-  ) {
-    throw parserCoverageError("file and parser-state membership differ");
-  }
-
-  return hashContent(
+      ? "partial"
+      : "complete";
+  const coverageDigest = hashContent(
     JSON.stringify(
       states.map((state) => [
         state.fileId,
@@ -245,6 +254,18 @@ export async function verifyExactParserCoverageInTransaction(
       ]),
     ),
   );
+  return { coverageState, coverageDigest };
+}
+
+export async function verifyExactParserCoverageInTransaction(
+  conn: Connection,
+  repoId: string,
+): Promise<string> {
+  const summary = await summarizeParserCoverageInTransaction(conn, repoId);
+  if (summary.coverageState !== "complete") {
+    throw parserCoverageError("file and parser-state membership differ");
+  }
+  return summary.coverageDigest;
 }
 
 export async function upsertRepoParserStateInTransaction(

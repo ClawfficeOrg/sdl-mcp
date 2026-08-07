@@ -16,6 +16,7 @@ import {
   getFileParserState,
   getRepoParserState,
   listFileParserStates,
+  summarizeParserCoverageInTransaction,
   upsertFileParserStatesInTransaction,
   upsertRepoParserStateInTransaction,
   verifyExactParserCoverageInTransaction,
@@ -104,6 +105,11 @@ describe("parser provenance persistence", () => {
       await upsertFileParserStatesInTransaction(conn, [f2, f1]);
       assert.deepEqual(await listFileParserStates(conn, "r1"), [f1, f2]);
 
+      assert.deepEqual(await summarizeParserCoverageInTransaction(conn, "r1"), {
+        coverageState: "complete",
+        coverageDigest: expectedDigest,
+      });
+
       const firstDigest = await verifyExactParserCoverageInTransaction(
         conn,
         "r1",
@@ -135,33 +141,58 @@ describe("parser provenance persistence", () => {
     });
   });
 
-  for (const corruption of [
+  for (const gap of [
     "zero",
-    "duplicate",
-    "orphan",
-    "cross-repository",
-    "wrong-file",
+    "missing",
+    "extra",
     "equal-count-different-id",
   ] as const) {
-    it(`rejects ${corruption} parser-state coverage`, async () => {
-      const repoId = `repo-${corruption}`;
-      const fileIds =
-        corruption === "zero" || corruption === "wrong-file"
-          ? ["f1"]
-          : ["f1", "f2"];
+    it(`summarizes ${gap} parser-state coverage as partial`, async () => {
+      const repoId = `repo-${gap}`;
+      const fileIds = gap === "zero" || gap === "extra" ? ["f1"] : ["f1", "f2"];
       await seedRepo(repoId, fileIds);
 
       await withWriteConn(async (conn) => {
-        if (corruption !== "zero") {
-          const states =
-            corruption === "equal-count-different-id"
-              ? [parserState(repoId, "f1"), parserState(repoId, "f3")]
-              : corruption === "wrong-file"
-                ? [parserState(repoId, "f3")]
-                : fileIds.map((fileId) => parserState(repoId, fileId));
+        if (gap !== "zero") {
+          const states = gap === "missing"
+            ? [parserState(repoId, "f1")]
+            : gap === "extra"
+              ? [parserState(repoId, "f1"), parserState(repoId, "f2")]
+              : [parserState(repoId, "f1"), parserState(repoId, "f3")];
           await upsertFileParserStatesInTransaction(conn, states);
         }
 
+        const summary = await summarizeParserCoverageInTransaction(conn, repoId);
+        assert.equal(summary.coverageState, "partial");
+        assert.match(summary.coverageDigest, /^[a-f0-9]{64}$/);
+        assert.deepEqual(
+          await summarizeParserCoverageInTransaction(conn, repoId),
+          summary,
+        );
+
+        await assert.rejects(
+          verifyExactParserCoverageInTransaction(conn, repoId),
+          /parser coverage/i,
+        );
+      });
+    });
+  }
+
+  for (const corruption of [
+    "duplicate",
+    "orphan",
+    "cross-repository",
+    "malformed-identity",
+    "invalid-record",
+  ] as const) {
+    it(`rejects structurally corrupt ${corruption} parser provenance`, async () => {
+      const repoId = `repo-${corruption}`;
+      await seedRepo(repoId, ["f1", "f2"]);
+      await withWriteConn(async (conn) => {
+        await upsertFileParserStatesInTransaction(conn, [
+          parserState(repoId, "f1"),
+          parserState(repoId, "f2"),
+        ]);
         if (corruption === "duplicate") {
           await exec(
             conn,
@@ -169,28 +200,22 @@ describe("parser provenance persistence", () => {
              CREATE (s:FileParserState {
                stateId: $stateId, repoId: $repoId, fileId: 'f1',
                engine: 'typescript', engineContract: 'typescript:1',
-               adapterKey: 'builtin:typescript:typescript:1',
-               language: 'typescript'
+               adapterKey: 'builtin:typescript:typescript:1', language: 'typescript'
              })
              CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
             { repoId, stateId: JSON.stringify([repoId, "f1", "duplicate"]) },
           );
-        }
-
-        if (corruption === "orphan") {
+        } else if (corruption === "orphan") {
           await exec(
             conn,
             `CREATE (:FileParserState {
                stateId: $stateId, repoId: $repoId, fileId: 'orphan',
                engine: 'typescript', engineContract: 'typescript:1',
-               adapterKey: 'builtin:typescript:typescript:1',
-               language: 'typescript'
+               adapterKey: 'builtin:typescript:typescript:1', language: 'typescript'
              })`,
             { repoId, stateId: JSON.stringify([repoId, "orphan"]) },
           );
-        }
-
-        if (corruption === "cross-repository") {
+        } else if (corruption === "cross-repository") {
           const otherRepoId = `${repoId}-other`;
           await upsertRepo(conn, {
             repoId: otherRepoId,
@@ -203,15 +228,32 @@ describe("parser provenance persistence", () => {
             `MATCH (s:FileParserState {stateId: $stateId})
              MATCH (r:Repo {repoId: $otherRepoId})
              CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+            { stateId: JSON.stringify([repoId, "f1"]), otherRepoId },
+          );
+        } else {
+          await exec(
+            conn,
+            `MATCH (r:Repo {repoId: $repoId})
+             CREATE (s:FileParserState {
+               stateId: $stateId, repoId: $repoId, fileId: 'f3',
+               engine: $engine, engineContract: 'typescript:1',
+               adapterKey: 'builtin:typescript:typescript:1', language: 'typescript'
+             })
+             CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
             {
-              stateId: JSON.stringify([repoId, "f1"]),
-              otherRepoId,
+              repoId,
+              stateId:
+                corruption === "malformed-identity"
+                  ? "malformed"
+                  : JSON.stringify([repoId, "f3"]),
+              engine:
+                corruption === "invalid-record" ? "python" : "typescript",
             },
           );
         }
 
         await assert.rejects(
-          verifyExactParserCoverageInTransaction(conn, repoId),
+          summarizeParserCoverageInTransaction(conn, repoId),
           /parser coverage/i,
         );
       });

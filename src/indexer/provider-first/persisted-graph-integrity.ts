@@ -1779,15 +1779,17 @@ async function publishVerifiedGraphAndParserCoverage(
       );
       if (!owner) return false;
 
-      const coverageDigest =
-        await ladybugDb.verifyExactParserCoverageInTransaction(txConn, repoId);
+      const coverage = await ladybugDb.summarizeParserCoverageInTransaction(
+        txConn,
+        repoId,
+      );
       await publicationHook?.("beforeRepoParserState");
       await ladybugDb.upsertRepoParserStateInTransaction(txConn, {
         repoId,
-        coverageState: "complete",
+        coverageState: coverage.coverageState,
         graphVersionId: versionId,
         graphRevision: revision,
-        coverageDigest,
+        coverageDigest: coverage.coverageDigest,
       });
       await publicationHook?.("afterRepoParserState");
       if (

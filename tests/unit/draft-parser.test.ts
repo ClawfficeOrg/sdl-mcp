@@ -334,6 +334,14 @@ test("binds parser coverage to the same verified version and revision", () => {
   };
 
   assert.equal(parserCoverageMatchesVerifiedGraph(graph, "v1", coverage), true);
+  assert.equal(
+    parserCoverageMatchesVerifiedGraph(
+      graph,
+      "v1",
+      { ...coverage, coverageState: "partial" },
+    ),
+    true,
+  );
   for (const candidate of [
     { graph: { ...graph, graphIntegrityState: "verifying" } },
     { graph: { ...graph, graphIntegrityVerifiedRevision: 2 } },

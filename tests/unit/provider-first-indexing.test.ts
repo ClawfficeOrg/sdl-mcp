@@ -9415,8 +9415,37 @@ describe("provider-first indexing foundation", () => {
         versionId,
         shadowDbPath: incompleteShadowPath,
       });
-      assert.equal(incomplete.status, "failed");
-      assert.match(incomplete.reasons.join("\n"), /parser coverage/i);
+      assert.equal(incomplete.status, "finalized", incomplete.reasons.join("\n"));
+      const partialDb = new kuzu.Database(incompleteShadowPath);
+      const partialConn = new kuzu.Connection(partialDb);
+      try {
+        const [partialState] = await queryAll<{
+          coverageState: string;
+          graphVersionId: string;
+          graphRevision: unknown;
+        }>(
+          partialConn,
+          `MATCH (s:RepoParserState {repoId: $repoId})
+           RETURN s.coverageState AS coverageState,
+                  s.graphVersionId AS graphVersionId,
+                  s.graphRevision AS graphRevision`,
+          { repoId },
+        );
+        assert.deepEqual(
+          {
+            ...partialState,
+            graphRevision: toNumber(partialState?.graphRevision),
+          },
+          {
+            coverageState: "partial",
+            graphVersionId: versionId,
+            graphRevision: 4,
+          },
+        );
+      } finally {
+        await partialConn.close();
+        await partialDb.close();
+      }
     } finally {
       await activeConn.close().catch(() => {});
       await activeDb.close().catch(() => {});

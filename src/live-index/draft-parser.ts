@@ -124,7 +124,8 @@ export function parserCoverageMatchesVerifiedGraph(
 ): boolean {
   return Boolean(
     graphIntegrityIsVerifiedForVersion(derivedState, versionId) &&
-    repoParserState?.coverageState === "complete" &&
+    (repoParserState?.coverageState === "complete" ||
+      repoParserState?.coverageState === "partial") &&
     repoParserState.graphVersionId === versionId &&
     repoParserState.graphRevision ===
       derivedState?.graphIntegrityVerifiedRevision,

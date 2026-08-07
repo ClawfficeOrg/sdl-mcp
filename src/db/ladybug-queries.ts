@@ -202,9 +202,11 @@ export {
   getFileParserState,
   getRepoParserState,
   listFileParserStates,
+  summarizeParserCoverageInTransaction,
   upsertFileParserStatesInTransaction,
   upsertRepoParserStateInTransaction,
   verifyExactParserCoverageInTransaction,
   type FileParserStateRecord,
+  type ParserCoverageSummary,
   type RepoParserStateRecord,
 } from "./ladybug-parser-provenance.js";

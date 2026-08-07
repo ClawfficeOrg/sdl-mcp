@@ -393,6 +393,32 @@ describe("saved file graph patch", () => {
     resetDefaultLiveIndexCoordinator();
   });
 
+  it("accepts current partial repository coverage for a durable file with a valid parser contract", async () => {
+    const conn = await getLadybugConn();
+    const baseline = await ladybugDb.getRepoParserState(conn, repoId);
+    assert.ok(baseline);
+    await withWriteConn((writeConn) =>
+      ladybugDb.upsertRepoParserStateInTransaction(writeConn, {
+        ...baseline,
+        coverageState: "partial",
+      }),
+    );
+    try {
+      const preflight = await preflightDraftParser({
+        repoId,
+        filePath: "src/example.ts",
+      });
+      assert.equal(preflight.repoParserState.coverageState, "partial");
+      assert.equal(preflight.durableFile?.fileId, durableFileId);
+      assert.equal(preflight.contract.engine, "typescript");
+      assert.equal(preflight.contract.engineContract, "typescript:1");
+    } finally {
+      await withWriteConn((writeConn) =>
+        ladybugDb.upsertRepoParserStateInTransaction(writeConn, baseline),
+      );
+    }
+  });
+
   after(async () => {
     resetDefaultLiveIndexCoordinator();
     await cancelAndWaitForGraphIntegrityVerifier(repoId);

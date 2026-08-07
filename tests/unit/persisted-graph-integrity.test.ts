@@ -2978,7 +2978,7 @@ describe("persisted graph integrity", () => {
     );
   });
 
-  it("fails graph completion when parser coverage is incomplete", async () => {
+  it("publishes a verified graph with partial parser coverage", async () => {
     root = mkdtempSync(join(tmpdir(), "sdl-parser-coverage-incomplete-"));
     await seedVersionedGraph(root);
     const expected = await capturePersistedGraphIntegrity(
@@ -2999,19 +2999,21 @@ describe("persisted graph integrity", () => {
     });
     await markGraphIntegrityVerifying("repo", "v1");
 
-    await assert.rejects(
-      completeGraphIntegrityVerification("repo", "v1", expected),
-      /^Error: Persisted graph integrity verification failed$/,
-    );
+    await completeGraphIntegrityVerification("repo", "v1", expected);
 
-    assert.equal(
-      (await derivedState.getDerivedState("repo"))?.graphIntegrityState,
-      "failed",
+    const graphState = await derivedState.getDerivedState("repo");
+    const parserState = await ladybugDb.getRepoParserState(
+      await getLadybugConn(),
+      "repo",
     );
+    assert.equal(graphState?.graphIntegrityState, "verified");
+    assert.equal(parserState?.coverageState, "partial");
+    assert.equal(parserState?.graphVersionId, "v1");
     assert.equal(
-      await ladybugDb.getRepoParserState(await getLadybugConn(), "repo"),
-      null,
+      parserState?.graphRevision,
+      graphState?.graphIntegrityVerifiedRevision,
     );
+    assert.match(parserState?.coverageDigest ?? "", /^[a-f0-9]{64}$/);
   });
 
   for (const phase of [

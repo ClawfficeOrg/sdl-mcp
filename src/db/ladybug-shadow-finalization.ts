@@ -18,8 +18,8 @@ import {
 import {
   deleteParserProvenanceForRepoInTransaction,
   listFileParserStates,
+  summarizeParserCoverageInTransaction,
   upsertRepoParserStateInTransaction,
-  verifyExactParserCoverageInTransaction,
 } from "./ladybug-parser-provenance.js";
 import {
   assertSafeInt,
@@ -520,17 +520,16 @@ export async function finalizeProviderFirstShadowDb(
           "Parser coverage cannot be published without matching verified shadow graph ownership",
         );
       }
-      const coverageDigest =
-        await verifyExactParserCoverageInTransaction(
-          shadowConn,
-          params.repoId,
-        );
+      const coverage = await summarizeParserCoverageInTransaction(
+        shadowConn,
+        params.repoId,
+      );
       await upsertRepoParserStateInTransaction(shadowConn, {
         repoId: params.repoId,
-        coverageState: "complete",
+        coverageState: coverage.coverageState,
         graphVersionId: params.versionId,
         graphRevision: verifiedRevision,
-        coverageDigest,
+        coverageDigest: coverage.coverageDigest,
       });
 
       return {
