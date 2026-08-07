@@ -55,7 +55,7 @@ describe("migration: fresh database", { skip: !ladybugAvailable }, () => {
     }
   });
 
-  it("creates schema version 24 with nullable graph integrity revisions directly", async () => {
+  it("creates schema version 25 with parser provenance directly and idempotently", async () => {
     mkdirSync(testRoot, { recursive: true });
     const dbPath = join(testRoot, "fresh.lbug");
     const original = migrations[0];
@@ -70,8 +70,61 @@ describe("migration: fresh database", { skip: !ladybugAvailable }, () => {
       await initLadybugDb(dbPath);
       const conn = await getLadybugConn();
 
-      assert.equal(LADYBUG_SCHEMA_VERSION, 24);
-      assert.equal(await getSchemaVersion(conn), 24);
+      assert.equal(LADYBUG_SCHEMA_VERSION, 25);
+      assert.equal(await getSchemaVersion(conn), 25);
+
+      const m025 = await import(
+        "../../dist/db/migrations/m025-add-parser-provenance.js"
+      );
+      await m025.up(conn);
+      await m025.up(conn);
+      await exec(
+        conn,
+        `CREATE (r:Repo {
+           repoId: 'parser-repo',
+           rootPath: '',
+           configJson: '{}',
+           createdAt: '2026-08-07T00:00:00.000Z'
+         })
+         CREATE (f:FileParserState {
+           stateId: '["parser-repo","file-1"]',
+           repoId: 'parser-repo',
+           fileId: 'file-1',
+           engine: 'typescript',
+           engineContract: 'typescript:1',
+           adapterKey: 'builtin:typescript:typescript:1',
+           language: 'typescript'
+         })
+         CREATE (s:RepoParserState {
+           repoId: 'parser-repo',
+           coverageState: 'complete',
+           graphVersionId: 'version-1',
+           graphRevision: 1,
+           coverageDigest: 'digest'
+         })
+         CREATE (f)-[:FILE_PARSER_STATE_IN_REPO]->(r)
+         CREATE (s)-[:REPO_PARSER_STATE_IN_REPO]->(r)`,
+      );
+      const parserObjects = await queryAll<{
+        fileStates: unknown;
+        repoStates: unknown;
+        fileLinks: unknown;
+        repoLinks: unknown;
+      }>(
+        conn,
+        `MATCH (f:FileParserState)-[fr:FILE_PARSER_STATE_IN_REPO]->(:Repo {repoId: 'parser-repo'})
+         MATCH (s:RepoParserState)-[sr:REPO_PARSER_STATE_IN_REPO]->(:Repo {repoId: 'parser-repo'})
+         RETURN count(DISTINCT f) AS fileStates,
+                count(DISTINCT s) AS repoStates,
+                count(DISTINCT fr) AS fileLinks,
+                count(DISTINCT sr) AS repoLinks`,
+      );
+      assert.deepEqual(
+        parserObjects.map((row) => Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [key, Number(value)]),
+        )),
+        [{ fileStates: 1, repoStates: 1, fileLinks: 1, repoLinks: 1 }],
+      );
 
       await exec(
         conn,

@@ -16,6 +16,12 @@ import {
   listGraphIntegrityFileStates,
 } from "./ladybug-graph-integrity.js";
 import {
+  deleteParserProvenanceForRepoInTransaction,
+  listFileParserStates,
+  upsertRepoParserStateInTransaction,
+  verifyExactParserCoverageInTransaction,
+} from "./ladybug-parser-provenance.js";
+import {
   assertSafeInt,
   exec,
   execDdl,
@@ -293,6 +299,15 @@ const GRAPH_INTEGRITY_FILELESS_STATE_COLUMNS = [
   "referenceCount",
 ] as const;
 const GRAPH_INTEGRITY_STATE_IN_REPO_COLUMNS = ["from", "to"] as const;
+const FILE_PARSER_STATE_COLUMNS = [
+  "stateId",
+  "repoId",
+  "fileId",
+  "engine",
+  "engineContract",
+  "adapterKey",
+  "language",
+] as const;
 
 interface AuxiliarySymbolRow {
   symbolId: string;
@@ -485,6 +500,39 @@ export async function finalizeProviderFirstShadowDb(
           reasons: mismatches,
         };
       }
+      const shadowDerivedState = await readDerivedStateRow(
+        shadowConn,
+        params.repoId,
+      );
+      const graphRevision = shadowDerivedState?.graphIntegrityRevision;
+      const verifiedRevision =
+        shadowDerivedState?.graphIntegrityVerifiedRevision;
+      if (
+        shadowDerivedState?.graphIntegrityState !== "verified" ||
+        shadowDerivedState.graphIntegrityVersionId !== params.versionId ||
+        typeof graphRevision !== "number" ||
+        !Number.isSafeInteger(graphRevision) ||
+        typeof verifiedRevision !== "number" ||
+        !Number.isSafeInteger(verifiedRevision) ||
+        graphRevision !== verifiedRevision
+      ) {
+        throw new Error(
+          "Parser coverage cannot be published without matching verified shadow graph ownership",
+        );
+      }
+      const coverageDigest =
+        await verifyExactParserCoverageInTransaction(
+          shadowConn,
+          params.repoId,
+        );
+      await upsertRepoParserStateInTransaction(shadowConn, {
+        repoId: params.repoId,
+        coverageState: "complete",
+        graphVersionId: params.versionId,
+        graphRevision: verifiedRevision,
+        coverageDigest,
+      });
+
       return {
         status: "finalized",
         shadowDbPath,
@@ -642,6 +690,10 @@ async function copyFinalizedRows(params: {
     params.repoId,
   );
   const graphIntegrityFilelessStates = await listGraphIntegrityFilelessStates(
+    params.activeConn,
+    params.repoId,
+  );
+  const fileParserStates = await listFileParserStates(
     params.activeConn,
     params.repoId,
   );
@@ -984,6 +1036,32 @@ async function copyFinalizedRows(params: {
       targetTable: "GRAPH_INTEGRITY_FILELESS_STATE_IN_REPO",
       kind: "relationship",
       rows: graphIntegrityFilelessStates,
+      mapRow: (row) => [row.stateId, row.repoId],
+    }),
+    await writeCsvArtifact({
+      stagingDir,
+      fileName: "file-parser-states.csv",
+      columns: [...FILE_PARSER_STATE_COLUMNS],
+      targetTable: "FileParserState",
+      kind: "node",
+      rows: fileParserStates,
+      mapRow: (row) => [
+        row.stateId,
+        row.repoId,
+        row.fileId,
+        row.engine,
+        row.engineContract,
+        row.adapterKey,
+        row.language,
+      ],
+    }),
+    await writeCsvArtifact({
+      stagingDir,
+      fileName: "file-parser-state-in-repo.csv",
+      columns: [...GRAPH_INTEGRITY_STATE_IN_REPO_COLUMNS],
+      targetTable: "FILE_PARSER_STATE_IN_REPO",
+      kind: "relationship",
+      rows: fileParserStates,
       mapRow: (row) => [row.stateId, row.repoId],
     }),
   ];
@@ -1988,6 +2066,7 @@ async function resetBulkFinalizationTargets(
      DELETE rel, s`,
     { repoId },
   );
+  await deleteParserProvenanceForRepoInTransaction(conn, repoId);
   await exec(
     conn,
     `MATCH (s:Symbol)-[rel:SYMBOL_IN_REPO]->(:Repo {repoId: $repoId})

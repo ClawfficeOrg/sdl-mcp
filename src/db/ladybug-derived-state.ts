@@ -459,37 +459,52 @@ export async function markGraphIntegrityVerified(
 }
 
 /** Publish a digest only while the same verification attempt still owns state. */
-export async function markGraphIntegrityVerifiedIfVerifying(
+export async function markGraphIntegrityVerifiedInTransactionIfVerifying(
+  conn: Connection,
   repoId: string,
   versionId: string,
   revision: number,
   digest: string,
 ): Promise<boolean> {
   assertSafeInt(revision, "revision");
-  const updatedAt = getCurrentTimestamp();
-  return withWriteConn(async (wConn) => {
-    const row = await querySingle<{ repoId: string }>(
+  const row = await querySingle<{ repoId: string }>(
+    conn,
+    `MATCH (d:DerivedState {repoId: $repoId})
+     WHERE d.graphIntegrityState = 'verifying'
+       AND d.graphIntegrityVersionId = $versionId
+       AND d.graphIntegrityRevision = $revision
+     SET d.graphIntegrityState = 'verified',
+         d.graphIntegrityVerifiedRevision = d.graphIntegrityRevision,
+         d.graphIntegrityDigest = $graphIntegrityDigest,
+         d.graphIntegrityError = NULL,
+         d.updatedAt = $updatedAt
+     RETURN d.repoId AS repoId`,
+    {
+      repoId,
+      versionId,
+      revision,
+      graphIntegrityDigest: digest,
+      updatedAt: getCurrentTimestamp(),
+    },
+  );
+  return row !== null;
+}
+
+export async function markGraphIntegrityVerifiedIfVerifying(
+  repoId: string,
+  versionId: string,
+  revision: number,
+  digest: string,
+): Promise<boolean> {
+  return withWriteConn((wConn) =>
+    markGraphIntegrityVerifiedInTransactionIfVerifying(
       wConn,
-      `MATCH (d:DerivedState {repoId: $repoId})
-       WHERE d.graphIntegrityState = 'verifying'
-         AND d.graphIntegrityVersionId = $versionId
-         AND d.graphIntegrityRevision = $revision
-       SET d.graphIntegrityState = 'verified',
-           d.graphIntegrityVerifiedRevision = d.graphIntegrityRevision,
-           d.graphIntegrityDigest = $graphIntegrityDigest,
-           d.graphIntegrityError = NULL,
-           d.updatedAt = $updatedAt
-       RETURN d.repoId AS repoId`,
-      {
-        repoId,
-        versionId,
-        revision,
-        graphIntegrityDigest: digest,
-        updatedAt,
-      },
-    );
-    return row !== null;
-  });
+      repoId,
+      versionId,
+      revision,
+      digest,
+    ),
+  );
 }
 
 /** Publish failure only while the same verification attempt still owns state. */

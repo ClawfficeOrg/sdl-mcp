@@ -70,6 +70,9 @@ describe("deleteRepo exhaustive current-schema cleanup", () => {
       `CREATE (:DerivedState {repoId: '${repoId}'})`,
       `CREATE (:GraphIntegrityFileState {stateId: '["${repoId}","file_${id}"]', repoId: '${repoId}', fileId: 'file_${id}', relPath: 'src/${id}.ts', symbolCount: 1, digest: '${"a".repeat(64)}', filelessReferencesJson: '[]'})`,
       `CREATE (:GraphIntegrityFilelessState {stateId: '["${repoId}","placeholder_${id}"]', repoId: '${repoId}', symbolId: 'placeholder_${id}', canonicalSymbolJson: '{}', referenceCount: 1})`,
+      `CREATE (:FileParserState {stateId: '["${repoId}","file_${id}"]', repoId: '${repoId}', fileId: 'file_${id}', engine: 'typescript', engineContract: 'typescript:1', adapterKey: 'builtin:typescript:typescript:1', language: 'typescript'})`,
+      `CREATE (:FileParserState {stateId: '["${repoId}","orphan_${id}"]', repoId: '${repoId}', fileId: 'orphan_${id}', engine: 'typescript', engineContract: 'typescript:1', adapterKey: 'builtin:typescript:typescript:1', language: 'typescript'})`,
+      `CREATE (:RepoParserState {repoId: '${repoId}', coverageState: 'complete', graphVersionId: 'version_${id}', graphRevision: 1, coverageDigest: '${"b".repeat(64)}'})`,
       `MATCH (f:File {fileId: 'file_${id}'}), (r:Repo {repoId: '${repoId}'}) CREATE (f)-[:FILE_IN_REPO]->(r)`,
       `MATCH (s:Symbol {symbolId: 'symbol_${id}'}), (f:File {fileId: 'file_${id}'}) CREATE (s)-[:SYMBOL_IN_FILE]->(f)`,
       `MATCH (s:Symbol), (r:Repo {repoId: '${repoId}'}) WHERE s.symbolId IN ['symbol_${id}', 'placeholder_${id}'] CREATE (s)-[:SYMBOL_IN_REPO]->(r)`,
@@ -88,6 +91,8 @@ describe("deleteRepo exhaustive current-schema cleanup", () => {
       `MATCH (s:FileSummary {fileId: 'file_${id}'}), (f:File {fileId: 'file_${id}'}) CREATE (s)-[:SUMMARY_OF_FILE]->(f)`,
       `MATCH (f:GraphIntegrityFileState {repoId: '${repoId}'}), (r:Repo {repoId: '${repoId}'}) CREATE (f)-[:GRAPH_INTEGRITY_FILE_STATE_IN_REPO]->(r)`,
       `MATCH (s:GraphIntegrityFilelessState {repoId: '${repoId}'}), (r:Repo {repoId: '${repoId}'}) CREATE (s)-[:GRAPH_INTEGRITY_FILELESS_STATE_IN_REPO]->(r)`,
+      `MATCH (s:FileParserState {stateId: '["${repoId}","file_${id}"]'}), (r:Repo {repoId: '${repoId}'}) CREATE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+      `MATCH (s:RepoParserState {repoId: '${repoId}'}), (r:Repo {repoId: '${repoId}'}) CREATE (s)-[:REPO_PARSER_STATE_IN_REPO]->(r)`,
     ];
     for (const statement of statements) await exec(statement);
   }
@@ -153,6 +158,8 @@ describe("deleteRepo exhaustive current-schema cleanup", () => {
       "DerivedState",
       "GraphIntegrityFileState",
       "GraphIntegrityFilelessState",
+      "FileParserState",
+      "RepoParserState",
     ];
     for (const table of repoScopedTables) {
       assert.strictEqual(
@@ -201,6 +208,8 @@ describe("deleteRepo exhaustive current-schema cleanup", () => {
       SUMMARY_OF_FILE: 1,
       GRAPH_INTEGRITY_FILE_STATE_IN_REPO: 1,
       GRAPH_INTEGRITY_FILELESS_STATE_IN_REPO: 1,
+      FILE_PARSER_STATE_IN_REPO: 1,
+      REPO_PARSER_STATE_IN_REPO: 1,
     };
     for (const [relation, expected] of Object.entries(relationCounts)) {
       assert.strictEqual(

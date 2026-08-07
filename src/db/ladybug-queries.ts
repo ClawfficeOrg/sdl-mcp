@@ -196,3 +196,15 @@ export {
   type PersistedGraphIntegritySourceReferenceCount,
   type PersistedGraphIntegritySymbolRow,
 } from "./ladybug-graph-integrity.js";
+
+export {
+  deleteFileParserStatesByFileIdsInTransaction,
+  deleteParserProvenanceForRepoInTransaction,
+  getRepoParserState,
+  listFileParserStates,
+  upsertFileParserStatesInTransaction,
+  upsertRepoParserStateInTransaction,
+  verifyExactParserCoverageInTransaction,
+  type FileParserStateRecord,
+  type RepoParserStateRecord,
+} from "./ladybug-parser-provenance.js";

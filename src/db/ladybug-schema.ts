@@ -483,6 +483,24 @@ export const NODE_TABLES: string[] = [
     referenceCount INT64
   )`,
 
+  `CREATE NODE TABLE IF NOT EXISTS RepoParserState (
+    repoId STRING PRIMARY KEY,
+    coverageState STRING,
+    graphVersionId STRING,
+    graphRevision INT64,
+    coverageDigest STRING
+  )`,
+
+  `CREATE NODE TABLE IF NOT EXISTS FileParserState (
+    stateId STRING PRIMARY KEY,
+    repoId STRING,
+    fileId STRING,
+    engine STRING,
+    engineContract STRING,
+    adapterKey STRING,
+    language STRING
+  )`,
+
   `CREATE NODE TABLE IF NOT EXISTS DerivedState (
     repoId STRING PRIMARY KEY,
     clustersDirty BOOL DEFAULT false,
@@ -523,6 +541,14 @@ const REL_TABLES: string[] = [
 
   `CREATE REL TABLE IF NOT EXISTS GRAPH_INTEGRITY_FILELESS_STATE_IN_REPO (
     FROM GraphIntegrityFilelessState TO Repo
+  )`,
+
+  `CREATE REL TABLE IF NOT EXISTS REPO_PARSER_STATE_IN_REPO (
+    FROM RepoParserState TO Repo
+  )`,
+
+  `CREATE REL TABLE IF NOT EXISTS FILE_PARSER_STATE_IN_REPO (
+    FROM FileParserState TO Repo
   )`,
 
   `CREATE REL TABLE IF NOT EXISTS SYMBOL_IN_FILE (

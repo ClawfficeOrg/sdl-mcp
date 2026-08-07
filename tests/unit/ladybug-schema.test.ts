@@ -92,6 +92,33 @@ describe("LadybugDB Schema", () => {
         await createSchema(conn as unknown as import("kuzu").Connection);
         await createSchema(conn as unknown as import("kuzu").Connection);
         await createSchema(conn as unknown as import("kuzu").Connection);
+        await exec(
+          conn,
+          `CREATE (r:Repo {
+             repoId: 'parser-repo',
+             rootPath: '',
+             configJson: '{}',
+             createdAt: '2026-08-07T00:00:00.000Z'
+           })
+           CREATE (f:FileParserState {
+             stateId: '["parser-repo","file-1"]',
+             repoId: 'parser-repo',
+             fileId: 'file-1',
+             engine: 'typescript',
+             engineContract: 'typescript:1',
+             adapterKey: 'builtin:typescript:typescript:1',
+             language: 'typescript'
+           })
+           CREATE (s:RepoParserState {
+             repoId: 'parser-repo',
+             coverageState: 'complete',
+             graphVersionId: 'version-1',
+             graphRevision: 1,
+             coverageDigest: 'digest'
+           })
+           CREATE (f)-[:FILE_PARSER_STATE_IN_REPO]->(r)
+           CREATE (s)-[:REPO_PARSER_STATE_IN_REPO]->(r)`,
+        );
       } finally {
         await cleanupTestDb(db, conn);
       }

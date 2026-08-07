@@ -18,6 +18,10 @@ import {
   type LadybugWriteChunkOptions,
 } from "./ladybug-batching.js";
 import { deleteGraphIntegrityManifestInTransaction } from "./ladybug-graph-integrity.js";
+import {
+  deleteFileParserStatesByFileIdsInTransaction,
+  deleteParserProvenanceForRepoInTransaction,
+} from "./ladybug-parser-provenance.js";
 
 export interface MetricsRow {
   symbolId: string;
@@ -133,6 +137,7 @@ export async function deleteRepo(
 ): Promise<void> {
   await withTransaction(conn, async (txConn) => {
     await deleteGraphIntegrityManifestInTransaction(txConn, repoId);
+    await deleteParserProvenanceForRepoInTransaction(txConn, repoId);
     // Capture owned identifiers before deleting files so file-backed and
     // fileless (for example external SCIP placeholder) symbols share one
     // deterministic cleanup path.
@@ -764,6 +769,8 @@ async function _deleteFilesByIdsInner(
      DELETE fs`,
     { fileIds: uniqueFileIds },
   );
+
+  await deleteFileParserStatesByFileIdsInTransaction(conn, uniqueFileIds);
 
   // Step 7b: Delete known ownership edges, then detach any stale backward
   // relationship-table entries before removing owned File nodes.

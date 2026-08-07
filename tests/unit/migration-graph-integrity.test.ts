@@ -9,6 +9,8 @@ import { initValidatedTestLadybugClone } from "../helpers/ladybug-validated-clon
 import {
   closeLadybugDb,
   getLadybugConn,
+  initLadybugDb,
+  withWriteConn,
 } from "../../dist/db/ladybug.js";
 import {
   exec,
@@ -18,6 +20,7 @@ import {
 import {
   getDerivedState,
   getDerivedStateSummary,
+  markGraphIntegrityVerifiedInTransactionIfVerifying,
 } from "../../dist/db/ladybug-derived-state.js";
 import { LADYBUG_SCHEMA_VERSION } from "../../dist/db/migrations/index.js";
 import * as m024 from "../../dist/db/migrations/m024-add-symbol-test-case.js";
@@ -194,7 +197,7 @@ describe("migration: graph integrity revisions and manifest", () => {
     }
   });
 
-  it("migrates a populated m022 graph through m024 without deleting nodes", async () => {
+  it("migrates a populated m022 graph through m025 without deleting nodes", async () => {
     root = mkdtempSync(join(tmpdir(), "sdl-integrity-m024-"));
     const dbPath = join(root, "v22.lbug");
     await createVersion22Database(dbPath);
@@ -207,7 +210,7 @@ describe("migration: graph integrity revisions and manifest", () => {
     ]);
     const summary = await getDerivedStateSummary("repo");
 
-    assert.equal(LADYBUG_SCHEMA_VERSION, 24);
+    assert.equal(LADYBUG_SCHEMA_VERSION, 25);
     assert.deepEqual(
       rows.map((row) => ({
         state: row?.graphIntegrityState,
@@ -248,7 +251,7 @@ describe("migration: graph integrity revisions and manifest", () => {
       conn,
       "MATCH (v:SchemaVersion {id: 'current'}) RETURN v.schemaVersion AS schemaVersion",
     );
-    assert.equal(Number(schemaVersion?.schemaVersion), 24);
+    assert.equal(Number(schemaVersion?.schemaVersion), 25);
     assert.deepEqual(
       await queryAll(
         conn,
@@ -329,5 +332,59 @@ describe("migration: graph integrity revisions and manifest", () => {
     );
     const catalog = JSON.stringify(indexes);
     assert.doesNotMatch(catalog, /idx_graph_integrity/i);
+  });
+  it("publishes verification only while the transaction owns the same version and revision", async () => {
+    root = mkdtempSync(join(tmpdir(), "sdl-integrity-publication-"));
+    await initLadybugDb(join(root, "publication.lbug"));
+
+    await withWriteConn(async (conn) => {
+      await exec(
+        conn,
+        `MERGE (r:Repo {repoId: 'repo'})
+         SET r.rootPath = 'repo', r.configJson = '{}', r.createdAt = '2026-08-07T00:00:00.000Z'
+         MERGE (d:DerivedState {repoId: 'repo'})
+         SET d.graphIntegrityState = 'verifying',
+             d.graphIntegrityVersionId = 'v1',
+             d.graphIntegrityRevision = 3`,
+      );
+
+      assert.equal(
+        await markGraphIntegrityVerifiedInTransactionIfVerifying(
+          conn,
+          "repo",
+          "v1",
+          3,
+          "a".repeat(64),
+        ),
+        true,
+      );
+      let state = await getDerivedState("repo");
+      assert.equal(state?.graphIntegrityState, "verified");
+      assert.equal(state?.graphIntegrityVerifiedRevision, 3);
+
+      await exec(
+        conn,
+        `MATCH (d:DerivedState {repoId: 'repo'})
+         SET d.graphIntegrityState = 'verifying',
+             d.graphIntegrityVersionId = 'v2',
+             d.graphIntegrityRevision = 4,
+             d.graphIntegrityVerifiedRevision = 3`,
+      );
+      assert.equal(
+        await markGraphIntegrityVerifiedInTransactionIfVerifying(
+          conn,
+          "repo",
+          "v1",
+          3,
+          "b".repeat(64),
+        ),
+        false,
+      );
+      state = await getDerivedState("repo");
+      assert.equal(state?.graphIntegrityState, "verifying");
+      assert.equal(state?.graphIntegrityVersionId, "v2");
+      assert.equal(state?.graphIntegrityRevision, 4);
+      assert.equal(state?.graphIntegrityVerifiedRevision, 3);
+    });
   });
 });

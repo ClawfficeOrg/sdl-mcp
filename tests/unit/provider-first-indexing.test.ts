@@ -9145,6 +9145,213 @@ describe("provider-first indexing foundation", () => {
     }
   });
 
+  it("recomputes shadow parser coverage without copying active repository completeness", async () => {
+    const root = mkdtempSync(
+      join(tmpdir(), "sdl-provider-first-parser-provenance-"),
+    );
+    const activeDbPath = join(root, "active.lbug");
+    const completeShadowPath = join(root, "shadow-complete.lbug");
+    const incompleteShadowPath = join(root, "shadow-incomplete.lbug");
+    const kuzu = await import("kuzu");
+    const activeDb = new kuzu.Database(activeDbPath);
+    const activeConn = new kuzu.Connection(activeDb);
+    const repoId = "repo";
+    const versionId = "version-1";
+    const now = "2026-08-07T00:00:00.000Z";
+    const parserRows = [
+      {
+        stateId: JSON.stringify([repoId, "file-1"]),
+        repoId,
+        fileId: "file-1",
+        engine: "typescript",
+        engineContract: "typescript:1",
+        adapterKey: "builtin:typescript:typescript:1",
+        language: "typescript",
+      },
+      {
+        stateId: JSON.stringify([repoId, "file-2"]),
+        repoId,
+        fileId: "file-2",
+        engine: "typescript",
+        engineContract: "typescript:1",
+        adapterKey: "builtin:typescript:typescript:1",
+        language: "typescript",
+      },
+    ];
+    const expectedDigest = createHash("sha256")
+      .update(
+        JSON.stringify(
+          parserRows.map((row) => [
+            row.fileId,
+            row.engine,
+            row.engineContract,
+            row.adapterKey,
+            row.language,
+          ]),
+        ),
+      )
+      .digest("hex");
+
+    try {
+      await createBaseSchema(activeConn);
+      for (const [fileId, sourceSymbolId] of [
+        ["file-1", "source-1"],
+        ["file-2", "source-2"],
+      ]) {
+        await seedRepoFileAndSourceSymbol(activeConn, {
+          repoId,
+          fileId,
+          sourceSymbolId,
+          now,
+        });
+      }
+      await dbExec(
+        activeConn,
+        `MATCH (r:Repo {repoId: $repoId})
+         MERGE (v:Version {versionId: $versionId})
+         SET v.createdAt = $now, v.reason = 'test',
+             v.prevVersionHash = null, v.versionHash = 'hash'
+         MERGE (v)-[:VERSION_OF_REPO]->(r)
+         MERGE (d:DerivedState {repoId: $repoId})
+         SET d.graphIntegrityState = 'verified',
+             d.graphIntegrityVersionId = $versionId,
+             d.graphIntegrityDigest = $graphDigest,
+             d.graphIntegrityRevision = 4,
+             d.graphIntegrityVerifiedRevision = 4,
+             d.graphIntegrityManifestEstablished = true`,
+        {
+          repoId,
+          versionId,
+          now,
+          graphDigest: "a".repeat(64),
+        },
+      );
+      await dbExec(
+        activeConn,
+        `UNWIND $rows AS row
+         MATCH (r:Repo {repoId: row.repoId})
+         MERGE (s:FileParserState {stateId: row.stateId})
+         SET s.repoId = row.repoId, s.fileId = row.fileId,
+             s.engine = row.engine, s.engineContract = row.engineContract,
+             s.adapterKey = row.adapterKey, s.language = row.language
+         MERGE (s)-[:FILE_PARSER_STATE_IN_REPO]->(r)`,
+        { rows: parserRows },
+      );
+      await dbExec(
+        activeConn,
+        `MATCH (r:Repo {repoId: $repoId})
+         MERGE (s:RepoParserState {repoId: $repoId})
+         SET s.coverageState = 'complete',
+             s.graphVersionId = 'active-sentinel',
+             s.graphRevision = 99,
+             s.coverageDigest = 'active-sentinel'
+         MERGE (s)-[:REPO_PARSER_STATE_IN_REPO]->(r)`,
+        { repoId },
+      );
+
+      for (const shadowDbPath of [
+        completeShadowPath,
+        incompleteShadowPath,
+      ]) {
+        const shadowDb = new kuzu.Database(shadowDbPath);
+        const shadowConn = new kuzu.Connection(shadowDb);
+        try {
+          await createBaseSchema(shadowConn);
+          for (const [fileId, sourceSymbolId] of [
+            ["file-1", "source-1"],
+            ["file-2", "source-2"],
+          ]) {
+            await seedRepoFileAndSourceSymbol(shadowConn, {
+              repoId,
+              fileId,
+              sourceSymbolId,
+              now,
+            });
+          }
+        } finally {
+          await shadowConn.close();
+          await shadowDb.close();
+        }
+      }
+
+      const complete = await finalizeProviderFirstShadowDb({
+        activeConn,
+        repoId,
+        versionId,
+        shadowDbPath: completeShadowPath,
+      });
+      assert.equal(complete.status, "finalized", complete.reasons.join("\n"));
+
+      const verificationDb = new kuzu.Database(completeShadowPath);
+      const verificationConn = new kuzu.Connection(verificationDb);
+      try {
+        const fileStates = await queryAll<{
+          stateId: string;
+          fileId: string;
+        }>(
+          verificationConn,
+          `MATCH (s:FileParserState)-[:FILE_PARSER_STATE_IN_REPO]->(:Repo {repoId: $repoId})
+           RETURN s.stateId AS stateId, s.fileId AS fileId
+           ORDER BY s.fileId`,
+          { repoId },
+        );
+        assert.deepEqual(
+          fileStates,
+          parserRows.map(({ stateId, fileId }) => ({ stateId, fileId })),
+        );
+        const repoStates = await queryAll<{
+          coverageState: string;
+          graphVersionId: string;
+          graphRevision: unknown;
+          coverageDigest: string;
+        }>(
+          verificationConn,
+          `MATCH (s:RepoParserState)-[:REPO_PARSER_STATE_IN_REPO]->(:Repo {repoId: $repoId})
+           RETURN s.coverageState AS coverageState,
+                  s.graphVersionId AS graphVersionId,
+                  s.graphRevision AS graphRevision,
+                  s.coverageDigest AS coverageDigest`,
+          { repoId },
+        );
+        assert.equal(repoStates.length, 1);
+        assert.deepEqual(
+          {
+            ...repoStates[0],
+            graphRevision: toNumber(repoStates[0]?.graphRevision),
+          },
+          {
+            coverageState: "complete",
+            graphVersionId: versionId,
+            graphRevision: 4,
+            coverageDigest: expectedDigest,
+          },
+        );
+      } finally {
+        await verificationConn.close();
+        await verificationDb.close();
+      }
+
+      await dbExec(
+        activeConn,
+        `MATCH (s:FileParserState {stateId: $stateId})
+         DETACH DELETE s`,
+        { stateId: JSON.stringify([repoId, "file-2"]) },
+      );
+      const incomplete = await finalizeProviderFirstShadowDb({
+        activeConn,
+        repoId,
+        versionId,
+        shadowDbPath: incompleteShadowPath,
+      });
+      assert.equal(incomplete.status, "failed");
+      assert.match(incomplete.reasons.join("\n"), /parser coverage/i);
+    } finally {
+      await activeConn.close().catch(() => {});
+      await activeDb.close().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("skips unsafe large shadow finalization before mutating Symbol rows", async () => {
     const root = mkdtempSync(
       join(tmpdir(), "sdl-provider-first-finalize-large-guard-"),

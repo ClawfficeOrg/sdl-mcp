@@ -296,4 +296,10 @@ describe("safe rebuild Symbol point-lookup parity", () => {
       "every parity branch must retain a scalar PK parameter",
     );
   });
+
+  it("includes parser provenance nodes in the safe-rebuild schema", () => {
+    const schema = NODE_TABLES.join("\n");
+    assert.match(schema, /CREATE NODE TABLE IF NOT EXISTS RepoParserState/);
+    assert.match(schema, /CREATE NODE TABLE IF NOT EXISTS FileParserState/);
+  });
 });
