@@ -14,6 +14,20 @@ pub struct NativeFileInput {
     pub language: String,
 }
 
+/// Input for parsing supplied source content without filesystem I/O.
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct NativeContentInput {
+    /// Stable identifier for the repository that owns the source.
+    pub repo_id: String,
+    /// Normalized repository-relative path used for symbol identity.
+    pub rel_path: String,
+    /// SDL language identifier used to select the parser.
+    pub language: String,
+    /// Supplied UTF-8 source content.
+    pub content: String,
+}
+
 /// Range within a source file (1-indexed lines, 0-indexed columns).
 #[napi(object)]
 #[derive(Debug, Clone, Default)]

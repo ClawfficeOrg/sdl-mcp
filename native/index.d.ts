@@ -132,6 +132,17 @@ export interface NativeFileInput {
   /** Language identifier (e.g., "ts", "tsx", "js", "py", "go"). */
   language: string
 }
+/** Input for parsing supplied source content without filesystem I/O. */
+export interface NativeContentInput {
+  /** Stable identifier for the repository that owns the source. */
+  repoId: string
+  /** Normalized repository-relative path used for symbol identity. */
+  relPath: string
+  /** SDL language identifier used to select the parser. */
+  language: string
+  /** Supplied UTF-8 source content. */
+  content: string
+}
 /** Range within a source file (1-indexed lines, 0-indexed columns). */
 export interface NativeRange {
   startLine: number
@@ -283,7 +294,9 @@ export interface PreloadedWindowsLibrary {
 }
 export declare function preloadWindowsLibrary(absolutePath: string): PreloadedWindowsLibrary
 export declare function releaseWindowsLibrary(token: number): void
+export declare function parserIdentityContractVersion(): number
 export declare function parseFiles(files: Array<NativeFileInput>, threadCount: number): Array<NativeParsedFile>
+export declare function parseContent(input: NativeContentInput): NativeParsedFile
 export declare function parseFilesAsync(files: Array<NativeFileInput>, threadCount: number): Promise<unknown>
 export declare function hashContentNative(content: string): string
 export declare function generateSymbolIdNative(repoId: string, relPath: string, kind: string, name: string, fingerprint: string): string

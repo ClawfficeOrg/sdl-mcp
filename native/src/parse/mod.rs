@@ -7,7 +7,7 @@ use rayon::prelude::*;
 
 use crate::extract;
 use crate::lang;
-use crate::types::{NativeFileInput, NativeParsedFile};
+use crate::types::{NativeContentInput, NativeFileInput, NativeParsedFile};
 
 /// Stack size per Rayon worker thread (64 MiB). Tree-sitter's C-based parser
 /// can recurse deeply on complex/generated files (e.g. LLVM's deeply-nested
@@ -53,24 +53,57 @@ pub fn parse_files_parallel(
                     "sdl-mcp-native: all Rayon pools failed ({e1}, {e2}), parsing sequentially"
                 );
                 // Sequential fallback — no parallelism but no crash
-                return files.iter().map(|f| parse_single_file_safe(f)).collect();
+                return files.iter().map(parse_single_file).collect();
             }
         },
     };
 
-    pool.install(|| {
-        files
-            .par_iter()
-            .map(|file| parse_single_file_safe(file))
-            .collect()
+    pool.install(|| files.par_iter().map(parse_single_file).collect())
+}
+
+/// Parse a single file: read content, compute hash, parse AST, extract all.
+fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
+    let content = match file_reader::read_file(&input.absolute_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return NativeParsedFile {
+                rel_path: input.rel_path.clone(),
+                content_hash: String::new(),
+                content: None,
+                symbols: vec![],
+                imports: vec![],
+                calls: vec![],
+                parse_error: Some(format!("{e}")),
+            };
+        }
+    };
+
+    parse_source_safe(NativeContentInput {
+        repo_id: input.repo_id.clone(),
+        rel_path: input.rel_path.clone(),
+        language: input.language.clone(),
+        content,
     })
 }
 
-/// Wrapper around `parse_single_file` that catches panics from tree-sitter's
-/// C code (or any other unexpected panic) and converts them to a parse error.
-fn parse_single_file_safe(input: &NativeFileInput) -> NativeParsedFile {
+pub(crate) fn parse_content_value(input: NativeContentInput) -> NativeParsedFile {
+    parse_source_safe(input)
+}
+
+fn parse_source_safe(input: NativeContentInput) -> NativeParsedFile {
+    parse_source_safe_with(input, parse_source_unchecked)
+}
+
+fn parse_source_safe_with<F>(input: NativeContentInput, parse_impl: F) -> NativeParsedFile
+where
+    F: FnOnce(NativeContentInput, String) -> NativeParsedFile,
+{
     let rel_path = input.rel_path.clone();
-    match panic::catch_unwind(panic::AssertUnwindSafe(|| parse_single_file(input))) {
+
+    match panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let content_hash = content_hash::hash_content(&input.content);
+        parse_impl(input, content_hash)
+    })) {
         Ok(result) => result,
         Err(payload) => {
             let msg = if let Some(s) = payload.downcast_ref::<&str>() {
@@ -93,28 +126,12 @@ fn parse_single_file_safe(input: &NativeFileInput) -> NativeParsedFile {
     }
 }
 
-/// Parse a single file: read content, compute hash, parse AST, extract all.
-fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
-    let content = match file_reader::read_file(&input.absolute_path) {
-        Ok(c) => c,
-        Err(e) => {
-            return NativeParsedFile {
-                rel_path: input.rel_path.clone(),
-                content_hash: String::new(),
-                content: None,
-                symbols: vec![],
-                imports: vec![],
-                calls: vec![],
-                parse_error: Some(format!("{e}")),
-            };
-        }
-    };
-
-    let content_hash = content_hash::hash_content(&content);
+fn parse_source_unchecked(input: NativeContentInput, content_hash: String) -> NativeParsedFile {
+    let content = input.content;
 
     if lang::get_language(&input.language).is_none() {
         return NativeParsedFile {
-            rel_path: input.rel_path.clone(),
+            rel_path: input.rel_path,
             content_hash,
             content: None,
             symbols: vec![],
@@ -128,7 +145,7 @@ fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
     // risk stack overflows in tree-sitter's C parser on deeply-nested ASTs.
     if content.len() > MAX_PARSE_FILE_BYTES {
         return NativeParsedFile {
-            rel_path: input.rel_path.clone(),
+            rel_path: input.rel_path,
             content_hash,
             content: None,
             symbols: vec![],
@@ -147,7 +164,7 @@ fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
         Some(t) => t,
         None => {
             return NativeParsedFile {
-                rel_path: input.rel_path.clone(),
+                rel_path: input.rel_path,
                 content_hash,
                 content: None,
                 symbols: vec![],
@@ -208,7 +225,7 @@ fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
     let calls = extract::calls::extract_calls(root, content.as_bytes(), &symbols, &input.language);
 
     NativeParsedFile {
-        rel_path: input.rel_path.clone(),
+        rel_path: input.rel_path,
         content_hash,
         content: Some(content),
         symbols,
@@ -221,8 +238,152 @@ fn parse_single_file(input: &NativeFileInput) -> NativeParsedFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn parse_disk_fixture(source: &str, language: &str) -> NativeParsedFile {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX_EPOCH")
+            .as_nanos();
+        let fixture_dir =
+            std::env::temp_dir().join(format!("sdl_mcp_parse_{}_{}", std::process::id(), unique));
+        let file_path = fixture_dir.join("fixture.mjs");
+        fs::create_dir(&fixture_dir).expect("failed to create temporary fixture directory");
+        fs::write(&file_path, source).expect("failed to write temporary fixture");
+
+        let parsed = parse_single_file(&NativeFileInput {
+            rel_path: "fixture.mjs".to_string(),
+            absolute_path: file_path.to_string_lossy().into_owned(),
+            repo_id: "test-repo".to_string(),
+            language: language.to_string(),
+        });
+
+        fs::remove_file(&file_path).expect("failed to remove temporary fixture");
+        let _ = fs::remove_dir(fixture_dir);
+        parsed
+    }
+
+    fn canonical_range(range: &crate::types::NativeRange) -> Value {
+        json!({
+            "startLine": range.start_line,
+            "startCol": range.start_col,
+            "endLine": range.end_line,
+            "endCol": range.end_col,
+        })
+    }
+
+    fn canonical_native_file(file: &NativeParsedFile) -> Value {
+        json!({
+            "relPath": file.rel_path,
+            "contentHash": file.content_hash,
+            "content": file.content,
+            "symbols": file.symbols.iter().map(|symbol| json!({
+                "nodeId": symbol.node_id,
+                "symbolId": symbol.symbol_id,
+                "astFingerprint": symbol.ast_fingerprint,
+                "kind": symbol.kind,
+                "name": symbol.name,
+                "exported": symbol.exported,
+                "visibility": symbol.visibility,
+                "range": canonical_range(&symbol.range),
+                "signature": symbol.signature.as_ref().map(|signature| json!({
+                    "params": signature.params.as_ref().map(|params| params.iter().map(|param| json!({
+                        "name": param.name,
+                        "typeName": param.type_name,
+                    })).collect::<Vec<_>>()),
+                    "returns": signature.returns,
+                    "generics": signature.generics,
+                })),
+                "summary": symbol.summary,
+                "invariants": symbol.invariants,
+                "sideEffects": symbol.side_effects,
+                "roleTags": symbol.role_tags,
+                "decorators": symbol.decorators,
+                "searchText": symbol.search_text,
+                "summaryQuality": symbol.summary_quality,
+            })).collect::<Vec<_>>(),
+            "imports": file.imports.iter().map(|import| json!({
+                "specifier": import.specifier,
+                "isRelative": import.is_relative,
+                "isExternal": import.is_external,
+                "namedImports": import.named_imports,
+                "defaultImport": import.default_import,
+                "namespaceImport": import.namespace_import,
+                "isReExport": import.is_re_export,
+                "range": canonical_range(&import.range),
+            })).collect::<Vec<_>>(),
+            "calls": file.calls.iter().map(|call| json!({
+                "callerNodeId": call.caller_node_id,
+                "calleeIdentifier": call.callee_identifier,
+                "callType": call.call_type,
+                "range": canonical_range(&call.range),
+            })).collect::<Vec<_>>(),
+            "parseError": file.parse_error,
+        })
+    }
+
+    fn content_input(source: &str, language: &str) -> NativeContentInput {
+        NativeContentInput {
+            repo_id: "test-repo".to_string(),
+            rel_path: "fixture.mjs".to_string(),
+            language: language.to_string(),
+            content: source.to_string(),
+        }
+    }
+
+    #[test]
+    fn parse_content_matches_disk_parse() {
+        let source = r#"import value from "./value.js";
+export function double(input) { return value(input) * 2; }
+"#;
+
+        let disk = parse_disk_fixture(source, "js");
+        let in_memory = parse_content_value(content_input(source, "js"));
+
+        assert!(disk.parse_error.is_none());
+        assert_eq!(
+            canonical_native_file(&in_memory),
+            canonical_native_file(&disk)
+        );
+    }
+
+    #[test]
+    fn parse_content_reports_same_unsupported_language_error_as_disk_parse() {
+        let source = "plain text";
+
+        let disk = parse_disk_fixture(source, "unsupported-language");
+        let in_memory = parse_content_value(content_input(source, "unsupported-language"));
+
+        assert_eq!(in_memory.parse_error, disk.parse_error);
+    }
+
+    #[test]
+    fn parse_content_rejects_oversized_source() {
+        let source = "x".repeat(MAX_PARSE_FILE_BYTES + 1);
+        let expected_error = format!(
+            "File too large for native parser ({} bytes, limit {})",
+            source.len(),
+            MAX_PARSE_FILE_BYTES
+        );
+
+        let parsed = parse_content_value(content_input(&source, "js"));
+
+        assert_eq!(parsed.parse_error.as_deref(), Some(expected_error.as_str()));
+    }
+
+    #[test]
+    fn parse_content_converts_panics_to_parse_errors() {
+        let input = content_input("export const value = 1;", "js");
+
+        let parsed = parse_source_safe_with(input, |_, _| panic!("fixture panic"));
+
+        assert_eq!(
+            parsed.parse_error.as_deref(),
+            Some("panic during parse: fixture panic")
+        );
+    }
 
     #[test]
     fn go_parser_emits_symbols_for_valid_file() {

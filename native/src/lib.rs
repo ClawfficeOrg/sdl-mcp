@@ -31,9 +31,17 @@ pub fn release_windows_library(token: u32) -> napi::Result<()> {
 }
 
 use types::{
-    NativeClusterAssignment, NativeClusterEdge, NativeClusterSymbol, NativeFileInput,
-    NativeParsedFile, NativeProcess, NativeProcessCallEdge, NativeProcessStep, NativeProcessSymbol,
+    NativeClusterAssignment, NativeClusterEdge, NativeClusterSymbol, NativeContentInput,
+    NativeFileInput, NativeParsedFile, NativeProcess, NativeProcessCallEdge, NativeProcessStep,
+    NativeProcessSymbol,
 };
+
+pub const PARSER_IDENTITY_CONTRACT_VERSION: u32 = 1;
+
+#[napi]
+pub fn parser_identity_contract_version() -> u32 {
+    PARSER_IDENTITY_CONTRACT_VERSION
+}
 
 #[napi]
 pub fn parse_files(files: Vec<NativeFileInput>, thread_count: u32) -> Vec<NativeParsedFile> {
@@ -44,6 +52,11 @@ pub fn parse_files(files: Vec<NativeFileInput>, thread_count: u32) -> Vec<Native
     };
 
     parse::parse_files_parallel(&files, count)
+}
+
+#[napi]
+pub fn parse_content(input: NativeContentInput) -> NativeParsedFile {
+    parse::parse_content_value(input)
 }
 
 pub struct ParseFilesTask {
