@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.2] - Unreleased
+## [0.13.3] - Unreleased
+
+### Added
+
+### Changed
+
+### Fixed
+
+## [0.13.2] - 2026-08-06
 
 ### Added
 
@@ -14,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Cross-platform CI stability**: Matched Rust and TypeScript exported-declaration ranges, recognized signal-terminated HTTP test children, excluded Node's immutable `fs` default export from module mocks, and budgeted the full Ladybug qualification canary for hosted Windows runners.
+- **Windows semantic embedding test reliability**: Preserved native-disabled coverage for all other tests while allowing only the exact semantic-embedding integration file on Windows to use SDL's verified native OpenSSL loader for LadybugDB VECTOR support.
 
 ## [0.13.1] - 2026-08-03
 

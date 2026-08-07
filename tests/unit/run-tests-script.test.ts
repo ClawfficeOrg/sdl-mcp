@@ -48,6 +48,25 @@ describe("run-tests script parallel suites", () => {
     assert.match(runnerSource, /SDL_GRAPH_DB_PATH: testGraphDbPath/);
   });
 
+  it("enables the Windows native loader only for the semantic integration test", () => {
+    assert.match(
+      runnerSource,
+      /SDL_MCP_DISABLE_NATIVE_ADDON:\s*"1"/,
+    );
+    assert.match(
+      runnerSource,
+      /const normalizedTestFile = testFile\.replaceAll\("\\\\", "\/"\);/,
+    );
+    assert.match(
+      runnerSource,
+      /if \(\s*process\.platform === "win32" &&\s*normalizedTestFile === "tests\/integration\/semantic-embedding\.test\.ts"\s*\) \{\s*delete env\.SDL_MCP_DISABLE_NATIVE_ADDON;\s*\}/,
+    );
+    assert.doesNotMatch(
+      runnerSource,
+      /testFile\.endsWith\("semantic-embedding\.test\.ts"\)/,
+    );
+  });
+
   it("enables experimental module mocks only for tests that use them", () => {
     assert.match(runnerSource, /function needsExperimentalModuleMocks/);
     assert.match(runnerSource, /needsExperimentalModuleMocks\(testFile\)/);

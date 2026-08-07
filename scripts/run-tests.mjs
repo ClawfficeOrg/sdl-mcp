@@ -262,6 +262,16 @@ async function runTestFile(testFile, index, baseTestEnv, testTempDir) {
     SDL_DB_PATH: testGraphDbPath,
   };
 
+  const normalizedTestFile = testFile.replaceAll("\\", "/");
+
+  // Windows vector extensions need the verified OpenSSL loader from the native addon.
+  if (
+    process.platform === "win32" &&
+    normalizedTestFile === "tests/integration/semantic-embedding.test.ts"
+  ) {
+    delete env.SDL_MCP_DISABLE_NATIVE_ADDON;
+  }
+
   // Some older tests call getLadybugConn() directly. Preinit only those files
   // so pure tests do not pay a DB startup cost.
   if (needsPreinitializedDb(testFile)) {
