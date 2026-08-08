@@ -198,7 +198,8 @@ describe("Ladybug connection recovery", { timeout: 15_000 }, () => {
     const outcome = await withExclusiveLadybugOperation(async () => {
       events.push("exclusive-enter");
       recycling = recycleReadConnection(unhealthy);
-      const settlement = await settleWithin(recycling, 50);
+      // This detects admission deadlock, not native connection-close latency.
+      const settlement = await settleWithin(recycling, 1_000);
       events.push(`recycle-${settlement.status}`);
       return settlement;
     });
