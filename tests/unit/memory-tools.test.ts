@@ -86,8 +86,21 @@ async function teardownDb(dbPath: string): Promise<void> {
 }
 
 const REPO_ID = "test-repo";
-const FAKE_ROOT = "/fake/repo";
+const REQUESTED_WINDOWS_TEST_ROOT = "F:\\Claude\\projects\\sdl-mcp\\fake";
+const testRepoParent =
+  process.platform === "win32" &&
+  existsSync("F:\\Claude\\projects\\sdl-mcp")
+    ? REQUESTED_WINDOWS_TEST_ROOT
+    : tmpdir();
+
+// Use a unique child so parallel or interrupted test runs cannot share state.
+mkdirSync(testRepoParent, { recursive: true });
+const FAKE_ROOT = mkdtempSync(join(testRepoParent, "memory-tools-"));
 const NOW = new Date().toISOString();
+
+after(() => {
+  rmSync(FAKE_ROOT, { recursive: true, force: true });
+});
 
 async function seedRepo(repoId = REPO_ID): Promise<void> {
   const conn = await getLadybugConn();
