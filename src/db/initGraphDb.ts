@@ -58,6 +58,9 @@ export async function reopenSafeRebuildGraphDb(
   if (normalizePath(graphDbPath) !== session.dbPath) {
     throw new Error("Safe-rebuild reopen path does not match its family lease");
   }
-  await reopenSafeRebuildLadybugDb(session, graphDbOptions(config));
+  await reopenSafeRebuildLadybugDb(
+    session,
+    graphDbOptions(config, { skipRetrievalIndexBootstrap: true }),
+  );
   return normalizePath(graphDbPath);
 }

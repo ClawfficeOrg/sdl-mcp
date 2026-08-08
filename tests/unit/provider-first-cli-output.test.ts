@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   formatIndexTimingLines,
   formatIndexWallTimeLine,
-  formatReopenedHnswCanaryLines,
   formatSafeRebuildRepoCompleteLines,
   formatSummaryStatsLine,
   formatProviderFirstExecutionSummaryLines,
@@ -75,23 +74,6 @@ describe("provider-first CLI output", () => {
         "",
         "  Timings (total=120ms):",
         "       100ms  embeddings",
-      ],
-    );
-  });
-
-  it("formats the post-reopen Jina HNSW build timings and effective efc", () => {
-    assert.deepEqual(
-      formatReopenedHnswCanaryLines({
-        model: "jina-embeddings-v2-base-code",
-        indexName: "symbol_vec_jina_code_v2",
-        efc: 100,
-        createMs: 7_123,
-        queryMs: 21,
-        checkpointMs: 8,
-      }),
-      [
-        "  Post-reopen Jina HNSW build: jina-embeddings-v2-base-code (symbol_vec_jina_code_v2, efc=100)",
-        "    create=7123ms query=21ms checkpoint=8ms",
       ],
     );
   });

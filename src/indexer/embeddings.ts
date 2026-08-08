@@ -33,6 +33,7 @@ import {
 import {
   createVectorIndex,
   dropVectorIndex,
+  showIndexesStrict,
 } from "../retrieval/index-lifecycle.js";
 import {
   EMBEDDING_MODELS,
@@ -343,10 +344,10 @@ export async function refreshSymbolEmbeddings(params: {
    * the rebuild path.
    */
   rebuildMinUncachedRows?: number;
+  vectorIndexName?: string;
+  vectorEfc?: number;
   /** Preserve the repo-specific timeout for destructive rebuild sessions. */
   postIndexSessionTimeoutMs?: number;
-  /** @internal Safe rebuilds create the Jina HNSW index after a cold reopen. */
-  deferVectorIndexCreate?: boolean;
   /** @internal Allows tests to exercise provider degradation deterministically. */
   embeddingProvider?: EmbeddingProvider;
   /** Records internal phase durations for opt-in indexing diagnostics. */
@@ -474,7 +475,7 @@ export async function refreshSymbolEmbeddings(params: {
   // still get vectors. Deferred rows stay hash-uncached in the DB, so a
   // later refresh naturally picks them up.
   const vecProp = getVecPropertyName(modelName);
-  const indexName = getVectorIndexName(modelName);
+  const indexName = params.vectorIndexName ?? getVectorIndexName(modelName);
   const rebuildMinUncachedRows =
     params.rebuildMinUncachedRows ?? SYMBOL_VECTOR_REBUILD_MIN_ROWS;
   const bootstrapRebuild =
@@ -546,7 +547,22 @@ export async function refreshSymbolEmbeddings(params: {
     if (useRebuildPath) {
       // The outer HNSW lifecycle checkpoints before this session starts.
       const dropResult = await measure("hnsw.drop", () =>
-        withWriteConn((wConn) => dropVectorIndex(wConn, "Symbol", indexName)),
+        withWriteConn(async (wConn) => {
+          const existing = (await showIndexesStrict(wConn)).find(
+            ({ name }) => name === indexName,
+          );
+          if (
+            existing &&
+            (existing.tableName !== "Symbol" ||
+              existing.type !== "vector" ||
+              existing.property !== vecProp)
+          ) {
+            throw new IndexError(
+              `Configured vector index '${indexName}' belongs to ${existing.tableName ?? "unknown"}.${existing.property} (${existing.type}), not Symbol.${vecProp}`,
+            );
+          }
+          return dropVectorIndex(wConn, "Symbol", indexName);
+        }),
       );
       indexDropped = dropResult.status !== "failed";
       if (dropResult.status === "dropped") {
@@ -813,27 +829,8 @@ export async function refreshSymbolEmbeddings(params: {
         }
       }
 
-      // P2: normal refreshes rebuild the dropped index regardless of write
-      // outcome. Safe rebuilds explicitly leave Jina absent for the cold-
-      // reopened finalizer below the indexing lifecycle.
-      if (
-        indexDropped &&
-        vecProp !== null &&
-        indexName !== null &&
-        params.deferVectorIndexCreate
-      ) {
-        params.onProgress?.({
-          stage: "embeddings",
-          substage: "symbolVectorIndex",
-          current: Math.min(skipped + embedded, symbols.length),
-          total: symbols.length,
-          model: storageModel,
-          message: "deferred until safe-rebuild reopen",
-        });
-        logger.info(
-          `[embeddings] Vector index '${indexName}' creation deferred until safe-rebuild reopen`,
-        );
-      } else if (indexDropped && vecProp !== null && indexName !== null) {
+      // P2: rebuild the dropped index regardless of write outcome.
+      if (indexDropped && vecProp !== null && indexName !== null) {
         const modelInfo = EMBEDDING_MODELS[modelName];
         if (modelInfo) {
           recordMemorySnapshot("beforeHnsw");
@@ -855,6 +852,7 @@ export async function refreshSymbolEmbeddings(params: {
                   vecProp,
                   indexName,
                   modelInfo.dimension,
+                  params.vectorEfc,
                 ),
               ),
             );

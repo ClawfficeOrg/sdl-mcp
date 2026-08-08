@@ -423,7 +423,7 @@ describe("provider-first indexing foundation", () => {
     );
   });
 
-  it("runs provider-first semantic readiness refresh with deferred indexes", async () => {
+  it("runs provider-first semantic readiness refresh and index finalization", async () => {
     const calls: string[] = [];
     const timings: string[] = [];
     const memoryPhases: string[] = [];
@@ -432,7 +432,6 @@ describe("provider-first indexing foundation", () => {
       recordMemorySnapshot: (phaseName) => memoryPhases.push(phaseName),
       repoId: "repo-semantic-refresh",
       versionId: "v-semantic-refresh",
-      deferJinaVectorIndexCreate: true,
       appConfig: {
         semantic: {
           enabled: true,
@@ -460,9 +459,7 @@ describe("provider-first indexing foundation", () => {
           };
         },
         refreshSymbolEmbeddings: async (params) => {
-          calls.push(
-            `symbol:${params.model}:${String(params.deferVectorIndexCreate)}`,
-          );
+          calls.push(`symbol:${params.model}`);
           params.recordTiming?.("inference", 1);
           params.recordMemorySnapshot?.("beforeHnsw", {
             rssBytes: 1,
@@ -475,9 +472,7 @@ describe("provider-first indexing foundation", () => {
           return { embedded: 5, skipped: 6 };
         },
         buildDeferredIndexes: async (params) => {
-          calls.push(
-            `indexes:${String(params.deferSemanticVectorIndexes)}:${String(params.deferSemanticTextIndexes)}`,
-          );
+          calls.push(`indexes:${String(params.deferSemanticTextIndexes)}`);
         },
         markDerivedStateComputed: async (_repoId, _versionId, flags) => {
           calls.push(
@@ -494,8 +489,8 @@ describe("provider-first indexing foundation", () => {
     assert.deepEqual(calls, [
       "summaries",
       "file:nomic-embed-text-v1.5",
-      "symbol:jina-embeddings-v2-base-code:true",
-      "indexes:true:false",
+      "symbol:jina-embeddings-v2-base-code",
+      "indexes:false",
       "computed:true:true",
     ]);
     assert.ok(

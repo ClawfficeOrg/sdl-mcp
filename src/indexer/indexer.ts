@@ -41,7 +41,6 @@ import {
   type RepoConfig,
 } from "../config/types.js";
 import { loadConfig } from "../config/loadConfig.js";
-import { resolveSemanticEmbeddingModelPlan } from "../config/semantic-embedding-model-plan.js";
 import {
   buildDeferredIndexes,
   ensureCriticalSymbolFtsIndex,
@@ -492,8 +491,6 @@ export interface IndexRepoOptions {
   includeTimings?: boolean;
   /** @internal Allows destructive full writes only on a fresh rebuild path. */
   isolatedRebuild?: boolean;
-  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
-  deferJinaVectorIndexCreate?: boolean;
   /** @internal Keeps compatibility benchmarks on the TypeScript-only pipeline. */
   forceLegacyPipeline?: boolean;
 }
@@ -2237,12 +2234,6 @@ async function indexRepoImpl(
     "shadow staging skipped because repo.sourceFileListPath scopes this run to a benchmark subset";
 
   const appConfig: AppConfig = loadConfig();
-  const deferJinaVectorIndexCreate =
-    options?.deferJinaVectorIndexCreate === true &&
-    appConfig.semantic?.enabled === true &&
-    resolveSemanticEmbeddingModelPlan(
-      appConfig.semantic,
-    ).symbolEmbeddingModels.includes("jina-embeddings-v2-base-code");
   const providerFirstConfig =
     appConfig.indexing?.providerFirst ??
     IndexingConfigSchema.parse({}).providerFirst;
@@ -2408,7 +2399,6 @@ async function indexRepoImpl(
         callResolutionTelemetry: params.callResolutionTelemetry,
         prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
         deferSemanticRefresh: params.deferSemanticRefresh,
-        deferJinaVectorIndexCreate,
         preFinalize: params.preFinalize,
         postIndexSessionTimeoutMs,
         onProgress,
@@ -2463,9 +2453,7 @@ async function indexRepoImpl(
 
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
-            deferSemanticVectorIndexes:
-              finalizeResult.semanticDeferred ||
-              deferJinaVectorIndexCreate,
+            deferSemanticVectorIndexes: finalizeResult.semanticDeferred,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });
@@ -2609,7 +2597,6 @@ async function indexRepoImpl(
       recordTiming: recordIndexSubphaseTiming,
       recordMemorySnapshot: phaseTimings ? recordMemorySnapshot : undefined,
       postIndexSessionTimeoutMs,
-      deferJinaVectorIndexCreate,
     });
     return {
       semanticDeferred: semanticRefresh.semanticDeferred || undefined,
@@ -4309,7 +4296,6 @@ async function indexRepoImpl(
         callResolutionTelemetry,
         prepareGraphIntegrityPlaceholderPruning: graphIntegrity.prepareForPlaceholderPruning,
         deferSemanticRefresh,
-        deferJinaVectorIndexCreate,
         postIndexSessionTimeoutMs,
         onProgress,
       }),
@@ -4369,10 +4355,7 @@ async function indexRepoImpl(
         // --- Phase: build deferred indexes (fresh DB only) ---
         await measurePhase("buildDeferredIndexes", async () => {
           await buildDeferredIndexes({
-            // The safe-rebuild Jina index is created after a cold reopen.
-            deferSemanticVectorIndexes:
-              finalizeResult.semanticDeferred ||
-              deferJinaVectorIndexCreate,
+            deferSemanticVectorIndexes: finalizeResult.semanticDeferred,
             deferSemanticTextIndexes: finalizeResult.semanticDeferred,
             recordTiming: recordIndexSubphaseTiming,
           });

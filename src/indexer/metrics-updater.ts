@@ -44,8 +44,6 @@ export interface FinalizeIndexingParams {
   includeTimings?: boolean;
   callResolutionTelemetry: CallResolutionTelemetry;
   deferSemanticRefresh?: boolean;
-  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
-  deferJinaVectorIndexCreate?: boolean;
   preFinalize?: () => Promise<void>;
   postIndexSessionTimeoutMs?: number;
   prepareGraphIntegrityPlaceholderPruning?: (
@@ -89,7 +87,6 @@ export async function finalizeIndexing({
   includeTimings,
   callResolutionTelemetry,
   deferSemanticRefresh = false,
-  deferJinaVectorIndexCreate = false,
   preFinalize,
   postIndexSessionTimeoutMs,
   prepareGraphIntegrityPlaceholderPruning,
@@ -369,10 +366,11 @@ export async function finalizeIndexing({
               onProgress,
               concurrency: semanticConfig.embeddingConcurrency,
               batchSize: semanticConfig.embeddingBatchSize,
+              vectorIndexName:
+                semanticConfig.retrieval?.vector.indexes?.[embModel]
+                  ?.indexName,
+              vectorEfc: semanticConfig.retrieval?.vector.efc,
               postIndexSessionTimeoutMs,
-              deferVectorIndexCreate:
-                deferJinaVectorIndexCreate &&
-                embModel === "jina-embeddings-v2-base-code",
             }),
         );
         logger.info(

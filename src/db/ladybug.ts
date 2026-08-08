@@ -206,6 +206,8 @@ const CHECKPOINT_THRESHOLD_ENV = "SDL_MCP_LADYBUG_CHECKPOINT_THRESHOLD_BYTES";
 export interface LadybugDbInitOptions {
   bufferPoolBytes?: number | null;
   checkpointThresholdBytes?: number | null;
+  /** Keep a durable safe-rebuild reopen read-only until validation completes. */
+  skipRetrievalIndexBootstrap?: boolean;
 }
 
 /** @internal exported for focused config/env tests. */
@@ -1495,6 +1497,8 @@ async function initLadybugDbInternal(
       logger.info(
         "Deferring retrieval index bootstrap until after first full index",
       );
+    } else if (options?.skipRetrievalIndexBootstrap) {
+      logger.info("Skipping retrieval index bootstrap for validation-only reopen");
     } else
       try {
         const sdlConfig = loadConfig();

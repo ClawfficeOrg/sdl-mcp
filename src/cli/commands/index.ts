@@ -44,7 +44,6 @@ import { normalizePath } from "../../util/paths.js";
 import {
   runSafeRebuild,
   validateSafeRebuildRequest,
-  type ReopenedHnswCanaryResult,
 } from "./index-safe-rebuild.js";
 
 // ---------------------------------------------------------------------------
@@ -1793,15 +1792,6 @@ export function formatIndexTimingLines(
   return lines;
 }
 
-export function formatReopenedHnswCanaryLines(
-  canary: ReopenedHnswCanaryResult,
-): string[] {
-  return [
-    `  Post-reopen Jina HNSW build: ${canary.model} (${canary.indexName}, efc=${canary.efc})`,
-    `    create=${canary.createMs}ms query=${canary.queryMs}ms checkpoint=${canary.checkpointMs}ms`,
-  ];
-}
-
 export function formatSafeRebuildRepoCompleteLines(
   repoId: string,
   stats: Pick<
@@ -2354,13 +2344,6 @@ export async function indexCommand(options: IndexOptions): Promise<void> {
       console.log(
         `  Symbol FTS: ${result.validation.ftsIndexName} present and queryable`,
       );
-    }
-    if (result.reopenedHnswCanary) {
-      for (const line of formatReopenedHnswCanaryLines(
-        result.reopenedHnswCanary,
-      )) {
-        console.log(line);
-      }
     }
     console.log(
       "  Activation is intentionally manual: keep SDL-MCP stopped, switch the configured graph path, then restart and verify.",

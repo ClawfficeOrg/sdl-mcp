@@ -91,8 +91,6 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
     snapshot: EmbeddingMemorySnapshot,
   ) => void;
   postIndexSessionTimeoutMs?: number;
-  /** @internal Safe rebuilds create Jina HNSW after the database is reopened. */
-  deferJinaVectorIndexCreate?: boolean;
   deps?: ProviderFirstSemanticReadinessRefreshDeps;
 }): Promise<ProviderFirstSemanticReadinessRefreshResult> {
   const semanticConfig = params.appConfig.semantic;
@@ -129,11 +127,6 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
   try {
     const modelPlan = resolveSemanticEmbeddingModelPlan(semanticConfig);
-    const deferJinaVectorIndexCreate =
-      params.deferJinaVectorIndexCreate === true &&
-      modelPlan.symbolEmbeddingModels.includes(
-        "jina-embeddings-v2-base-code",
-      );
     if (modelPlan.unsupportedModels.length > 0) {
       logger.warn(
         `Unsupported semantic embedding models skipped: ${modelPlan.unsupportedModels.join(", ")}`,
@@ -189,10 +182,10 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
           onProgress: params.onProgress,
           concurrency: semanticConfig.embeddingConcurrency,
           batchSize: semanticConfig.embeddingBatchSize,
+          vectorIndexName:
+            semanticConfig.retrieval?.vector.indexes?.[embModel]?.indexName,
+          vectorEfc: semanticConfig.retrieval?.vector.efc,
           postIndexSessionTimeoutMs: params.postIndexSessionTimeoutMs,
-          deferVectorIndexCreate:
-            deferJinaVectorIndexCreate &&
-            embModel === "jina-embeddings-v2-base-code",
           recordTiming: (subphaseName, durationMs) =>
             params.recordTiming?.(`${phaseName}.${subphaseName}`, durationMs),
           recordMemorySnapshot: (subphaseName, snapshot) =>
@@ -211,7 +204,6 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
 
     await measure("semanticReadiness.deferredIndexes", () =>
       deps.buildDeferredIndexes({
-        deferSemanticVectorIndexes: deferJinaVectorIndexCreate,
         deferSemanticTextIndexes: false,
         recordTiming: (phaseName, durationMs) =>
           params.recordTiming?.(
