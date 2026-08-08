@@ -18,20 +18,41 @@ assert.ok(
 );
 const requireModeDependencies =
   process.env.SDL_LADYBUG_WINDOWS_FTS_REQUIRE_MODE === "1";
+const selectedNativeAddonPath =
+  process.env.SDL_LADYBUG_WINDOWS_FTS_NATIVE_ADDON_PATH;
 
 const childPath = resolve("tests/fixtures/ladybug/windows-fts-clean-env-child.mjs");
+const testPath = resolve("tests/integration/live-index-symbol-fts-crash.test.ts");
 const workflowPath = resolve(".github/workflows/ladybug-windows-fts-compat.yml");
 
-it("preflights the published addon content-parser contract", () => {
+it("preflights the selected addon content-parser contract", () => {
   const childSource = readFileSync(childPath, "utf8");
-  assert.match(childSource, /typeof addon\.parseContent !== "function"/u);
+  assert.match(childSource, /typeof parserAddon\.parseContent !== "function"/u);
   assert.match(
     childSource,
-    /typeof addon\.parserIdentityContractVersion !== "function"/u,
+    /typeof parserAddon\.parserIdentityContractVersion !== "function"/u,
   );
   assert.match(
     childSource,
-    /addon\.parserIdentityContractVersion\(\) !== 1/u,
+    /parserAddon\.parserIdentityContractVersion\(\) !== 1/u,
+  );
+});
+
+it("routes the branch-built addon into the clean fixed-regression child", () => {
+  const childSource = readFileSync(childPath, "utf8");
+  const testSource = readFileSync(testPath, "utf8");
+  const workflowSource = readFileSync(workflowPath, "utf8");
+  assert.match(
+    workflowSource,
+    /if: matrix\.mode == 'fixed-regression'[\s\S]*SDL_LADYBUG_WINDOWS_FTS_NATIVE_ADDON_PATH=\$addonPath/u,
+  );
+  assert.match(
+    testSource,
+    /env\.SDL_MCP_NATIVE_ADDON_PATH = selectedNativeAddonPath/u,
+  );
+  assert.match(
+    childSource,
+    /require\(process\.env\.SDL_MCP_NATIVE_ADDON_PATH\)/u,
   );
 });
 
@@ -97,6 +118,7 @@ function cleanEnvironment(home: string): NodeJS.ProcessEnv {
     "SSL_CERT_DIR",
     "OPENSSL_CONF",
     "CONDA_PREFIX",
+    "SDL_LADYBUG_WINDOWS_FTS_NATIVE_ADDON_PATH",
     "SDL_MCP_NATIVE_ADDON_PATH",
     "SDL_MCP_DISABLE_NATIVE_ADDON",
     "SDL_GRAPH_DB_PATH",
@@ -117,6 +139,10 @@ function cleanEnvironment(home: string): NodeJS.ProcessEnv {
     }
   }
   env.PATH = join(systemRoot, "System32");
+  // Only an explicit CI fixture selection may survive the clean environment.
+  if (selectedNativeAddonPath) {
+    env.SDL_MCP_NATIVE_ADDON_PATH = selectedNativeAddonPath;
+  }
   return env;
 }
 

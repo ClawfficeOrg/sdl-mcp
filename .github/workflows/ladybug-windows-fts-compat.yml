@@ -77,6 +77,13 @@ jobs:
           npm run native:artifacts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Select branch-built native addon
+        if: matrix.mode == 'fixed-regression'
+        shell: pwsh
+        run: |
+          $addonPath = (Resolve-Path "native/sdl-mcp-native.node" -ErrorAction Stop).Path
+          "SDL_LADYBUG_WINDOWS_FTS_NATIVE_ADDON_PATH=$addonPath" >> $env:GITHUB_ENV
+
       - name: Run isolated compatibility mode
         shell: pwsh
         env:

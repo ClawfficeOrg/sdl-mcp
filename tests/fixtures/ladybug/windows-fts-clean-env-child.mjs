@@ -286,6 +286,7 @@ async function fixedRegression() {
   const missing = [];
   if (packageVersion("kuzu") !== "0.19.0") missing.push("kuzu@0.19.0");
   let addon;
+  let parserAddon;
   if (!disableOpenSslProvisioning) {
     if (
       packageVersion("@sdl-mcp/ladybug-openssl-win32-x64") !== "3.5.7-sdl.2"
@@ -295,6 +296,7 @@ async function fixedRegression() {
     try {
       const imported = await import("sdl-mcp-native");
       addon = imported.default ?? imported;
+      parserAddon = addon;
     } catch {
       missing.push("published sdl-mcp-native Windows loader shim");
     }
@@ -305,13 +307,21 @@ async function fixedRegression() {
     ) {
       missing.push("published sdl-mcp-native Windows loader shim");
     }
+    if (process.env.SDL_MCP_NATIVE_ADDON_PATH) {
+      try {
+        // Branch CI tests current Rust code; packed releases keep the published addon.
+        parserAddon = require(process.env.SDL_MCP_NATIVE_ADDON_PATH);
+      } catch {
+        missing.push("branch-built sdl-mcp-native addon");
+      }
+    }
     if (
-      addon &&
-      (typeof addon.parseContent !== "function" ||
-        typeof addon.parserIdentityContractVersion !== "function" ||
-        addon.parserIdentityContractVersion() !== 1)
+      parserAddon &&
+      (typeof parserAddon.parseContent !== "function" ||
+        typeof parserAddon.parserIdentityContractVersion !== "function" ||
+        parserAddon.parserIdentityContractVersion() !== 1)
     ) {
-      missing.push("published sdl-mcp-native content parser contract native:1");
+      missing.push("selected sdl-mcp-native content parser contract native:1");
     }
   }
   if (missing.length > 0) dependencyUnavailable([...new Set(missing)]);
