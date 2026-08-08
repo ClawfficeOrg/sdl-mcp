@@ -27,6 +27,7 @@ import {
   type RustParseResult,
 } from "../../dist/indexer/rustIndexer.js";
 import type { FileMetadata } from "../../dist/indexer/fileScanner.js";
+import { generateSymbolId } from "../../dist/indexer/fingerprints.js";
 import { buildSymbolDetails } from "../../dist/indexer/parser/symbol-mapping.js";
 import { applyTestCaseCandidates } from "../../dist/indexer/test-case-normalizer.js";
 
@@ -316,7 +317,7 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
   // only give us the bare suffix (ts, c).
   const adapter: LanguageAdapter | null = getAdapterForExtension(`.${ext}`);
   if (!adapter) {
-    return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: `no-adapter:${ext}` };
+    return { symbolDiffs: [], importDiffs: [], callDiffs: [], engineIdentityDiffs: [], skipped: `no-adapter:${ext}` };
   }
 
   const content = readFileSync(absFixture, "utf8");
@@ -324,7 +325,7 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
 
   // TS Pass-1
   const tree = adapter.parse(content, absFixture);
-  if (!tree) return { symbolDiffs: [], importDiffs: [], callDiffs: [], skipped: "ts-parse-failed" };
+  if (!tree) return { symbolDiffs: [], importDiffs: [], callDiffs: [], engineIdentityDiffs: [], skipped: "ts-parse-failed" };
   const rawTsSymbols = adapter.extractSymbols(tree, content, absFixture) as ExtractedSymbol[];
   const rawTsSymbolsWithFingerprints: SymbolWithNodeId[] = rawTsSymbols.map(
     (symbol) => ({ ...symbol, astFingerprint: "" }),
@@ -395,14 +396,36 @@ export async function runEngineParityCheck(fixturePath: string, repoRoot: string
     symbolId: detail.symbolId,
     astFingerprint: detail.astFingerprint,
   }));
+  const nativeSymbolByNodeId = new Map(
+    rustResult.symbols.map((symbol) => [symbol.nodeId, symbol] as const),
+  );
+  // Mirror production identity handling: preserve native IDs for parsed
+  // symbols and generate IDs only for synthetic test-case symbols.
+  const normalizedRustSymbolsWithIds = normalizedRust.symbols.map((symbol) => {
+    const nativeSymbol = nativeSymbolByNodeId.get(symbol.nodeId);
+    const astFingerprint = symbol.astFingerprint ?? "";
+    return {
+      ...symbol,
+      astFingerprint,
+      symbolId:
+        nativeSymbol?.symbolId ??
+        generateSymbolId(
+          "parity-harness",
+          relPath,
+          symbol.kind,
+          symbol.name,
+          astFingerprint,
+        ),
+    };
+  });
 
   return {
     engineIdentityDiffs: diffArrays(
       sortByRange(normalizedTsSymbolsWithIds),
-      sortByRange(normalizedRust.symbols),
+      sortByRange(normalizedRustSymbolsWithIds),
       (symbol) => ({
-        symbolId: (symbol as { symbolId?: unknown }).symbolId,
-        astFingerprint: (symbol as { astFingerprint?: unknown }).astFingerprint,
+        symbolId: symbol.symbolId,
+        astFingerprint: symbol.astFingerprint,
       }),
       (symbol) =>
         `${symbol.kind}:${symbol.name}@${symbol.range.startLine}:${symbol.range.startCol}`,
