@@ -68,10 +68,14 @@ jobs:
           }
 
       - name: Build SDL runtime and native package
+        shell: pwsh
         run: |
           npm run build:all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build:native
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run native:artifacts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run isolated compatibility mode
         shell: pwsh

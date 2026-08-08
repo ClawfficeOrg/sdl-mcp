@@ -20,6 +20,7 @@ const requireModeDependencies =
   process.env.SDL_LADYBUG_WINDOWS_FTS_REQUIRE_MODE === "1";
 
 const childPath = resolve("tests/fixtures/ladybug/windows-fts-clean-env-child.mjs");
+const workflowPath = resolve(".github/workflows/ladybug-windows-fts-compat.yml");
 
 it("preflights the published addon content-parser contract", () => {
   const childSource = readFileSync(childPath, "utf8");
@@ -31,6 +32,22 @@ it("preflights the published addon content-parser contract", () => {
   assert.match(
     childSource,
     /addon\.parserIdentityContractVersion\(\) !== 1/u,
+  );
+});
+
+it("fails the native build step on the first failed command", () => {
+  const workflowSource = readFileSync(workflowPath, "utf8");
+  assert.match(
+    workflowSource,
+    /npm run build:all\r?\n\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/u,
+  );
+  assert.match(
+    workflowSource,
+    /npm run build:native\r?\n\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/u,
+  );
+  assert.match(
+    workflowSource,
+    /npm run native:artifacts\r?\n\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/u,
   );
 });
 

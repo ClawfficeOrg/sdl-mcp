@@ -25,6 +25,7 @@ import type {
   SemanticRange,
   SemanticSymbol,
 } from "../../types.js";
+import { lspDiagnosticMessageText } from "../../../util/lsp-diagnostic.js";
 import { getRelativePath, normalizePath } from "../../../util/paths.js";
 import {
   type LspCallDefinitionCandidate,
@@ -523,6 +524,7 @@ function collectDiagnostics(params: {
       .slice(0, MAX_LSP_DIAGNOSTICS_PER_FILE);
     for (const [index, diagnostic] of values.entries()) {
       if (totalDiagnostics >= MAX_LSP_DIAGNOSTICS) break;
+      const message = lspDiagnosticMessageText(diagnostic.message);
       diagnostics.push({
         id: `lsp-diagnostic:${params.runId}:${params.providerId}:${document.sourcePath}:${index}`,
         repoId: params.repoId,
@@ -532,7 +534,7 @@ function collectDiagnostics(params: {
         languageId: document.languageId,
         sourcePath: document.sourcePath,
         severity: diagnosticSeverity(diagnostic.severity),
-        message: diagnostic.message.slice(0, MAX_LSP_DIAGNOSTIC_MESSAGE_CHARS),
+        message: message.slice(0, MAX_LSP_DIAGNOSTIC_MESSAGE_CHARS),
         code:
           diagnostic.code === undefined ? undefined : String(diagnostic.code),
         range: diagnostic.range

@@ -7,6 +7,7 @@ import type {
 
 import type { Range, SymbolKind } from "../../domain/types.js";
 import { generateFileId, hashValue } from "../../util/hashing.js";
+import { lspDiagnosticMessageText } from "../../util/lsp-diagnostic.js";
 import { normalizePath } from "../../util/paths.js";
 import { createProviderSymbolId } from "./ids.js";
 import type {
@@ -123,6 +124,7 @@ export function normalizeLspProviderFacts(
     }
 
     for (const diagnostic of document.diagnostics ?? []) {
+      const message = lspDiagnosticMessageText(diagnostic.message);
       const range = diagnostic.range
         ? lspRangeToSdlRange(diagnostic.range, document.text)
         : undefined;
@@ -134,12 +136,12 @@ export function normalizeLspProviderFacts(
           repoId: params.repoId,
           providerId: params.providerId,
           relPath,
-          message: diagnostic.message,
+          message,
           code: diagnostic.code,
           range,
         }),
         relPath,
-        message: diagnostic.message,
+        message,
         severity: lspDiagnosticSeverityToSdlSeverity(diagnostic.severity),
         code:
           diagnostic.code === undefined ? undefined : String(diagnostic.code),

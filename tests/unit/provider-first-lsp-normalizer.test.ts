@@ -11,7 +11,7 @@ import { validateProviderFirstGraphRows } from "../../dist/indexer/provider-firs
 import { providerFactsToGraphRows } from "../../dist/indexer/provider-first/materializer.js";
 
 describe("provider-first LSP normalization", () => {
-  it("normalizes LSP document symbols, diagnostics, coverage, and provider run facts", () => {
+  it("normalizes LSP document symbols, structured diagnostics, coverage, and provider run facts", () => {
     const emittedAt = "2026-06-16T12:00:00.000Z";
     const facts = normalizeLspProviderFacts({
       repoId: "repo",
@@ -55,7 +55,7 @@ describe("provider-first LSP normalization", () => {
           ],
           diagnostics: [
             {
-              message: "Unused import",
+              message: { kind: "markdown", value: "Unused import" } as never,
               severity: 2,
               code: "W001",
               range: {
@@ -87,6 +87,7 @@ describe("provider-first LSP normalization", () => {
     );
     assert.equal(facts.symbols[0]?.providerType, "lsp");
     assert.equal(facts.diagnostics.length, 1);
+    assert.equal(facts.diagnostics[0]?.message, "Unused import");
     assert.equal(facts.diagnostics[0]?.severity, "warning");
     assert.equal(facts.coverage[0]?.symbolCoverage, "full");
     assert.equal(facts.coverage[0]?.diagnosticCoverage, "full");

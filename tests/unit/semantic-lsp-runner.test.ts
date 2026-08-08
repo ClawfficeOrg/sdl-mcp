@@ -292,7 +292,7 @@ describe("LSP call-definition runner", () => {
     }
   });
 
-  it("ingests bounded diagnostics after a bounded wait when config requests them", async () => {
+  it("ingests bounded structured diagnostics after a bounded wait when config requests them", async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), "sdl-lsp-runner-diagnostic-"));
     try {
       mkdirSync(join(repoRoot, "src"), { recursive: true });
@@ -306,7 +306,7 @@ describe("LSP call-definition runner", () => {
           end: { line: 0, character: 11 },
         },
         severity: index === 0 ? 1 : 2,
-        message: longMessage,
+        message: { kind: "markdown", value: longMessage },
         code: "E001",
       }));
 
