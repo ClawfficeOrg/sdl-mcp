@@ -51,15 +51,14 @@ export interface InfoReportOptions {
   config?: string;
 }
 
-export async function collectInfoReport(
-  options: InfoReportOptions = {},
-): Promise<InfoReport> {
-  const version = getPackageVersion();
-  const configPath = activateCliConfigPath(options.config);
-  const loggerDiagnostics = getLoggerDiagnostics();
+export type NativeAddonReport = InfoReport["native"];
+
+/** Keep CLI and MCP diagnostics aligned on native-addon resolution details. */
+export function collectNativeAddonReport(): NativeAddonReport {
   const rustEngineStatus = getRustEngineStatus();
   const nativeEnabled = isNativeAddonGloballyEnabled();
-  const nativeStatus = {
+
+  return {
     ...rustEngineStatus,
     disabledByEnv: !nativeEnabled,
     reason:
@@ -67,6 +66,15 @@ export async function collectInfoReport(
         ? rustEngineStatus.reason
         : (getNativeAddonLoadFailure() ?? rustEngineStatus.reason),
   };
+}
+
+export async function collectInfoReport(
+  options: InfoReportOptions = {},
+): Promise<InfoReport> {
+  const version = getPackageVersion();
+  const configPath = activateCliConfigPath(options.config);
+  const loggerDiagnostics = getLoggerDiagnostics();
+  const nativeStatus = collectNativeAddonReport();
 
   const report: InfoReport = {
     version,

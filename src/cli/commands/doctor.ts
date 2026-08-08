@@ -1,5 +1,6 @@
 import { access, constants, existsSync } from "fs";
 import { DoctorOptions } from "../types.js";
+import { collectNativeAddonReport } from "../../info/report.js";
 import { NODE_MIN_MAJOR_VERSION } from "../../config/constants.js";
 import { detectCpuProfile } from "../../util/cpu-detect.js";
 import { getTierPresets } from "../../util/cpu-presets.js";
@@ -59,6 +60,7 @@ const DOCTOR_CHECKS: DoctorCheck[] = [
   { name: "Config file exists", check: checkConfigExists },
   { name: "Config file readable", check: checkConfigReadable },
   { name: "Tree-sitter grammars available", check: checkTreeSitterGrammar },
+  { name: "Native addon", check: checkNativeAddon },
   { name: "Repo paths accessible", check: checkRepoPaths },
   {
     name: "Graph database (Ladybug)",
@@ -269,6 +271,20 @@ async function checkConfigReadable(
       message: `Cannot read config: ${configPath}`,
     };
   }
+}
+
+async function checkNativeAddon(
+  _options: DoctorOptions,
+): Promise<Omit<DoctorResult, "name">> {
+  const native = collectNativeAddonReport();
+
+  return {
+    status: native.available ? "pass" : "warn",
+    message:
+      `Available: ${native.available ? "yes" : "no"}; ` +
+      `Source path: ${native.sourcePath ?? "not loaded"}; ` +
+      `Reason: ${native.reason}`,
+  };
 }
 
 async function checkTreeSitterGrammar(

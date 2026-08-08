@@ -9,6 +9,7 @@ describe("doctor command - call resolution capabilities", { concurrency: 1 }, ()
   let originalExit: typeof process.exit;
   let originalSDLConfig: string | undefined;
   let originalSDLConfigPath: string | undefined;
+  let originalDisableNativeAddon: string | undefined;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `sdl-mcp-doctor-capabilities-${Date.now()}`);
@@ -16,6 +17,7 @@ describe("doctor command - call resolution capabilities", { concurrency: 1 }, ()
 
     originalSDLConfig = process.env.SDL_CONFIG;
     originalSDLConfigPath = process.env.SDL_CONFIG_PATH;
+    originalDisableNativeAddon = process.env.SDL_MCP_DISABLE_NATIVE_ADDON;
 
     originalExit = process.exit;
     process.exit = ((code: number) => {
@@ -36,6 +38,12 @@ describe("doctor command - call resolution capabilities", { concurrency: 1 }, ()
       delete process.env.SDL_CONFIG_PATH;
     } else {
       process.env.SDL_CONFIG_PATH = originalSDLConfigPath;
+    }
+
+    if (originalDisableNativeAddon === undefined) {
+      delete process.env.SDL_MCP_DISABLE_NATIVE_ADDON;
+    } else {
+      process.env.SDL_MCP_DISABLE_NATIVE_ADDON = originalDisableNativeAddon;
     }
 
     rmSync(tempDir, { recursive: true, force: true });
@@ -108,5 +116,16 @@ describe("doctor command - call resolution capabilities", { concurrency: 1 }, ()
     assert.match(output, /Call resolution capabilities/i);
     assert.match(output, /policy default/i);
     assert.match(output, /0\.85/);
+  });
+
+  it("reports native addon availability, source path, and reason", async () => {
+    process.env.SDL_MCP_DISABLE_NATIVE_ADDON = "1";
+
+    const output = await runDoctorWithConfig({});
+
+    assert.match(output, /Native addon/i);
+    assert.match(output, /Available: no/i);
+    assert.match(output, /Source path: not loaded/i);
+    assert.match(output, /Reason: disabled by SDL_MCP_DISABLE_NATIVE_ADDON/i);
   });
 });
