@@ -132,6 +132,27 @@ export function parserCoverageMatchesVerifiedGraph(
   );
 }
 
+export function parserCoverageMatchesCurrentGraph(
+  derivedState: Awaited<ReturnType<typeof getDerivedStateFromConnection>>,
+  versionId: string,
+  repoParserState: RepoParserStateRecord | null,
+): boolean {
+  const currentGraphIsMutable =
+    graphIntegrityIsVerifiedForVersion(derivedState, versionId) ||
+    (derivedState?.graphIntegrityState === "verifying" &&
+      derivedState.graphIntegrityVersionId === versionId &&
+      derivedState.graphIntegrityManifestEstablished === true &&
+      typeof derivedState.graphIntegrityRevision === "number" &&
+      typeof derivedState.graphIntegrityFilelessPruningSupported === "boolean");
+  return Boolean(
+    currentGraphIsMutable &&
+    (repoParserState?.coverageState === "complete" ||
+      repoParserState?.coverageState === "partial") &&
+    repoParserState.graphVersionId === versionId &&
+    repoParserState.graphRevision === derivedState?.graphIntegrityRevision,
+  );
+}
+
 function assertRecordedContractAvailable(
   contract: ParserContract,
   relPath: string,
@@ -159,10 +180,13 @@ function assertRecordedContractAvailable(
   }
 }
 
-export async function preflightDraftParser(input: {
-  repoId: string;
-  filePath: string;
-}): Promise<DraftParserPreflight> {
+export async function preflightDraftParser(
+  input: {
+    repoId: string;
+    filePath: string;
+  },
+  options: { allowVerifyingGraph?: boolean } = {},
+): Promise<DraftParserPreflight> {
   const relPath = normalizePath(input.filePath);
   const conn = await getLadybugConn();
   return withReadOnlyTransaction(conn, async () => {
@@ -178,9 +202,12 @@ export async function preflightDraftParser(input: {
       relPath,
     );
 
+    const parserCoverageMatches = options.allowVerifyingGraph
+      ? parserCoverageMatchesCurrentGraph
+      : parserCoverageMatchesVerifiedGraph;
     if (
       !latestVersion ||
-      !parserCoverageMatchesVerifiedGraph(
+      !parserCoverageMatches(
         derivedState,
         latestVersion.versionId,
         repoParserState,

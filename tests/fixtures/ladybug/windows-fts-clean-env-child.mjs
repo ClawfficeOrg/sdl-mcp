@@ -305,6 +305,14 @@ async function fixedRegression() {
     ) {
       missing.push("published sdl-mcp-native Windows loader shim");
     }
+    if (
+      addon &&
+      (typeof addon.parseContent !== "function" ||
+        typeof addon.parserIdentityContractVersion !== "function" ||
+        addon.parserIdentityContractVersion() !== 1)
+    ) {
+      missing.push("published sdl-mcp-native content parser contract native:1");
+    }
   }
   if (missing.length > 0) dependencyUnavailable([...new Set(missing)]);
 

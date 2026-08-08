@@ -31,7 +31,7 @@ describe("run-tests script parallel suites", () => {
   it("keeps native parity out of the native-disabled group runner", () => {
     assert.strictEqual(
       pkg.scripts?.["test:native"],
-      "npm run build:all && npm run test:native-parity && npm run test:layout-parity && npm run test:native-index-smoke && npm run test:parity",
+      "npm run build:native && npm run build:all && npm run test:native-parity && npm run test:layout-parity && npm run test:native-index-smoke && npm run test:native-live-index && npm run test:parity",
     );
   });
 
@@ -71,6 +71,14 @@ describe("run-tests script parallel suites", () => {
     assert.match(runnerSource, /function needsExperimentalModuleMocks/);
     assert.match(runnerSource, /needsExperimentalModuleMocks\(testFile\)/);
     assert.match(runnerSource, /--experimental-test-module-mocks/);
+  });
+
+  it("excludes native tests from the native-disabled default selection", () => {
+    assert.match(runnerSource, /const group = testGroupFor\(filePath\);/);
+    assert.match(
+      runnerSource,
+      /selectedGroups\.size === 0\s*\?\s*group !== "native"\s*:\s*selectedGroups\.has\(group\)/,
+    );
   });
 
   it("excludes the pinned context-quality suite from the ordinary runner", () => {

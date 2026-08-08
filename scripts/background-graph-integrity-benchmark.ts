@@ -46,7 +46,7 @@ import {
   type SavedFilePatchObserver,
 } from "../dist/live-index/file-patcher.js";
 
-export const BENCHMARK_SCHEMA_VERSION = 1;
+export const BENCHMARK_SCHEMA_VERSION = 2;
 export const FIXTURE_SEED = "background-integrity-v1";
 export const FIXTURE_FILE_COUNT = 1_500;
 export const FIXTURE_SYMBOLS_PER_FILE = 20;
@@ -146,6 +146,7 @@ export interface BenchmarkArtifactInput {
   concurrentForegroundMs: number;
   timeoutCount: number;
   foregroundFullGraphCaptures: number;
+  workerError?: string | null;
 }
 
 export interface TimeoutScheduler {
@@ -497,6 +498,7 @@ function parseBenchmarkArtifact(value: unknown): BenchmarkArtifact | undefined {
       "timeoutCount",
       "thresholds",
       "foregroundFullGraphCaptures",
+      "workerError",
       "checks",
       "passed",
     ]) ||
@@ -530,7 +532,11 @@ function parseBenchmarkArtifact(value: unknown): BenchmarkArtifact | undefined {
     !isRecord(value.metricsMs) ||
     !isNonNegativeFiniteNumber(value.metricsMs.concurrentForeground) ||
     !isNonNegativeInteger(value.timeoutCount) ||
-    !isNonNegativeInteger(value.foregroundFullGraphCaptures)
+    !isNonNegativeInteger(value.foregroundFullGraphCaptures) ||
+    !(
+      value.workerError === null ||
+      (isNonEmptyString(value.workerError) && value.workerError.length <= 4_096)
+    )
   ) {
     return undefined;
   }
@@ -552,6 +558,7 @@ function parseBenchmarkArtifact(value: unknown): BenchmarkArtifact | undefined {
     concurrentForegroundMs: value.metricsMs.concurrentForeground,
     timeoutCount: value.timeoutCount,
     foregroundFullGraphCaptures: value.foregroundFullGraphCaptures,
+    workerError: value.workerError,
   });
   return JSON.stringify(value) === JSON.stringify(expected)
     ? (value as BenchmarkArtifact)
@@ -804,9 +811,13 @@ async function waitForProcessDeath(
   }
 }
 
-function addWorkerExitFailure(artifact: BenchmarkArtifact): BenchmarkArtifact {
+function addWorkerExitFailure(
+  artifact: BenchmarkArtifact,
+  workerError: string | null,
+): BenchmarkArtifact {
   return {
     ...artifact,
+    workerError,
     checks: [
       ...artifact.checks,
       check("worker process failures", 1, "=", 0),
@@ -835,6 +846,7 @@ export async function superviseBenchmarkWorker(
     let watchdog: unknown;
     let timedOut = false;
     let workerFailed = false;
+    let workerError: string | null = null;
     let ignoreMessages = false;
     let settled = false;
     let failureStarted = false;
@@ -877,7 +889,7 @@ export async function superviseBenchmarkWorker(
             timedOut ? 1 : 0,
             copyBenchmarkProgress(progress),
           );
-          if (!timedOut) artifact = addWorkerExitFailure(artifact);
+          if (!timedOut) artifact = addWorkerExitFailure(artifact, workerError);
         }
         options.cleanupWorkRoot?.();
         options.writeArtifact(artifact);
@@ -996,6 +1008,7 @@ export async function superviseBenchmarkWorker(
         return;
       }
       if (parsed.type === "error") {
+        workerError = parsed.message;
         void terminateWorker(false);
         return;
       }
@@ -1012,7 +1025,9 @@ export async function superviseBenchmarkWorker(
       completedArtifact = parsed.artifact;
     });
 
-    options.worker.on("error", () => {
+    options.worker.on("error", (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      workerError = (message || "worker emitted an empty error").slice(0, 4_096);
       void terminateWorker(false);
     });
 
@@ -1113,6 +1128,7 @@ export function buildBenchmarkArtifact(input: BenchmarkArtifactInput) {
     timeoutCount: input.timeoutCount,
     thresholds,
     foregroundFullGraphCaptures: input.foregroundFullGraphCaptures,
+    workerError: input.workerError ?? null,
     checks,
     passed: checks.every((item) => item.passed),
   };
@@ -1721,6 +1737,9 @@ function writeBenchmarkArtifact(
 
 function printBenchmarkResult(outputPath: string, artifact: BenchmarkArtifact): void {
   console.log(`${artifact.passed ? "PASS" : "FAIL"} ${outputPath}`);
+  if (artifact.workerError) {
+    console.error(`Worker error: ${artifact.workerError}`);
+  }
   for (const item of artifact.checks) {
     console.log(
       `${item.passed ? "PASS" : "FAIL"} ${item.name}: ${item.actual} ${item.comparator} ${item.threshold}`,

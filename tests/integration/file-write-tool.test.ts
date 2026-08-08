@@ -38,6 +38,7 @@ import {
 import {
   cancelAndWaitForGraphIntegrityVerifier,
 } from "../../dist/indexer/provider-first/background-graph-integrity-verifier.js";
+import { BUILTIN_TYPESCRIPT_PARSER_CONTRACT } from "../../dist/indexer/parser-provenance.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,6 +62,32 @@ function getWindowsShortBasename(filePath: string): string | null {
     throw new Error(`Unable to resolve Windows short name for ${filePath}`);
   }
   return entry[1].toLowerCase() === longName.toLowerCase() ? null : entry[1];
+}
+
+async function establishCompleteParserProvenance(
+  repoId: string,
+  versionId: string,
+  fileIds: readonly string[] = [],
+): Promise<void> {
+  const conn = await getLadybugConn();
+  await ladybugDb.upsertFileParserStatesInTransaction(
+    conn,
+    fileIds.map((fileId) => ({
+      stateId: JSON.stringify([repoId, fileId]),
+      repoId,
+      fileId,
+      ...BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+    })),
+  );
+  const coverageDigest =
+    await ladybugDb.verifyExactParserCoverageInTransaction(conn, repoId);
+  await ladybugDb.upsertRepoParserStateInTransaction(conn, {
+    repoId,
+    coverageState: "complete",
+    graphVersionId: versionId,
+    graphRevision: 0,
+    coverageDigest,
+  });
 }
 
 async function waitForVerifiedRevision(
@@ -312,12 +339,12 @@ describe("sdl.file.write", () => {
       async (t) => {
         const aliasRoot = mkdtempSync(join(tmpdir(), "sdl-file-write-8dot3-"));
         const deniedName = "LongNotebookFilenameForAlias.ipynb";
-        const sourceName = "LongJavaSourceFilename.java";
+        const sourceName = "LongTypescriptSourceFilename.ts";
         const deniedPath = join(aliasRoot, deniedName);
         const sourcePath = join(aliasRoot, sourceName);
         const deniedContent = '{"original": true}';
         const sourceContent =
-          "class LongJavaSourceFilename { int value = 1; }\n";
+          "export const longTypescriptSourceFilename = 1;\n";
         const conn = await getLadybugConn();
         const priorRepo = await ladybugDb.getRepo(conn, repoId);
         assert.ok(priorRepo);
@@ -350,6 +377,10 @@ describe("sdl.file.write", () => {
             conn,
             repoId,
             { files: [], fileless: [] },
+          );
+          await establishCompleteParserProvenance(
+            repoId,
+            "v-eight-dot-three-source",
           );
           await markGraphIntegrityVerified(
             repoId,
@@ -384,7 +415,7 @@ describe("sdl.file.write", () => {
           const response = await handleFileWrite({
             repoId,
             filePath: sourceShortName,
-            content: "class LongJavaSourceFilename { int value = 2; }\n",
+            content: "export const longTypescriptSourceFilename = 2;\n",
             createBackup: false,
           });
           assert.equal(
@@ -472,6 +503,7 @@ describe("sdl.file.write", () => {
         ],
         fileless: [],
       });
+      await establishCompleteParserProvenance(repoId, "v-indexed", [fileId]);
       await markGraphIntegrityVerified(repoId, "v-indexed", baseline.digest);
 
       const response = await handleFileWrite({
@@ -732,6 +764,7 @@ describe("sdl.file.write", () => {
           files: [],
           fileless: [],
         });
+        await establishCompleteParserProvenance(repoId, "v-junction-root");
         await markGraphIntegrityVerified(
           repoId,
           "v-junction-root",
@@ -905,6 +938,7 @@ describe("sdl.file.write", () => {
         files: [],
         fileless: [],
       });
+      await establishCompleteParserProvenance(repoId, "v-new-indexed");
       await markGraphIntegrityVerified(repoId, "v-new-indexed", baseline.digest);
 
       const response = await handleFileWrite({
@@ -970,6 +1004,7 @@ describe("sdl.file.write", () => {
         files: [],
         fileless: [],
       });
+      await establishCompleteParserProvenance(repoId, "v-symbol-free", [fileId]);
       await markGraphIntegrityVerified(repoId, "v-symbol-free", baseline.digest);
 
       const response = await handleFileWrite({

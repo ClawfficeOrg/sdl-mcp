@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import {
   _setDraftSymbolFallbackObserverForTests,
   parseDraftFile,
+  parserCoverageMatchesCurrentGraph,
   parserCoverageMatchesVerifiedGraph,
   resolveDraftSymbolRemap,
   type DraftParserPreflight,
@@ -351,6 +352,42 @@ test("binds parser coverage to the same verified version and revision", () => {
   ]) {
     assert.equal(
       parserCoverageMatchesVerifiedGraph(
+        candidate.graph ?? graph,
+        "v1",
+        candidate.coverage ?? coverage,
+      ),
+      false,
+    );
+  }
+});
+
+test("binds parser coverage to the current mutable graph revision", () => {
+  const graph = {
+    graphIntegrityState: "verifying",
+    graphIntegrityVersionId: "v1",
+    graphIntegrityRevision: 4,
+    graphIntegrityVerifiedRevision: 3,
+    graphIntegrityDigest: "b".repeat(64),
+    graphIntegrityFilelessPruningSupported: true,
+    graphIntegrityManifestEstablished: true,
+  };
+  const coverage = {
+    repoId: "repo",
+    coverageState: "complete",
+    graphVersionId: "v1",
+    graphRevision: 4,
+    coverageDigest: "a".repeat(64),
+  };
+
+  assert.equal(parserCoverageMatchesCurrentGraph(graph, "v1", coverage), true);
+  for (const candidate of [
+    { graph: { ...graph, graphIntegrityState: "failed" } },
+    { graph: { ...graph, graphIntegrityVersionId: "v2" } },
+    { coverage: { ...coverage, graphVersionId: "v2" } },
+    { coverage: { ...coverage, graphRevision: 3 } },
+  ]) {
+    assert.equal(
+      parserCoverageMatchesCurrentGraph(
         candidate.graph ?? graph,
         "v1",
         candidate.coverage ?? coverage,

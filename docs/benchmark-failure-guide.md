@@ -27,6 +27,10 @@ This guide helps developers understand benchmark CI failures and take appropriat
 
 ## Finding Failure Details
 
+### Background Graph-Integrity Worker Failures
+
+The dedicated `benchmark:background-graph-integrity` job writes a schema-v2 artifact under `.benchmark/background-graph-integrity/`. When its worker reports a failure, check the artifact's `workerError` field first; the same bounded message is printed in the job log before the threshold checks. A `null` value means the process exited or timed out without sending a diagnostic message, so inspect the exit and timeout checks next.
+
 ### In GitHub Actions CI
 
 Check the "Run Benchmark CI Guardrails" step logs:

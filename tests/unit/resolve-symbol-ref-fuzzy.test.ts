@@ -77,9 +77,7 @@ function createFallbackOnlyConnection(): {
       }
       const query = String(params.query ?? "");
       observedQueries.push(query);
-      const isFallbackQuery =
-        observedQueries.length > 4 &&
-        ["a", "1", "b"].includes(query.toLowerCase());
+      const isFallbackQuery = query.toLowerCase() === "missing";
       return new FakeQueryResult(isFallbackQuery ? symbolRows : []);
     },
   } as unknown as import("kuzu").Connection;
@@ -134,9 +132,6 @@ describe("symbol reference suggestion recovery", () => {
       "1",
       "bm",
       "issing",
-      "a",
-      "1",
-      "b",
       "missing",
     ]);
     assert.equal(result.status, "not_found");

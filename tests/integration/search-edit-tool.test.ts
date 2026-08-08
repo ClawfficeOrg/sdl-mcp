@@ -141,6 +141,15 @@ async function establishVerifiedEmptyManifest(): Promise<void> {
         expectation.digest,
         true,
       );
+      const coverageDigest =
+        await ladybugDb.verifyExactParserCoverageInTransaction(conn, REPO_ID);
+      await ladybugDb.upsertRepoParserStateInTransaction(conn, {
+        repoId: REPO_ID,
+        coverageState: "complete",
+        graphVersionId: versionId,
+        graphRevision: 0,
+        coverageDigest,
+      });
     }),
   );
   await markGraphIntegrityVerified(REPO_ID, versionId, expectation.digest);
@@ -1171,11 +1180,11 @@ describe("sdl.search.edit", { concurrency: false }, () => {
     "syncs Windows 8.3 source aliases under their canonical identity",
     { skip: process.platform !== "win32" },
     async (t) => {
-      const canonicalRelPath = "LongSearchEditSourceFilename.java";
+      const canonicalRelPath = "LongSearchEditSourceFilename.ts";
       const filePath = join(repoRoot, canonicalRelPath);
       await writeFile(
         filePath,
-        "class LongSearchEditSourceFilename { int value = 1; }\n",
+        "export const value = 1;\n",
         "utf-8",
       );
       const shortName = getWindowsShortBasename(filePath);
@@ -1196,7 +1205,7 @@ describe("sdl.search.edit", { concurrency: false }, () => {
           repoId: REPO_ID,
           rootPath: repoRoot,
           ignore: [],
-          languages: ["java"],
+          languages: ["ts"],
           maxFileBytes: 2_000_000,
           includeNodeModulesTypes: false,
           packageJsonPath: null,

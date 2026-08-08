@@ -892,7 +892,7 @@ describe("saved file graph patch", () => {
     );
   });
 
-  it("waits for current verification before accepting a rapid edit", async (t) => {
+  it("supersedes current verification when accepting a rapid edit", async (t) => {
     const startingState = await getDerivedState(repoId);
     assert.equal(startingState?.graphIntegrityState, "verified");
     const startingRevision = startingState!.graphIntegrityRevision!;
@@ -941,9 +941,11 @@ describe("saved file graph patch", () => {
     );
 
     const committedRevisions: number[] = [];
+    const secondCommitted = deferred();
     const observer = {
       onCommitted(revision: number) {
         committedRevisions.push(revision);
+        if (revision === secondRevision) secondCommitted.resolve();
       },
       onForegroundFullGraphCapture() {
         assert.fail("rapid saved edits must not capture the full graph");
@@ -995,22 +997,25 @@ describe("saved file graph patch", () => {
       },
       observer,
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepStrictEqual(committedRevisions, [firstRevision]);
+    const committedBeforeRelease = await Promise.race([
+      secondCommitted.promise.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+    ]);
     releaseFirstPage.resolve();
     await secondPatch;
+    assert.equal(committedBeforeRelease, true);
     const secondState = await getDerivedState(repoId);
     assert.deepStrictEqual(committedRevisions, [firstRevision, secondRevision]);
     assert.equal(secondState?.graphIntegrityState, "verifying");
     assert.equal(secondState?.graphIntegrityRevision, secondRevision);
     assert.equal(
       secondState?.graphIntegrityVerifiedRevision,
-      firstRevision,
+      startingVerifiedRevision,
     );
-    assert.deepStrictEqual(publishedRevisions, [firstRevision]);
+    assert.deepStrictEqual(publishedRevisions, []);
 
     await waitForVerifiedRevision(repoId, secondRevision);
-    assert.deepStrictEqual(publishedRevisions, [firstRevision, secondRevision]);
+    assert.deepStrictEqual(publishedRevisions, [secondRevision]);
     assert.ok(pageQueries >= 2);
   });
 

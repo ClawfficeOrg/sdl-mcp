@@ -613,6 +613,30 @@ describe("background graph integrity benchmark contract", () => {
     assert.deepEqual(events, ["exit", "close", "cleanup", "write"]);
   });
 
+  it("preserves the worker error message in the failure artifact", async () => {
+    const events: string[] = [];
+    const worker = new FakeBenchmarkWorker(events);
+    const scheduler = new FakeWatchdogScheduler();
+    let written: BenchmarkArtifact | undefined;
+    const supervision = superviseBenchmarkWorker(
+      supervisorOptions(worker, scheduler, events, (artifact) => {
+        written = artifact;
+      }),
+    );
+
+    worker.emit("message", {
+      type: "error",
+      message: "control sample failed: revision mismatch",
+    });
+    scheduler.fire(TERMINATION_GRACE_MS);
+    await supervision;
+
+    assert.equal(
+      written?.workerError,
+      "control sample failed: revision mismatch",
+    );
+  });
+
   it("settles a spawn error with no pid without waiting for an exit event", async () => {
     const events: string[] = [];
     const worker = new FakeBenchmarkWorker(events, null);
@@ -920,6 +944,7 @@ describe("background graph integrity benchmark contract", () => {
       "timeoutCount",
       "thresholds",
       "foregroundFullGraphCaptures",
+      "workerError",
       "checks",
       "passed",
     ]);

@@ -47,7 +47,7 @@ import {
 } from "./dependency-frontier.js";
 import {
   parseDraftFile,
-  parserCoverageMatchesVerifiedGraph,
+  parserCoverageMatchesCurrentGraph,
   preflightDraftParser,
   type DraftParseResult,
 } from "./draft-parser.js";
@@ -138,14 +138,13 @@ async function patchSavedFileUnlocked(
       getAbsolutePathFromRepoRoot(repo.rootPath, relPath),
       "utf-8",
     ));
-  const pendingState = await getDerivedStateFromConnection(conn, request.repoId);
-  if (pendingState?.graphIntegrityState === "verifying") {
-    return RETRY_SAVED_FILE_PATCH;
-  }
-  const preflight = await preflightDraftParser({
-    repoId: request.repoId,
-    filePath: relPath,
-  });
+  const preflight = await preflightDraftParser(
+    {
+      repoId: request.repoId,
+      filePath: relPath,
+    },
+    { allowVerifyingGraph: true },
+  );
   const existingFile = preflight.durableFile;
   const existingSymbols = preflight.durableSymbols;
   const durableFileId = existingFile?.fileId ?? request.repoId + ":" + relPath;
@@ -434,7 +433,7 @@ async function patchSavedFileUnlocked(
           currentVersion?.versionId !== integrityBaseline.versionId ||
           currentDerivedState?.graphIntegrityRevision !==
             integrityBaseline.revision ||
-          !parserCoverageMatchesVerifiedGraph(
+          !parserCoverageMatchesCurrentGraph(
             currentDerivedState,
             integrityBaseline.versionId,
             currentRepoParserState,
@@ -514,6 +513,20 @@ async function patchSavedFileUnlocked(
         await upsertFileParserStatesInTransaction(txConn, [
           nextFileParserState,
         ]);
+        const nextCoverage = existingFile
+          ? {
+              coverageState: currentRepoParserState!.coverageState,
+              coverageDigest: currentRepoParserState!.coverageDigest,
+            }
+          : await ladybugDb.summarizeParserCoverageInTransaction(
+              txConn,
+              request.repoId,
+            );
+        await ladybugDb.upsertRepoParserStateInTransaction(txConn, {
+          ...currentRepoParserState!,
+          ...nextCoverage,
+          graphRevision: integrityBaseline.revision + 1,
+        });
 
         // Keep physical placeholder rows and their manifest tuples in the same
         // transaction. ID scoping avoids a repo-wide placeholder scan on each

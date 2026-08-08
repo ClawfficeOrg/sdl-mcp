@@ -416,7 +416,10 @@ const testFiles = allTestFiles.filter((filePath) => {
   ) {
     return false;
   }
-  return selectedGroups.size === 0 || selectedGroups.has(testGroupFor(filePath));
+  const group = testGroupFor(filePath);
+  return selectedGroups.size === 0
+    ? group !== "native"
+    : selectedGroups.has(group);
 });
 
 if (testFiles.length === 0) {

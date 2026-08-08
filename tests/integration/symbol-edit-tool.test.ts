@@ -19,6 +19,14 @@ import type {
   SymbolEditApplyResponse,
   SymbolEditPreviewResponse,
 } from "../../dist/mcp/tools.js";
+import { loadBuiltInAdapters } from "../../dist/indexer/adapter/registry.js";
+import { markGraphIntegrityVerified } from "../../dist/db/ladybug-derived-state.js";
+import {
+  capturePersistedGraphIntegrity,
+  createGraphIntegrityFileState,
+} from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
+import { BUILTIN_TYPESCRIPT_PARSER_CONTRACT } from "../../dist/indexer/parser-provenance.js";
+import { cancelAndWaitForGraphIntegrityVerifier } from "../../dist/indexer/provider-first/background-graph-integrity-verifier.js";
 
 const REPO_ID = "symbol-edit-smoke";
 const FILE_ID = "file-auth";
@@ -31,6 +39,7 @@ const RANGE = { startLine: 1, startCol: 0, endLine: 3, endCol: 1 };
 const FINGERPRINT = "fp-auth-1";
 
 let repoRoot: string;
+let graphDbCounter = 0;
 
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -77,24 +86,73 @@ async function seedFile(content: string): Promise<void> {
     updatedAt: new Date().toISOString(),
   });
   assert.equal(stats.isFile(), true);
+
+  const versionId = `${REPO_ID}:v1`;
+  const now = new Date().toISOString();
+  await ladybugDb.createVersion(conn, {
+    versionId,
+    repoId: REPO_ID,
+    createdAt: now,
+    reason: "symbol.edit integration fixture",
+    prevVersionHash: null,
+    versionHash: null,
+  });
+  const baseline = await capturePersistedGraphIntegrity(conn, REPO_ID);
+  const symbols = await ladybugDb.getSymbolsByFile(conn, FILE_ID);
+  await ladybugDb.replaceGraphIntegrityManifestInTransaction(conn, REPO_ID, {
+    files: [
+      createGraphIntegrityFileState(
+        REPO_ID,
+        FILE_ID,
+        REL_PATH,
+        symbols,
+        [],
+      ),
+    ],
+    fileless: [],
+  });
+  await ladybugDb.upsertFileParserStatesInTransaction(conn, [
+    {
+      stateId: JSON.stringify([REPO_ID, FILE_ID]),
+      repoId: REPO_ID,
+      fileId: FILE_ID,
+      ...BUILTIN_TYPESCRIPT_PARSER_CONTRACT,
+    },
+  ]);
+  const coverageDigest =
+    await ladybugDb.verifyExactParserCoverageInTransaction(conn, REPO_ID);
+  await ladybugDb.upsertRepoParserStateInTransaction(conn, {
+    repoId: REPO_ID,
+    coverageState: "complete",
+    graphVersionId: versionId,
+    graphRevision: 0,
+    coverageDigest,
+  });
+  await markGraphIntegrityVerified(REPO_ID, versionId, baseline.digest);
 }
 
 describe("sdl.symbol.edit", { concurrency: false }, () => {
   before(async () => {
+    loadBuiltInAdapters();
     repoRoot = await mkdtemp(join(tmpdir(), "sdl-symbol-edit-"));
-    await initLadybugDb(join(repoRoot, "symbol-edit.lbug"));
     await writeFile(join(repoRoot, "package.json"), "{}", "utf-8");
     await rm(join(repoRoot, "src"), { recursive: true, force: true });
     await mkdir(join(repoRoot, "src"), { recursive: true });
   });
 
   beforeEach(async () => {
+    await cancelAndWaitForGraphIntegrityVerifier(REPO_ID);
+    await closeLadybugDb();
+    await initLadybugDb(
+      join(repoRoot, `symbol-edit-${graphDbCounter++}.lbug`),
+    );
     resetSearchEditPlanStore();
     resetDefaultLiveIndexCoordinator();
     await seedFile("export function handleAuth(): boolean {\n  return false;\n}\n");
   });
 
   after(async () => {
+    await cancelAndWaitForGraphIntegrityVerifier(REPO_ID);
     await closeLadybugDb();
     await rm(repoRoot, { recursive: true, force: true });
   });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { it } from "node:test";
@@ -20,6 +20,20 @@ const requireModeDependencies =
   process.env.SDL_LADYBUG_WINDOWS_FTS_REQUIRE_MODE === "1";
 
 const childPath = resolve("tests/fixtures/ladybug/windows-fts-clean-env-child.mjs");
+
+it("preflights the published addon content-parser contract", () => {
+  const childSource = readFileSync(childPath, "utf8");
+  assert.match(childSource, /typeof addon\.parseContent !== "function"/u);
+  assert.match(
+    childSource,
+    /typeof addon\.parserIdentityContractVersion !== "function"/u,
+  );
+  assert.match(
+    childSource,
+    /addon\.parserIdentityContractVersion\(\) !== 1/u,
+  );
+});
+
 const accessViolationStatuses = new Set([0xc0000005, -1073741819]);
 const fixedEvidence = [
   { phase: "environment", pathDlls: [] },
