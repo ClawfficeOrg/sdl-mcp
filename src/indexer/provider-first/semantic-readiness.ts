@@ -124,6 +124,7 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
   let fileSummaryEmbeddingStats:
     | Record<string, FileSummaryEmbeddingRefreshResult>
     | undefined;
+  let embeddingsDeferred = false;
 
   try {
     const modelPlan = resolveSemanticEmbeddingModelPlan(semanticConfig);
@@ -164,11 +165,12 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
             }),
         );
         fileSummaryEmbeddingStats[embModel] = stats;
-        if (stats.degraded || (stats.deferred ?? 0) > 0) {
+        if (stats.degraded) {
           throw new IndexError(
             `FileSummary embedding refresh incomplete for ${embModel}`,
           );
         }
+        if ((stats.deferred ?? 0) > 0) embeddingsDeferred = true;
       }
     }
 
@@ -195,11 +197,12 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
             ),
         }),
       );
-      if (stats.degraded || (stats.deferred ?? 0) > 0) {
+      if (stats.degraded) {
         throw new IndexError(
           `Symbol embedding refresh incomplete for ${embModel}`,
         );
       }
+      if ((stats.deferred ?? 0) > 0) embeddingsDeferred = true;
     }
 
     await measure("semanticReadiness.deferredIndexes", () =>
@@ -213,13 +216,18 @@ export async function runProviderFirstSemanticReadinessRefresh(params: {
       }),
     );
 
-    await deps.markDerivedStateComputed(params.repoId, params.versionId, {
-      summaries: semanticConfig.generateSummaries === true,
-      embeddings: true,
-    });
+    await deps.markDerivedStateComputed(
+      params.repoId,
+      params.versionId,
+      {
+        summaries: semanticConfig.generateSummaries === true,
+        embeddings: !embeddingsDeferred,
+      },
+      { clearError: true },
+    );
 
     return {
-      semanticDeferred: false,
+      semanticDeferred: embeddingsDeferred,
       summaryStats,
       fileSummaryEmbeddingStats,
     };

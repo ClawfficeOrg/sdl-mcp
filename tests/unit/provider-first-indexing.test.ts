@@ -503,61 +503,141 @@ describe("provider-first indexing foundation", () => {
     ]);
   });
 
-  it("keeps semantic readiness deferred when either embedding lane is incomplete", async () => {
-    for (const incomplete of [
-      "file-degraded",
-      "symbol-degraded",
-      "file-deferred",
-      "symbol-deferred",
-    ] as const) {
-      const [incompleteLane, incompleteState] = incomplete.split("-") as [
-        "file" | "symbol",
-        "degraded" | "deferred",
-      ];
+  it("distinguishes intentional semantic backlog from embedding failure", async () => {
+    const cases = [
+      {
+        name: "file deferred",
+        file: "deferred",
+        symbol: "ok",
+        expectedCalls: [
+          "summaries",
+          "file",
+          "symbol",
+          "indexes",
+          "computed:true:false:true",
+        ],
+        expectedError: false,
+      },
+      {
+        name: "file degradation",
+        file: "degraded",
+        symbol: "ok",
+        expectedCalls: ["summaries", "file"],
+        expectedError: true,
+      },
+      {
+        name: "first file model deferred",
+        file: "first-deferred",
+        symbol: "ok",
+        expectedCalls: [
+          "summaries",
+          "file",
+          "file",
+          "symbol",
+          "indexes",
+          "computed:true:false:true",
+        ],
+        expectedError: false,
+      },
+      {
+        name: "symbol deferred",
+        file: "ok",
+        symbol: "deferred",
+        expectedCalls: [
+          "summaries",
+          "file",
+          "symbol",
+          "indexes",
+          "computed:true:false:true",
+        ],
+        expectedError: false,
+      },
+      {
+        name: "later symbol degradation supersedes file deferral",
+        file: "deferred",
+        symbol: "degraded",
+        expectedCalls: ["summaries", "file", "symbol"],
+        expectedError: true,
+      },
+      {
+        name: "thrown file refresh",
+        file: "throws",
+        symbol: "ok",
+        expectedCalls: ["summaries", "file"],
+        expectedError: true,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
       const calls: string[] = [];
+      let fileCallCount = 0;
       const result = await runProviderFirstSemanticReadinessRefresh({
-        repoId: `repo-semantic-${incomplete}`,
-        versionId: `v-semantic-${incomplete}`,
+        repoId: `repo-semantic-${testCase.name}`,
+        versionId: `v-semantic-${testCase.name}`,
         appConfig: {
           semantic: {
             enabled: true,
             provider: "local",
-            generateSummaries: false,
+            generateSummaries: true,
+            fileSummaryEmbeddingModels:
+              testCase.file === "first-deferred"
+                ? [
+                    "nomic-embed-text-v1.5",
+                    "jina-embeddings-v2-base-code",
+                  ]
+                : undefined,
           },
         } as AppConfig,
         deps: {
+          generateSummariesForRepo: async () => {
+            calls.push("summaries");
+            return {
+              generated: 1,
+              skipped: 0,
+              failed: 0,
+              totalCostUsd: 0,
+            };
+          },
           refreshFileSummaryEmbeddings: async () => {
             calls.push("file");
+            const fileState =
+              testCase.file === "first-deferred"
+                ? fileCallCount++ === 0
+                  ? "deferred"
+                  : "ok"
+                : testCase.file;
+            if (fileState === "throws") {
+              throw new Error("file provider unavailable");
+            }
             return {
-              embedded: incompleteLane === "file" ? 0 : 1,
+              embedded: fileState === "ok" ? 1 : 0,
               skipped: 0,
-              missing: incompleteLane === "file" ? 1 : 0,
-              degraded:
-                incompleteLane === "file" && incompleteState === "degraded",
-              deferred:
-                incompleteLane === "file" && incompleteState === "deferred"
-                  ? 1
-                  : undefined,
+              missing: fileState === "ok" ? 0 : 1,
+              degraded: fileState === "degraded",
+              deferred: fileState === "deferred" ? 1 : undefined,
             };
           },
           refreshSymbolEmbeddings: async () => {
             calls.push("symbol");
             return {
-              embedded: incompleteLane === "symbol" ? 0 : 1,
+              embedded: testCase.symbol === "ok" ? 1 : 0,
               skipped: 0,
-              degraded:
-                incompleteLane === "symbol" && incompleteState === "degraded",
-              deferred:
-                incompleteLane === "symbol" && incompleteState === "deferred"
-                  ? 1
-                  : undefined,
+              degraded: testCase.symbol === "degraded",
+              deferred: testCase.symbol === "deferred" ? 1 : undefined,
             };
           },
           buildDeferredIndexes: async () => {
             calls.push("indexes");
           },
-          markDerivedStateComputed: async () => {
-            calls.push("computed");
+          markDerivedStateComputed: async (
+            _repoId,
+            _versionId,
+            flags,
+            options,
+          ) => {
+            calls.push(
+              `computed:${String(flags?.summaries)}:${String(flags?.embeddings)}:${String(options?.clearError)}`,
+            );
           },
           recordDerivedStateError: async (_repoId, message) => {
             calls.push(`error:${message}`);
@@ -565,10 +645,35 @@ describe("provider-first indexing foundation", () => {
         },
       });
 
-      assert.equal(result.semanticDeferred, true);
-      assert.ok(calls.some((call) => call.startsWith("error:")));
-      assert.ok(!calls.includes("indexes"));
-      assert.ok(!calls.includes("computed"));
+      assert.equal(result.semanticDeferred, true, testCase.name);
+      assert.deepEqual(
+        calls.filter((call) => !call.startsWith("error:")),
+        testCase.expectedCalls,
+        testCase.name,
+      );
+      assert.equal(
+        calls.some((call) => call.startsWith("error:")),
+        testCase.expectedError,
+        testCase.name,
+      );
+      if (testCase.expectedError) {
+        assert.ok(!calls.includes("indexes"), testCase.name);
+        assert.ok(
+          !calls.some((call) => call.startsWith("computed:")),
+          testCase.name,
+        );
+      } else {
+        assert.deepEqual(
+          Object.keys(result.fileSummaryEmbeddingStats ?? {}),
+          testCase.file === "first-deferred"
+            ? [
+                "nomic-embed-text-v1.5",
+                "jina-embeddings-v2-base-code",
+              ]
+            : ["nomic-embed-text-v1.5"],
+          testCase.name,
+        );
+      }
     }
   });
 

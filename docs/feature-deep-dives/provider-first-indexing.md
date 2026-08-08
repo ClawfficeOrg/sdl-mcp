@@ -145,9 +145,10 @@ After graph finalization, SDL-MCP runs the configured semantic readiness refresh
 - Summaries run when `semantic.generateSummaries` is enabled.
 - Symbol and FileSummary embeddings run from the configured semantic model plan.
 - Deferred retrieval indexes are rebuilt.
-- Semantic dirty flags are cleared only after that pass completes.
+- Semantic dirty flags are cleared only for completed work; an intentional embedding backlog leaves only the embedding flag dirty.
 
-If semantic refresh cannot complete, the CLI reports `Semantic readiness: deferred`, `DerivedState.embeddingsDirty` remains set, and `DerivedState.summariesDirty` is set only when summaries are configured. A degraded mock fallback or any deferred embedding rows count as incomplete; mock rows are not reported as embedded. Repeated provider-first runs that reuse already-current active provider rows run the same post-graph semantic refresh rather than reporting a clean graph prematurely.
+If semantic refresh fails or an embedding provider degrades, the CLI reports `Semantic readiness: deferred`, records the derived-state error, and aborts readiness finalization. Sub-threshold FileSummary or Symbol vector work is different: SDL-MCP records it as an intentional backlog, continues the remaining semantic lanes and deferred-index work, clears any earlier semantic error plus completed summary work, and leaves `DerivedState.embeddingsDirty` set. The backlog accumulates until it reaches the protected HNSW rebuild floor or an explicit safe rebuild completes it. Mock fallback remains degraded and its rows are not reported as embedded. Repeated provider-first runs that reuse already-current active provider rows run the same post-graph semantic refresh rather than reporting a clean graph prematurely.
+
 
 ### Persisted Graph Integrity
 
