@@ -831,8 +831,22 @@ jobs:
           echo "Starting CI memory index on ${{ runner.os }}..."
           START_TIME=$(date +%s%3N)
           set +e
-          node dist/cli/index.js index
-          INDEX_EXIT_CODE=$?
+          SUCCESSFUL_DB_PATH=""
+          for INDEX_ATTEMPT in 1 2; do
+            # A native crash can leave its LadybugDB family unsafe to reopen.
+            SDL_GRAPH_DB_PATH="${RUNNER_TEMP}/sync-index-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${INDEX_ATTEMPT}.lbug"
+            export SDL_GRAPH_DB_PATH
+            node dist/cli/index.js index
+            INDEX_EXIT_CODE=$?
+            if [ "${INDEX_EXIT_CODE}" -eq 0 ]; then
+              SUCCESSFUL_DB_PATH="${SDL_GRAPH_DB_PATH}"
+              break
+            fi
+            if [ "${INDEX_EXIT_CODE}" -ne 139 ] || [ "${INDEX_ATTEMPT}" -eq 2 ]; then
+              break
+            fi
+            echo "[WARN] Index exited 139; retrying once with a fresh graph"
+          done
           set -e
           if [ "${INDEX_EXIT_CODE}" -ne 0 ]; then
             END_TIME=$(date +%s%3N)
@@ -841,6 +855,7 @@ jobs:
             echo "[FAIL] Index failed in ${DURATION}ms with exit code ${INDEX_EXIT_CODE}"
             exit "${INDEX_EXIT_CODE}"
           fi
+          echo "SDL_GRAPH_DB_PATH=${SUCCESSFUL_DB_PATH}" >> "${GITHUB_ENV}"
           END_TIME=$(date +%s%3N)
           DURATION=$((END_TIME - START_TIME))
           echo "duration_ms=${DURATION}" >> $GITHUB_OUTPUT

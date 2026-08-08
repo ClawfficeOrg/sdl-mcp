@@ -442,6 +442,38 @@ describe("release regression guards", () => {
     );
   });
 
+  it("retries sync-memory exit 139 once with an isolated database path", () => {
+    const ciSource = readSource(".github/workflows/ci.yml");
+    const syncMemoryJob =
+      ciSource.match(/sync-memory:\s*[\s\S]*?\n  sync-validation:/)?.[0] ?? "";
+    const indexStep =
+      syncMemoryJob.match(
+        /- name: Index repository for CI sync[\s\S]*?(?=\n\s+- name: Export sync artifact)/,
+      )?.[0] ?? "";
+
+    assert.ok(indexStep, "sync-memory index step should be present");
+    assert.match(
+      indexStep,
+      /for INDEX_ATTEMPT in 1 2; do/,
+      "sync-memory should retry at most once",
+    );
+    assert.match(
+      indexStep,
+      /SDL_GRAPH_DB_PATH="\$\{RUNNER_TEMP\}\/sync-index-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}-\$\{INDEX_ATTEMPT\}\.lbug"/,
+      "each index attempt should use a fresh database path",
+    );
+    assert.match(
+      indexStep,
+      /if \[ "\$\{INDEX_EXIT_CODE\}" -ne 139 \] \|\| \[ "\$\{INDEX_ATTEMPT\}" -eq 2 \]; then\s+break/,
+      "only exit 139 should reach the second attempt",
+    );
+    assert.match(
+      indexStep,
+      /echo "SDL_GRAPH_DB_PATH=\$\{SUCCESSFUL_DB_PATH\}" >> "\$\{GITHUB_ENV\}"/,
+      "the successful database path should be available to artifact export",
+    );
+  });
+
   it("rebuilds kuzu during test setup when npm ci used --ignore-scripts", () => {
     const source = readSource("scripts/run-tests.mjs");
 
