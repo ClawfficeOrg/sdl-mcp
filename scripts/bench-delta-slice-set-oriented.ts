@@ -20,6 +20,7 @@ import { getLadybugConn } from "../dist/db/ladybug.js";
 import { queryAll } from "../dist/db/ladybug-queries.js";
 import { getLatestVersion } from "../dist/db/ladybug-versions.js";
 import { computeBlastRadius } from "../dist/delta/blastRadius.js";
+import { escapeMarkdownTableCell } from "../dist/benchmark/markdown.js";
 import { buildSlice } from "../dist/graph/slice.js";
 
 interface DeltaBenchRun {
@@ -230,7 +231,7 @@ function writeMarkdownSummary(report: BenchmarkReport, path: string): void {
     "| :-- | :-- | --: | --: | --: | --: |",
     ...report.slice.map(
       (run) =>
-        `| ${run.query.replace(/\|/g, "\\|")} | ${run.repeats} | ${run.avgMs.toFixed(1)} | ${run.p95Ms.toFixed(1)} | ${run.cardCount} | ${run.frontierCount} |`,
+        `| ${escapeMarkdownTableCell(run.query)} | ${run.repeats} | ${run.avgMs.toFixed(1)} | ${run.p95Ms.toFixed(1)} | ${run.cardCount} | ${run.frontierCount} |`,
     ),
     "",
     "## Notes",
