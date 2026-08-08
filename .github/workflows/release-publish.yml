@@ -253,6 +253,7 @@ jobs:
           tarball=$(node -e "const fs=require('fs');const path=require('path');const f='sdl-mcp-'+process.env.VERSION+'.tgz';if(!fs.existsSync(path.join('release-pack',f)))process.exit(1);console.log(path.resolve('release-pack',f).replace(/\\\\/g,'/'));")
           fixture_test=$(node -e "console.log(require('path').resolve('tests/integration/live-index-symbol-fts-crash.test.ts').replace(/\\\\/g,'/'))")
           fixture_child=$(node -e "console.log(require('path').resolve('tests/fixtures/ladybug/windows-fts-clean-env-child.mjs').replace(/\\\\/g,'/'))")
+          fixture_workflow=$(node -e "console.log(require('path').resolve('.github/workflows/ladybug-windows-fts-compat.yml').replace(/\\\\/g,'/'))")
           context_source=$(node -e "console.log(require('path').resolve('src/context/profiles.ts').replace(/\\\\/g,'/'))")
           install_args=("${tarball}" "--legacy-peer-deps")
           if [[ "${{ matrix.os }}" == "windows-latest" && "${{ matrix.accelerators }}" == "included" ]]; then
@@ -321,13 +322,15 @@ jobs:
 
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             # Node 24 does not strip TypeScript under node_modules. Build a temporary harness beside it.
-            mkdir -p "${smoke_dir}/tests/integration" "${smoke_dir}/tests/fixtures/ladybug" "${smoke_dir}/src/context"
+            mkdir -p "${smoke_dir}/tests/integration" "${smoke_dir}/tests/fixtures/ladybug" "${smoke_dir}/src/context" "${smoke_dir}/.github/workflows"
             cp "${fixture_test}" "${smoke_dir}/tests/integration/live-index-symbol-fts-crash.test.ts"
             cp "${fixture_child}" "${smoke_dir}/tests/fixtures/ladybug/windows-fts-clean-env-child.mjs"
+            cp "${fixture_workflow}" "${smoke_dir}/.github/workflows/ladybug-windows-fts-compat.yml"
             cp "${context_source}" "${smoke_dir}/src/context/profiles.ts"
             cp -R node_modules/sdl-mcp/dist "${smoke_dir}/dist"
             if [[ "${{ matrix.accelerators }}" == "included" ]]; then
-              SDL_LADYBUG_WINDOWS_FTS_TEST_MODE=fixed-regression SDL_LADYBUG_WINDOWS_FTS_REQUIRE_MODE=1 \
+              native_addon_path=$(node -e "console.log(require.resolve('sdl-mcp-native-win32-x64-msvc').replace(/\\\\/g,'/'))")
+              SDL_LADYBUG_WINDOWS_FTS_NATIVE_ADDON_PATH="${native_addon_path}" SDL_LADYBUG_WINDOWS_FTS_TEST_MODE=fixed-regression SDL_LADYBUG_WINDOWS_FTS_REQUIRE_MODE=1 \
                 node --experimental-strip-types --test-concurrency=1 --test tests/integration/live-index-symbol-fts-crash.test.ts
             else
               SDL_MCP_DISABLE_NATIVE_ADDON=1 node --experimental-strip-types --test --test-name-pattern="probes upstream" tests/integration/live-index-symbol-fts-crash.test.ts
