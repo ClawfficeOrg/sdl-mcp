@@ -4,6 +4,19 @@ import { logger } from "../util/logger.js";
 
 type RecordTiming = (phaseName: string, durationMs: number) => void;
 
+const SNAPSHOT_DIAGNOSTICS_ENABLED =
+  process.env.SDL_MCP_SNAPSHOT_DIAGNOSTICS === "1";
+
+function logSnapshotDiagnostic(
+  message: string,
+  fields: Record<string, unknown>,
+): void {
+  if (!SNAPSHOT_DIAGNOSTICS_ENABLED) return;
+  process.stderr.write(
+    `[snapshot-diagnostic] ${message} ${JSON.stringify(fields)}\n`,
+  );
+}
+
 async function measureVersionPhase<T>(
   recordTiming: RecordTiming | undefined,
   phaseName: string,
@@ -26,6 +39,7 @@ async function snapshotSymbolsForVersion(params: {
   const readConn = await getLadybugConn();
   let afterSymbolId: string | undefined;
   let symbolCount = 0;
+  let pageNumber = 0;
 
   await measureVersionPhase(
     recordTiming,
@@ -33,6 +47,15 @@ async function snapshotSymbolsForVersion(params: {
     async () => {
       // ponytail: Batched MERGE is the ceiling until Ladybug COPY has a native blank-key safety regression.
       while (true) {
+        const currentPage = pageNumber + 1;
+        // These paired boundaries distinguish native result delivery failures
+        // from the SymbolVersion transactions that consume each delivered page.
+        logSnapshotDiagnostic("snapshot read page start", {
+          repoId,
+          versionId,
+          pageNumber: currentPage,
+          afterSymbolId: afterSymbolId ?? null,
+        });
         const symbols = await measureVersionPhase(
           recordTiming,
           "versionSnapshot.snapshot.readPages",
@@ -41,6 +64,13 @@ async function snapshotSymbolsForVersion(params: {
               afterSymbolId,
             }),
         );
+        logSnapshotDiagnostic("snapshot read page end", {
+          repoId,
+          versionId,
+          pageNumber: currentPage,
+          rowCount: symbols.length,
+          lastSymbolId: symbols[symbols.length - 1]?.symbolId ?? null,
+        });
         if (symbols.length === 0) break;
 
         const rows = symbols.map((symbol) => ({
@@ -62,6 +92,7 @@ async function snapshotSymbolsForVersion(params: {
             ),
         );
         symbolCount += symbols.length;
+        pageNumber = currentPage;
         afterSymbolId = symbols[symbols.length - 1]?.symbolId;
       }
     },
@@ -90,6 +121,7 @@ export async function createVersionAndSnapshot(params: {
   recordTiming?: RecordTiming;
 }): Promise<void> {
   const { repoId, versionId, reason, recordTiming } = params;
+  logSnapshotDiagnostic("version create start", { repoId, versionId });
   await measureVersionPhase(
     recordTiming,
     "versionSnapshot.createVersion",
@@ -105,6 +137,7 @@ export async function createVersionAndSnapshot(params: {
         });
       }),
   );
+  logSnapshotDiagnostic("version create end", { repoId, versionId });
   await snapshotSymbolsForVersion({
     repoId,
     versionId,

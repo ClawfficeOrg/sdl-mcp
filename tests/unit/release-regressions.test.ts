@@ -633,4 +633,56 @@ describe("release regression guards", () => {
     );
   });
 
+  it("captures actionable sync snapshot crash diagnostics on Ubuntu", () => {
+    const ciSource = readSource(".github/workflows/ci.yml");
+    const syncMemoryJob =
+      ciSource.match(/sync-memory:\s*[\s\S]*?\n  sync-validation:/)?.[0] ?? "";
+
+    assert.match(
+      syncMemoryJob,
+      /SDL_MCP_SNAPSHOT_DIAGNOSTICS:\s*["']1["']/,
+      "sync-memory should enable snapshot phase diagnostics",
+    );
+    assert.match(
+      syncMemoryJob,
+      /ulimit -c unlimited/,
+      "the indexing shell should allow native core dumps",
+    );
+    assert.match(
+      syncMemoryJob,
+      /if:\s*failure\(\)[\s\S]*?actions\/upload-artifact@v\d+[\s\S]*?sync-index-[^\n]*\.lbug\*[\s\S]*?core/,
+      "failed sync-memory jobs should upload the Ladybug family and native core",
+    );
+  });
+
+  it("gates detailed version snapshot boundaries behind an explicit diagnostic flag", () => {
+    const indexerVersionSource = readSource("src/indexer/indexer-version.ts");
+    const ladybugVersionsSource = readSource("src/db/ladybug-versions.ts");
+
+    assert.match(
+      indexerVersionSource,
+      /process\.stderr\.write/,
+      "snapshot diagnostics must bypass log-level filtering before native death",
+    );
+    assert.match(
+      ladybugVersionsSource,
+      /process\.stderr\.write/,
+      "transaction boundaries must bypass log-level filtering before native death",
+    );
+    assert.match(
+      indexerVersionSource,
+      /SDL_MCP_SNAPSHOT_DIAGNOSTICS[\s\S]*?version create start[\s\S]*?version create end/,
+      "version creation boundaries should be diagnostic-only",
+    );
+    assert.match(
+      indexerVersionSource,
+      /snapshot read page start[\s\S]*?snapshot read page end/,
+      "snapshot reads should expose the page boundary around native result delivery",
+    );
+    assert.match(
+      ladybugVersionsSource,
+      /SDL_MCP_SNAPSHOT_DIAGNOSTICS[\s\S]*?snapshot write chunk start[\s\S]*?snapshot write chunk end/,
+      "snapshot writes should expose each transaction boundary",
+    );
+  });
 });

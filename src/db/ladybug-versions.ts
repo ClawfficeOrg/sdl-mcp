@@ -14,6 +14,19 @@ import {
 import { DEFAULT_BATCH_QUERY_LIMIT } from "../config/constants.js";
 import { resolveLadybugWriteChunkSize } from "./ladybug-batching.js";
 
+const SNAPSHOT_DIAGNOSTICS_ENABLED =
+  process.env.SDL_MCP_SNAPSHOT_DIAGNOSTICS === "1";
+
+function logSnapshotDiagnostic(
+  message: string,
+  fields: Record<string, unknown>,
+): void {
+  if (!SNAPSHOT_DIAGNOSTICS_ENABLED) return;
+  process.stderr.write(
+    `[snapshot-diagnostic] ${message} ${JSON.stringify(fields)}\n`,
+  );
+}
+
 export async function countSymbolVersionsForVersion(
   conn: Connection,
   versionId: string,
@@ -221,6 +234,7 @@ export async function snapshotSymbolVersionsBatch(
     options?.chunkSize,
   );
   for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunkNumber = Math.floor(i / chunkSize) + 1;
     const chunk = rows.slice(i, i + chunkSize).map((row) => ({
       id: `${row.versionId}:${row.symbolId}`,
       versionId: row.versionId,
@@ -232,6 +246,13 @@ export async function snapshotSymbolVersionsBatch(
       sideEffectsJson: row.sideEffectsJson,
       testCaseJson: row.testCaseJson ?? null,
     }));
+    // Emit immediately around the native transaction so a fail-stop crash leaves
+    // an unambiguous last completed snapshot operation in the CI log.
+    logSnapshotDiagnostic("snapshot write chunk start", {
+      versionId: chunk[0]?.versionId ?? null,
+      chunkNumber,
+      rowCount: chunk.length,
+    });
     await withTransaction(conn, async (txConn) => {
       await exec(
         txConn,
@@ -247,6 +268,11 @@ export async function snapshotSymbolVersionsBatch(
              sv.testCaseJson = row.testCaseJson`,
         { rows: chunk },
       );
+    });
+    logSnapshotDiagnostic("snapshot write chunk end", {
+      versionId: chunk[0]?.versionId ?? null,
+      chunkNumber,
+      rowCount: chunk.length,
     });
   }
 }

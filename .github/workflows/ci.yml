@@ -814,6 +814,14 @@ jobs:
         run: |
           npm run init || node dist/cli/index.js init --force
 
+      - name: Configure Linux core dump capture
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo sysctl -w "kernel.core_pattern=${RUNNER_TEMP}/core.%e.%p" || \
+            echo "::warning::Unable to override kernel.core_pattern"
+          echo "core_pattern=$(cat /proc/sys/kernel/core_pattern)"
+
       - name: Index repository for CI sync
         id: index
         shell: bash
@@ -827,8 +835,13 @@ jobs:
           # Serialize pass-1 DB flushes against parsing so sync-memory avoids
           # the known tree-sitter / LadybugDB overlap crash path.
           SDL_MCP_PASS1_STABLE_DB_WRITES: "1"
+          # Emit transaction-sized boundaries only in this diagnostic CI job.
+          SDL_MCP_SNAPSHOT_DIAGNOSTICS: "1"
         run: |
           echo "Starting CI memory index on ${{ runner.os }}..."
+          if [ "${RUNNER_OS}" = "Linux" ]; then
+            ulimit -c unlimited
+          fi
           START_TIME=$(date +%s%3N)
           set +e
           SUCCESSFUL_DB_PATH=""
@@ -860,6 +873,34 @@ jobs:
           DURATION=$((END_TIME - START_TIME))
           echo "duration_ms=${DURATION}" >> $GITHUB_OUTPUT
           echo "[OK] Index completed in ${DURATION}ms"
+
+      - name: Collect Linux snapshot crash metadata
+        if: failure() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          {
+            echo "node_version=$(node --version)"
+            LADYBUG_CORE_VERSION=$(node -p "require('kuzu/package.json').version" 2>/dev/null || true)
+            echo "ladybug_core_version=${LADYBUG_CORE_VERSION}"
+            echo "core_pattern=$(cat /proc/sys/kernel/core_pattern)"
+            echo "core_limit=$(ulimit -c)"
+            find "${RUNNER_TEMP}" -maxdepth 1 -type f \
+              \( -name 'sync-index-*' -o -name 'core*' \) \
+              -printf '%f %s bytes\n'
+          } > "${RUNNER_TEMP}/sync-crash-metadata.txt"
+
+      - name: Upload Linux snapshot crash diagnostics
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sync-snapshot-crash-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/sync-index-${{ github.run_id }}-${{ github.run_attempt }}-*.lbug*
+            ${{ runner.temp }}/core.*
+            ${{ runner.temp }}/sync-crash-metadata.txt
+          if-no-files-found: warn
+          retention-days: 3
+          compression-level: 6
 
       - name: Export sync artifact
         id: export
