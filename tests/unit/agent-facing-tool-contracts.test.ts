@@ -20,8 +20,10 @@ import { compactBufferStatusForAgent } from "../../dist/mcp/tools/buffer.js";
 import { _policyToolTesting } from "../../dist/mcp/tools/policy.js";
 import {
   projectExclusiveCodeModeRecovery,
+  withExclusiveCodeModeRecoveryProjection,
 } from "../../dist/code-mode/action-reference-projection.js";
 import {
+  createPolicyDenial,
   ValidationError,
   errorToMcpResponse,
 } from "../../dist/mcp/errors.js";
@@ -358,5 +360,48 @@ describe("agent-facing SDL tool contracts", () => {
     assert.equal(detail.classification, "invalid_input");
     assert.equal(detail.fallbackRationale, "Correct the request before retrying.");
     assert.equal("nextCalls" in detail, false);
+  });
+
+  it("preserves only valid typed policy guidance through exclusive error projection", async () => {
+    const projectError = async (error: Error): Promise<Record<string, unknown>> => {
+      let thrown: unknown;
+      try {
+        await withExclusiveCodeModeRecoveryProjection(
+          true,
+          async () => {
+            throw error;
+          },
+          { repoId: "repo-a" },
+        );
+      } catch (caught) {
+        thrown = caught;
+      }
+      return errorToMcpResponse(thrown).error as Record<string, unknown>;
+    };
+
+    const valid = await projectError(
+      createPolicyDenial("Use a cheaper context rung.", "requestSkeleton"),
+    );
+    const invalid = await projectError(
+      Object.assign(new ValidationError("Safe validation failure."), {
+        nextBestAction: "not-a-policy-action",
+      }),
+    );
+
+    assert.deepEqual(
+      {
+        validNextBestAction: valid.nextBestAction,
+        validFallbackTools: valid.fallbackTools,
+        validFallbackRationale: valid.fallbackRationale,
+        invalidHasNextBestAction: Object.hasOwn(invalid, "nextBestAction"),
+      },
+      {
+        validNextBestAction: "requestSkeleton",
+        validFallbackTools: ["sdl.code.getSkeleton"],
+        validFallbackRationale:
+          "Use a skeleton request first to stay on the context ladder.",
+        invalidHasNextBestAction: false,
+      },
+    );
   });
 });

@@ -1,3 +1,9 @@
+import type { NextBestAction } from "../../domain/types.js";
+import {
+  type RecoveryActionDefinition,
+  resolveRecoveryActionDefinition,
+  resolveRecoveryWorkflowFunction,
+} from "../../code-mode/recovery-action-catalog.js";
 import { logger } from "../../util/logger.js";
 import type {
   RecoveryActionCall,
@@ -5,47 +11,6 @@ import type {
   RecoveryValidationContext,
   RecoveryValidationMetrics,
 } from "./types.js";
-
-interface RecoveryActionDefinition {
-  readonly action: string;
-  readonly fn: string | null;
-  readonly toolName: string | null;
-  readonly schema: {
-    safeParse(input: unknown):
-      | { success: true; data: unknown }
-      | { success: false };
-  };
-  readonly aliases?: Readonly<Record<string, string>>;
-  readonly kind: "gateway" | "internal" | "meta";
-}
-
-interface RecoveryCatalog {
-  readonly resolveActionDefinition: (
-    actionOrToolName: string,
-  ) => RecoveryActionDefinition | undefined;
-  readonly resolveWorkflowFunction: (
-    actionOrToolName: string,
-  ) => string | undefined;
-}
-
-let recoveryCatalog: RecoveryCatalog | undefined;
-
-/** Register the already-initialized public action catalog without a back-edge. */
-export function registerRecoveryCatalog(catalog: RecoveryCatalog): void {
-  recoveryCatalog = catalog;
-}
-
-function resolveActionDefinition(
-  actionOrToolName: string,
-): RecoveryActionDefinition | undefined {
-  return recoveryCatalog?.resolveActionDefinition(actionOrToolName);
-}
-
-function resolveWorkflowFunction(
-  actionOrToolName: string,
-): string | undefined {
-  return recoveryCatalog?.resolveWorkflowFunction(actionOrToolName);
-}
 
 const MAX_RECOVERY_BYTES = 32 * 1024;
 export const RECOVERY_DEFAULT_MAX_BYTES = 8192;
@@ -64,6 +29,19 @@ const PRESENTATION_ONLY_FIELDS = new Set([
   "includeDiagnostics",
   "includeTelemetry",
 ]);
+const POLICY_NEXT_BEST_ACTIONS = new Set<NextBestAction>([
+  "requestSkeleton",
+  "requestHotPath",
+  "requestRaw",
+  "refreshSlice",
+  "buildSlice",
+  "provideIdentifiersToFind",
+  "provideErrorCodeRefs",
+  "provideFrontierJustification",
+  "increaseBudget",
+  "narrowScope",
+  "retryWithSameInputs",
+]);
 const AMBIENT_REFERENCE_PATTERN = /\$\d+/;
 
 let invalidRecoveryCount = 0;
@@ -71,6 +49,37 @@ let strictValidationForTests = false;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function ownString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
+  return Object.hasOwn(value, key) && typeof value[key] === "string"
+    ? value[key]
+    : undefined;
+}
+
+function defineOwn(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
+export function isPolicyNextBestAction(
+  value: unknown,
+): value is NextBestAction {
+  return (
+    typeof value === "string" &&
+    POLICY_NEXT_BEST_ACTIONS.has(value as NextBestAction)
+  );
 }
 
 function stableValue(value: unknown): unknown {
@@ -81,11 +90,11 @@ function stableValue(value: unknown): unknown {
     return value;
   }
 
-  const sorted: Record<string, unknown> = {};
-  for (const key of Object.keys(value).sort()) {
-    sorted[key] = stableValue(value[key]);
-  }
-  return sorted;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableValue(value[key])]),
+  );
 }
 
 function stableRecord(value: Readonly<Record<string, unknown>>): Record<string, unknown> {
@@ -111,23 +120,20 @@ function extractCandidate(
   if (!isRecord(candidate)) return undefined;
 
   const action =
-    typeof candidate.action === "string"
-      ? candidate.action
-      : typeof candidate.tool === "string"
-        ? candidate.tool
-        : typeof candidate.id === "string"
-          ? candidate.id
-          : undefined;
+    ownString(candidate, "action") ??
+    ownString(candidate, "tool") ??
+    ownString(candidate, "id");
   if (!action) return undefined;
 
-  const args: Record<string, unknown> = isRecord(candidate.args)
-    ? { ...candidate.args }
-    : {};
+  const args: Record<string, unknown> =
+    Object.hasOwn(candidate, "args") && isRecord(candidate.args)
+      ? stableRecord(candidate.args)
+      : {};
   for (const [key, value] of Object.entries(candidate)) {
     if (RECOVERY_METADATA_FIELDS.has(key) || Object.hasOwn(args, key)) {
       continue;
     }
-    args[key] = value;
+    defineOwn(args, key, stableValue(value));
   }
   return { action, args };
 }
@@ -136,13 +142,13 @@ function applyAliases(
   definition: RecoveryActionDefinition,
   args: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
-  const normalized = { ...args };
+  const normalized = stableRecord(args);
   for (const [alias, canonical] of Object.entries(definition.aliases ?? {})) {
     if (
       Object.hasOwn(normalized, alias) &&
       !Object.hasOwn(normalized, canonical)
     ) {
-      normalized[canonical] = normalized[alias];
+      defineOwn(normalized, canonical, normalized[alias]);
     }
     delete normalized[alias];
   }
@@ -240,31 +246,25 @@ function continuationProblem(
   return undefined;
 }
 
-function withoutPresentationFields(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(withoutPresentationFields);
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(value).sort()) {
-    if (!PRESENTATION_ONLY_FIELDS.has(key)) {
-      result[key] = withoutPresentationFields(value[key]);
-    }
-  }
-  return result;
+function withoutPresentationFields(
+  value: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.keys(value)
+      .filter((key) => !PRESENTATION_ONLY_FIELDS.has(key))
+      .sort()
+      .map((key) => [key, stableValue(value[key])]),
+  );
 }
 
 function logicalCallSignature(
   call: RecoveryActionCall,
   ambientRepoId?: string,
 ): string | undefined {
-  const definition = resolveActionDefinition(call.action);
+  const definition = resolveRecoveryActionDefinition(call.action);
   if (!definition) return undefined;
 
-  const withRepoId = { ...call.args };
+  const withRepoId = stableRecord(call.args);
   if (withRepoId.repoId === undefined && ambientRepoId !== undefined) {
     withRepoId.repoId = ambientRepoId;
   }
@@ -316,7 +316,7 @@ export function buildValidatedRecoveryAction(
     return invalidRecovery("candidate does not name an action");
   }
 
-  const definition = resolveActionDefinition(extracted.action);
+  const definition = resolveRecoveryActionDefinition(extracted.action);
   if (!definition) {
     return invalidRecovery("candidate names an unknown action", extracted.action);
   }
@@ -386,7 +386,7 @@ export function buildValidatedRecoveryAction(
     );
   }
 
-  const fn = resolveWorkflowFunction(definition.action);
+  const fn = resolveRecoveryWorkflowFunction(definition.action);
   if (!fn) {
     return invalidRecovery(
       "target action is not active in the workflow function map",
@@ -405,7 +405,7 @@ export function buildValidatedRecoveryAction(
   }
 
   const { repoId: _repoId, ...childArgs } = parsed.data;
-  const workflowDefinition = resolveActionDefinition("workflow");
+  const workflowDefinition = resolveRecoveryActionDefinition("workflow");
   if (!workflowDefinition) {
     return invalidRecovery("workflow action is unavailable", definition.action);
   }

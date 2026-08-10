@@ -1,47 +1,12 @@
 import { z } from "zod";
 
-import { registerRecoveryCatalog } from "../mcp/response-projection/recovery.js";
-
 import { INTERNAL_TRANSFORM_NAMES, INTERNAL_TRANSFORMS } from "./transforms.js";
 import {
-  AgentFeedbackQueryRequestSchema,
-  AgentFeedbackRequestSchema,
-  AgentContextRequestSchema,
-  BufferCheckpointRequestSchema,
-  BufferPushRequestSchema,
-  BufferStatusRequestSchema,
-  CodeNeedWindowRequestSchema,
-  DeltaGetRequestSchema,
-  FileReadRequestSchema,
-  FileWriteRequestSchema,
-  GetHotPathRequestSchema,
-  GetSkeletonRequestSchema,
-  IndexRefreshRequestSchema,
-  MemoryQueryRequestSchema,
-  MemoryRemoveRequestSchema,
-  MemoryStoreRequestSchema,
-  MemorySurfaceRequestSchema,
-  PolicyGetRequestSchema,
-  PolicySetRequestSchema,
-  PRRiskAnalysisRequestSchema,
-  RepoOverviewRequestSchema,
-  RepoRegisterRequestSchema,
-  RepoStatusRequestSchema,
-  RepoUnregisterRequestSchema,
-  ResponseGetRequestSchema,
-  RuntimeExecuteRequestSchema,
-  RuntimeQueryOutputRequestSchema,
-  SearchEditRequestSchema,
-  SemanticEnrichmentRefreshRequestSchema,
-  SemanticEnrichmentStatusRequestSchema,
-  SliceBuildRequestSchema,
-  SliceRefreshRequestSchema,
-  SliceSpilloverGetRequestSchema,
-  SymbolEditRequestSchema,
-  SymbolGetCardRequestSchema,
-  SymbolSearchRequestSchema,
-  UsageStatsRequestSchema,
-} from "../mcp/tools.js";
+  RECOVERY_FN_NAME_MAP,
+  RECOVERY_GATEWAY_ACTION_DEFINITIONS,
+} from "./recovery-action-catalog.js";
+
+import { AgentContextRequestSchema } from "../mcp/tools.js";
 import { FileGatewayRequestSchema } from "../mcp/tools/file-gateway.js";
 import { InfoRequestSchema } from "../mcp/tools/info.js";
 import { RetrieveRequestSchema } from "./retrieve-schema.js";
@@ -1371,91 +1336,14 @@ export function getActionMetadata(action: string): ActionMetadata {
   return ACTION_METADATA[action] ?? EMPTY_METADATA;
 }
 
-export const FN_NAME_MAP: Readonly<Record<string, string>> = {
-  symbolSearch: "symbol.search",
-  symbolGetCard: "symbol.getCard",
-  symbolEdit: "symbol.edit",
-  sliceBuild: "slice.build",
-  sliceRefresh: "slice.refresh",
-  sliceSpilloverGet: "slice.spillover.get",
-  deltaGet: "delta.get",
-  prRiskAnalyze: "pr.risk.analyze",
-  codeNeedWindow: "code.needWindow",
-  codeSkeleton: "code.getSkeleton",
-  codeHotPath: "code.getHotPath",
-  repoRegister: "repo.register",
-  repoStatus: "repo.status",
-  repoUnregister: "repo.unregister",
-  repoOverview: "repo.overview",
-  indexRefresh: "index.refresh",
-  policyGet: "policy.get",
-  policySet: "policy.set",
-  agentFeedback: "agent.feedback",
-  agentFeedbackQuery: "agent.feedback.query",
-  bufferPush: "buffer.push",
-  bufferCheckpoint: "buffer.checkpoint",
-  bufferStatus: "buffer.status",
-  runtimeExecute: "runtime.execute",
-  runtimeQueryOutput: "runtime.queryOutput",
-  responseGet: "response.get",
-  memoryStore: "memory.store",
-  memoryQuery: "memory.query",
-  memoryRemove: "memory.remove",
-  memorySurface: "memory.surface",
-  usageStats: "usage.stats",
-  fileRead: "file.read",
-  fileWrite: "file.write",
-  searchEdit: "search.edit",
-  semanticEnrichmentRefresh: "semantic.enrichment.refresh",
-  semanticEnrichmentStatus: "semantic.enrichment.status",
-};
+export const FN_NAME_MAP: Readonly<Record<string, string>> =
+  RECOVERY_FN_NAME_MAP;
 
 export const ACTION_TO_FN: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries(
     Object.entries(FN_NAME_MAP).map(([fn, action]) => [action, fn]),
   ),
 );
-
-const GATEWAY_ACTION_SCHEMAS: ReadonlyArray<
-  readonly [action: string, schema: z.ZodType]
-> = [
-  ["symbol.search", SymbolSearchRequestSchema],
-  ["symbol.getCard", SymbolGetCardRequestSchema],
-  ["symbol.edit", SymbolEditRequestSchema],
-  ["slice.build", SliceBuildRequestSchema],
-  ["slice.refresh", SliceRefreshRequestSchema],
-  ["slice.spillover.get", SliceSpilloverGetRequestSchema],
-  ["delta.get", DeltaGetRequestSchema],
-  ["pr.risk.analyze", PRRiskAnalysisRequestSchema],
-  ["code.needWindow", CodeNeedWindowRequestSchema],
-  ["code.getSkeleton", GetSkeletonRequestSchema],
-  ["code.getHotPath", GetHotPathRequestSchema],
-  ["repo.register", RepoRegisterRequestSchema],
-  ["repo.status", RepoStatusRequestSchema],
-  ["repo.unregister", RepoUnregisterRequestSchema],
-  ["repo.overview", RepoOverviewRequestSchema],
-  ["index.refresh", IndexRefreshRequestSchema],
-  ["policy.get", PolicyGetRequestSchema],
-  ["policy.set", PolicySetRequestSchema],
-  ["usage.stats", UsageStatsRequestSchema],
-  ["file.read", FileReadRequestSchema],
-  ["file.write", FileWriteRequestSchema],
-  ["search.edit", SearchEditRequestSchema],
-  ["semantic.enrichment.refresh", SemanticEnrichmentRefreshRequestSchema],
-  ["semantic.enrichment.status", SemanticEnrichmentStatusRequestSchema],
-  ["agent.feedback", AgentFeedbackRequestSchema],
-  ["agent.feedback.query", AgentFeedbackQueryRequestSchema],
-  ["buffer.push", BufferPushRequestSchema],
-  ["buffer.checkpoint", BufferCheckpointRequestSchema],
-  ["buffer.status", BufferStatusRequestSchema],
-  ["runtime.execute", RuntimeExecuteRequestSchema],
-  ["runtime.queryOutput", RuntimeQueryOutputRequestSchema],
-  ["response.get", ResponseGetRequestSchema],
-  ["memory.store", MemoryStoreRequestSchema],
-  ["memory.query", MemoryQueryRequestSchema],
-  ["memory.remove", MemoryRemoveRequestSchema],
-  ["memory.surface", MemorySurfaceRequestSchema],
-];
 
 export const LADDER = Object.freeze([
   { action: "symbol.search", rung: 0, estTokens: 150 },
@@ -1518,15 +1406,15 @@ function createDefinition(
 
 export const GATEWAY_ACTION_DEFINITIONS: readonly ActionDefinition[] =
   Object.freeze(
-    GATEWAY_ACTION_SCHEMAS.map(([action, schema]) =>
+    RECOVERY_GATEWAY_ACTION_DEFINITIONS.map((definition) =>
       createDefinition(
-        action,
-        ACTION_TO_FN[action],
-        `sdl.${action}`,
-        schema,
-        ACTION_DESCRIPTIONS[action] ?? "",
-        EXAMPLE_REGISTRY[action],
-        ACTION_TAGS[action] ?? [],
+        definition.action,
+        definition.fn ?? definition.action,
+        definition.toolName,
+        definition.schema,
+        ACTION_DESCRIPTIONS[definition.action] ?? "",
+        EXAMPLE_REGISTRY[definition.action],
+        ACTION_TAGS[definition.action] ?? [],
         "gateway",
       ),
     ),
@@ -1585,7 +1473,7 @@ export const ACTION_DEFINITION_BY_ACTION: Readonly<
   ),
 );
 
-/** Resolve canonical, flat-tool, and workflow-fn names through the active catalog. */
+/** Resolve canonical, flat-tool, and workflow-fn names through the full catalog. */
 export function resolveRecoveryActionDefinition(
   actionOrToolName: string,
 ): ActionDefinition | undefined {
@@ -1619,11 +1507,6 @@ export function resolveRecoveryWorkflowFunction(
   }
   return undefined;
 }
-
-registerRecoveryCatalog(Object.freeze({
-  resolveActionDefinition: resolveRecoveryActionDefinition,
-  resolveWorkflowFunction: resolveRecoveryWorkflowFunction,
-}));
 
 export function formatActionDiscoveryHints(action: string): string {
   const metadata = getActionMetadata(action);

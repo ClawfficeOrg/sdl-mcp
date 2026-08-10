@@ -1,6 +1,7 @@
 import type { NextBestAction, RequiredFieldsForNext } from "./types.js";
 import {
   buildValidatedRecoveryAction,
+  isPolicyNextBestAction,
   RECOVERY_DEFAULT_MAX_BYTES,
 } from "./response-projection/recovery.js";
 import { FLAT_RECOVERY_TOOL_NAMES } from "./response-projection/registry.js";
@@ -158,6 +159,15 @@ function fallbackRationaleForNextAction(nextBestAction?: NextBestAction): string
   }
 }
 
+function ownString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
+  return Object.hasOwn(value, key) && typeof value[key] === "string"
+    ? value[key]
+    : undefined;
+}
+
 function validateGeneratedRecoveryCalls(
   nextCalls: Array<{
     action?: string;
@@ -173,15 +183,14 @@ function validateGeneratedRecoveryCalls(
 
   for (const nextCall of nextCalls) {
     const repoId =
+      Object.hasOwn(nextCall.args, "repoId") &&
       typeof nextCall.args.repoId === "string"
         ? nextCall.args.repoId
         : undefined;
     const actionName =
-      typeof nextCall.action === "string"
-        ? nextCall.action
-        : typeof nextCall.tool === "string"
-          ? nextCall.tool
-          : nextCall.id;
+      ownString(nextCall, "action") ??
+      ownString(nextCall, "tool") ??
+      ownString(nextCall, "id");
     const canonicalAction = actionName?.startsWith("sdl.")
       ? actionName.slice("sdl.".length)
       : actionName;
@@ -233,7 +242,7 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
     }
 
     const policyError = error as Partial<PolicyDenialError>;
-    if (policyError.nextBestAction) {
+    if (isPolicyNextBestAction(policyError.nextBestAction)) {
       detail.nextBestAction = policyError.nextBestAction;
     }
     if (policyError.requiredFieldsForNext) {

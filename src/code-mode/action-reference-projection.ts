@@ -5,6 +5,7 @@ import {
 import {
   buildValidatedRecoveryAction,
   _recoveryValidationTesting,
+  isPolicyNextBestAction,
   RECOVERY_DEFAULT_MAX_BYTES,
 } from "../mcp/response-projection/recovery.js";
 import {
@@ -45,6 +46,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function ownString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
+  return Object.hasOwn(value, key) && typeof value[key] === "string"
+    ? value[key]
+    : undefined;
+}
+
+function copyRecord(
+  value: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.keys(value).map((key) => [key, value[key]]));
+}
+
+function canonicalRecord(
+  value: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, value[key]]),
+  );
+}
+
+function defineOwn(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function rewriteRecoveryText(text: string): string {
   let rewritten = text;
   for (const [flatTool, gateway] of Object.entries(
@@ -62,7 +101,10 @@ function rewriteRecoveryText(text: string): string {
 function candidateArgs(
   value: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
-  const args = isRecord(value.args) ? { ...value.args } : {};
+  const args =
+    Object.hasOwn(value, "args") && isRecord(value.args)
+      ? copyRecord(value.args)
+      : {};
   for (const [key, candidateValue] of Object.entries(value)) {
     if (
       key === "action" ||
@@ -77,7 +119,7 @@ function candidateArgs(
     ) {
       continue;
     }
-    args[key] = candidateValue;
+    defineOwn(args, key, candidateValue);
   }
   return args;
 }
@@ -88,13 +130,9 @@ function continuationForCandidate(
 ): RecoveryContinuationContext | undefined {
   if (!isRecord(value)) return undefined;
   const actionName =
-    typeof value.action === "string"
-      ? value.action
-      : typeof value.tool === "string"
-        ? value.tool
-        : typeof value.id === "string"
-          ? value.id
-          : undefined;
+    ownString(value, "action") ??
+    ownString(value, "tool") ??
+    ownString(value, "id");
   if (!actionName) return undefined;
 
   const definition = resolveRecoveryActionDefinition(actionName);
@@ -122,20 +160,21 @@ function failedCallFromTrace(
     value.status === "failure" ||
     (typeof value.message === "string" &&
       (value.kind === "gateway" || value.kind === "internal"));
-  if (!failureLike || typeof value.action !== "string") {
+  const action = ownString(value, "action");
+  if (!failureLike || !action) {
     return inherited;
   }
 
   const traceArgs =
-    isRecord(value._resolvedArgs)
+    Object.hasOwn(value, "_resolvedArgs") && isRecord(value._resolvedArgs)
       ? value._resolvedArgs
-      : isRecord(value.resolvedArgs)
+      : Object.hasOwn(value, "resolvedArgs") && isRecord(value.resolvedArgs)
         ? value.resolvedArgs
-        : isRecord(value.args)
+        : Object.hasOwn(value, "args") && isRecord(value.args)
           ? value.args
           : {};
   return {
-    action: value.action,
+    action,
     args: {
       ...(fallbackRepoId ? { repoId: fallbackRepoId } : {}),
       ...traceArgs,
@@ -152,11 +191,11 @@ function projectNextAction(
   if (!isRecord(value)) return undefined;
 
   const referenceKey =
-    typeof value.tool === "string"
+    ownString(value, "tool") !== undefined
       ? "tool"
-      : typeof value.action === "string"
+      : ownString(value, "action") !== undefined
         ? "action"
-        : typeof value.id === "string"
+        : ownString(value, "id") !== undefined
           ? "id"
           : undefined;
   if (!referenceKey) return undefined;
@@ -173,11 +212,10 @@ function projectNextAction(
   });
   if (!validated.nextAction) return undefined;
 
-  return {
-    ...value,
-    [referenceKey]: validated.nextAction.action,
-    args: validated.nextAction.args,
-  };
+  const projected = copyRecord(value);
+  defineOwn(projected, referenceKey, validated.nextAction.action);
+  defineOwn(projected, "args", validated.nextAction.args);
+  return canonicalRecord(projected);
 }
 
 function projectFallbackTool(tool: unknown): unknown {
@@ -200,7 +238,7 @@ function projectRecoveryValue<T>(
   if (!isRecord(value)) return value;
 
   const projected: Record<string, unknown> =
-    value instanceof Error ? value : { ...value };
+    value instanceof Error ? value : copyRecord(value);
   const failedCall = failedCallFromTrace(
     projected,
     fallbackRepoId,
@@ -230,17 +268,32 @@ function projectRecoveryValue<T>(
     ];
   }
 
-  for (const field of ["nextAction", "nextBestAction"] as const) {
-    if (projected[field] === undefined) continue;
+  if (projected.nextAction !== undefined) {
     const nextAction = projectNextAction(
-      projected[field],
+      projected.nextAction,
       fallbackRepoId,
       failedCall,
     );
     if (nextAction === undefined) {
-      delete projected[field];
+      delete projected.nextAction;
     } else {
-      projected[field] = nextAction;
+      projected.nextAction = nextAction;
+    }
+  }
+
+  if (
+    projected.nextBestAction !== undefined &&
+    !isPolicyNextBestAction(projected.nextBestAction)
+  ) {
+    const nextBestAction = projectNextAction(
+      projected.nextBestAction,
+      fallbackRepoId,
+      failedCall,
+    );
+    if (nextBestAction === undefined) {
+      delete projected.nextBestAction;
+    } else {
+      projected.nextBestAction = nextBestAction;
     }
   }
 
@@ -320,9 +373,7 @@ export async function withExclusiveCodeModeRecoveryProjection<T>(
   request?: unknown,
 ): Promise<T> {
   const repoId =
-    isRecord(request) && typeof request.repoId === "string"
-      ? request.repoId
-      : undefined;
+    isRecord(request) ? ownString(request, "repoId") : undefined;
   try {
     const result = await call();
     return exclusive

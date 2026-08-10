@@ -498,4 +498,112 @@ describe("generated recovery validation", () => {
       /Invalid generated recovery/,
     );
   });
+
+  it("rejects inherited action discriminants and preserves nested __proto__ as data", () => {
+    const build = recoveryBuilder();
+    const inherited = Object.assign(
+      Object.create({ action: "sdl.repo.status" }) as Record<string, unknown>,
+      { args: {} },
+    );
+    const inheritedResult = build(inherited, {
+      repoId: "repo",
+      advertisedTools: ["sdl.repo.status"],
+    });
+    const protoCandidate = JSON.parse(
+      '{"action":"sdl.file.write","args":{"repoId":"repo","filePath":"fixture.json","jsonPath":"payload","jsonValue":{"__proto__":{"polluted":true},"detail":"payload"},"createBackup":false}}',
+    ) as unknown;
+    const protoResult = build(protoCandidate, {
+      repoId: "repo",
+      advertisedTools: ["sdl.file.write"],
+    });
+    const jsonValue = (
+      protoResult.nextAction?.args.jsonValue ?? {}
+    ) as Record<string, unknown>;
+
+    assert.deepEqual(
+      {
+        inheritedAction: inheritedResult.nextAction,
+        inheritedInvalidCount: inheritedResult.invalidRecoveryCount,
+        jsonValueHasOwnProto: Object.hasOwn(jsonValue, "__proto__"),
+        jsonValuePrototypeIsDefault:
+          Object.getPrototypeOf(jsonValue) === Object.prototype,
+        inheritedPollution: jsonValue.polluted,
+        ownProtoValue: jsonValue["__proto__"],
+      },
+      {
+        inheritedAction: undefined,
+        inheritedInvalidCount: 1,
+        jsonValueHasOwnProto: true,
+        jsonValuePrototypeIsDefault: true,
+        inheritedPollution: undefined,
+        ownProtoValue: { polluted: true },
+      },
+    );
+  });
+
+  it("canonicalizes projected key order and preserves nested detail semantics", () => {
+    const first = recoveryProjection.projectExclusiveCodeModeRecovery(
+      {
+        nextAction: {
+          action: "sdl.repo.status",
+          message: "Inspect repository status.",
+          args: {},
+        },
+      },
+      "repo",
+    ) as { nextAction?: RecoveryCall };
+    const second = recoveryProjection.projectExclusiveCodeModeRecovery(
+      {
+        nextAction: {
+          args: {},
+          message: "Inspect repository status.",
+          action: "sdl.repo.status",
+        },
+      },
+      "repo",
+    ) as { nextAction?: RecoveryCall };
+
+    const nestedDetail = recoveryBuilder()(
+      {
+        action: "sdl.file.write",
+        args: {
+          repoId: "repo",
+          filePath: "fixture.json",
+          jsonPath: "payload",
+          jsonValue: { detail: "after" },
+          createBackup: false,
+        },
+      },
+      {
+        repoId: "repo",
+        advertisedTools: ["sdl.file.write"],
+        failedCall: {
+          action: "sdl.file.write",
+          args: {
+            repoId: "repo",
+            filePath: "fixture.json",
+            jsonPath: "payload",
+            jsonValue: { detail: "before" },
+            createBackup: false,
+          },
+        },
+      },
+    );
+
+    assert.deepEqual(
+      {
+        keyOrderStable:
+          JSON.stringify(first.nextAction) === JSON.stringify(second.nextAction),
+        nestedDetail: (
+          nestedDetail.nextAction?.args.jsonValue as
+            | Record<string, unknown>
+            | undefined
+        )?.detail,
+      },
+      {
+        keyOrderStable: true,
+        nestedDetail: "after",
+      },
+    );
+  });
 });
