@@ -1208,7 +1208,9 @@ export class MCPServer {
             process.stderr.write(
               `[sdl-mcp] Tool ${toolName} error: ${error}\n`,
             );
-            const errorResponse = errorToMcpResponse(error);
+            const errorResponse = errorToMcpResponse(error, [
+              ...this.tools.keys(),
+            ]);
             const responseForLog = includeDiagnostics
               ? attachTimingDiagnostics(errorResponse, timer.snapshot())
               : errorResponse;
@@ -1247,7 +1249,9 @@ export class MCPServer {
           process.stderr.write(
             `[sdl-mcp] CallTool outer error: ${outerError}\n`,
           );
-          const outerErrorResponse = errorToMcpResponse(outerError);
+          const outerErrorResponse = errorToMcpResponse(outerError, [
+            ...this.tools.keys(),
+          ]);
           return {
             ...buildToolResponseEnvelope(
               outerErrorResponse,

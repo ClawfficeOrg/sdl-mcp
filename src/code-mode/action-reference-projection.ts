@@ -245,30 +245,45 @@ function projectRecoveryValue<T>(
     inheritedFailedCall,
   );
 
-  if (typeof projected.message === "string") {
+  if (
+    Object.hasOwn(projected, "message") &&
+    typeof projected.message === "string"
+  ) {
     projected.message = rewriteRecoveryText(projected.message);
   }
 
   for (const field of RECOVERY_TEXT_FIELDS) {
-    if (typeof projected[field] === "string") {
+    if (
+      Object.hasOwn(projected, field) &&
+      typeof projected[field] === "string"
+    ) {
       projected[field] = rewriteRecoveryText(projected[field]);
     }
   }
   for (const field of RECOVERY_TEXT_ARRAY_FIELDS) {
-    if (Array.isArray(projected[field])) {
+    if (
+      Object.hasOwn(projected, field) &&
+      Array.isArray(projected[field])
+    ) {
       projected[field] = projected[field].map((item) =>
         typeof item === "string" ? rewriteRecoveryText(item) : item,
       );
     }
   }
 
-  if (Array.isArray(projected.fallbackTools)) {
+  if (
+    Object.hasOwn(projected, "fallbackTools") &&
+    Array.isArray(projected.fallbackTools)
+  ) {
     projected.fallbackTools = [
       ...new Set(projected.fallbackTools.map(projectFallbackTool)),
     ];
   }
 
-  if (projected.nextAction !== undefined) {
+  if (
+    Object.hasOwn(projected, "nextAction") &&
+    projected.nextAction !== undefined
+  ) {
     const nextAction = projectNextAction(
       projected.nextAction,
       fallbackRepoId,
@@ -282,6 +297,7 @@ function projectRecoveryValue<T>(
   }
 
   if (
+    Object.hasOwn(projected, "nextBestAction") &&
     projected.nextBestAction !== undefined &&
     !isPolicyNextBestAction(projected.nextBestAction)
   ) {
@@ -297,7 +313,10 @@ function projectRecoveryValue<T>(
     }
   }
 
-  if (Array.isArray(projected.nextCalls)) {
+  if (
+    Object.hasOwn(projected, "nextCalls") &&
+    Array.isArray(projected.nextCalls)
+  ) {
     const nextCalls = projected.nextCalls
       .map((nextCall) =>
         projectNextAction(nextCall, fallbackRepoId, failedCall, true),
@@ -310,13 +329,16 @@ function projectRecoveryValue<T>(
     }
   }
 
-  if (Array.isArray(projected.results)) {
+  if (
+    Object.hasOwn(projected, "results") &&
+    Array.isArray(projected.results)
+  ) {
     projected.results = projected.results.map((result) =>
       projectRecoveryValue(result, fallbackRepoId, failedCall),
     );
   }
   for (const field of ["result", "failureTrace"] as const) {
-    if (projected[field] !== undefined) {
+    if (Object.hasOwn(projected, field) && projected[field] !== undefined) {
       projected[field] = projectRecoveryValue(
         projected[field],
         fallbackRepoId,
@@ -324,27 +346,42 @@ function projectRecoveryValue<T>(
       );
     }
   }
-  if (isRecord(projected.details)) {
+  if (
+    Object.hasOwn(projected, "details") &&
+    isRecord(projected.details)
+  ) {
     projected.details = projectRecoveryValue(
       projected.details,
       fallbackRepoId,
       failedCall,
     );
   }
-  if (Array.isArray(projected.data)) {
+  if (
+    Object.hasOwn(projected, "data") &&
+    Array.isArray(projected.data)
+  ) {
     projected.data = projected.data.map((item) =>
       projectRecoveryValue(item, fallbackRepoId, failedCall),
     );
-  } else if (isRecord(projected.data)) {
+  } else if (
+    Object.hasOwn(projected, "data") &&
+    isRecord(projected.data)
+  ) {
     projected.data = projectRecoveryValue(
       projected.data,
       fallbackRepoId,
       failedCall,
     );
   }
-  if (typeof projected.error === "string") {
+  if (
+    Object.hasOwn(projected, "error") &&
+    typeof projected.error === "string"
+  ) {
     projected.error = rewriteRecoveryText(projected.error);
-  } else if (projected.error !== undefined) {
+  } else if (
+    Object.hasOwn(projected, "error") &&
+    projected.error !== undefined
+  ) {
     projected.error = projectRecoveryValue(
       projected.error,
       fallbackRepoId,

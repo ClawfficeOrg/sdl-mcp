@@ -218,6 +218,20 @@ function validatePolicyGuidance(
   };
 }
 
+function filterAdvertisedFallbackTools(
+  fallbackTools: readonly unknown[],
+  advertisedTools: readonly string[],
+): string[] | undefined {
+  const activeTools = new Set(advertisedTools);
+  const filtered = fallbackTools.filter(
+    (tool): tool is string =>
+      typeof tool === "string" &&
+      (activeTools.has(tool) ||
+        (!tool.startsWith("sdl.") && activeTools.has(`sdl.${tool}`))),
+  );
+  return filtered.length > 0 ? [...new Set(filtered)] : undefined;
+}
+
 function validateGeneratedRecoveryCalls(
   nextCalls: Array<{
     action?: string;
@@ -225,6 +239,7 @@ function validateGeneratedRecoveryCalls(
     id?: string;
     args: Record<string, unknown>;
   }>,
+  advertisedTools: readonly string[],
 ): Array<{ action: string; args: Record<string, unknown> }> | undefined {
   const validCalls: Array<{
     action: string;
@@ -258,7 +273,7 @@ function validateGeneratedRecoveryCalls(
         : undefined;
     const validated = buildValidatedRecoveryAction(nextCall, {
       ...(repoId ? { repoId } : {}),
-      advertisedTools: FLAT_RECOVERY_TOOL_NAMES,
+      advertisedTools,
       ...(continuation ? { continuation } : {}),
     });
     if (validated.nextAction) {
@@ -272,7 +287,10 @@ function validateGeneratedRecoveryCalls(
   return validCalls.length > 0 ? validCalls : undefined;
 }
 
-export function errorToMcpResponse(error: unknown): Record<string, unknown> {
+export function errorToMcpResponse(
+  error: unknown,
+  advertisedTools: readonly string[] = FLAT_RECOVERY_TOOL_NAMES,
+): Record<string, unknown> {
   if (error instanceof Error) {
     // Only expose the raw message for known domain errors; sanitize unexpected errors.
     const safe = isDomainError(error);
@@ -323,7 +341,13 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
       Object.hasOwn(classifiedError, "fallbackTools") &&
       Array.isArray(classifiedError.fallbackTools)
     ) {
-      detail.fallbackTools = classifiedError.fallbackTools;
+      const validatedFallbackTools = filterAdvertisedFallbackTools(
+        classifiedError.fallbackTools,
+        advertisedTools,
+      );
+      if (validatedFallbackTools) {
+        detail.fallbackTools = validatedFallbackTools;
+      }
     } else if (policyGuidance) {
       detail.fallbackTools = [policyGuidance.nextCall.action];
     }
@@ -333,6 +357,7 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
     ) {
       const validatedNextCalls = validateGeneratedRecoveryCalls(
         classifiedError.nextCalls,
+        advertisedTools,
       );
       if (validatedNextCalls) {
         detail.nextCalls = validatedNextCalls;

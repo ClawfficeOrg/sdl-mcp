@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { z } from "zod";
 
 import * as recoveryProjection from "../../dist/code-mode/action-reference-projection.js";
 import { ACTION_DEFINITION_BY_ACTION } from "../../dist/code-mode/action-catalog.js";
@@ -11,6 +14,8 @@ import {
   PolicyDenialError,
   errorToMcpResponse,
 } from "../../dist/mcp/errors.js";
+import { registerTools } from "../../dist/mcp/tools/index.js";
+import { MCPServer } from "../../dist/server.js";
 import {
   dispatchAction,
   type ActionMap,
@@ -622,6 +627,92 @@ describe("generated recovery validation", () => {
 
     assert.equal(result.nextAction, undefined);
     assert.equal(result.invalidRecoveryCount, 1);
+  });
+
+  it("filters thrown recoveries through the memory-disabled registered flat surface", async () => {
+    const server = new MCPServer();
+    registerTools(server, {
+      actionAvailability: { memoryTools: false, infoTool: true },
+    });
+    server.registerTool(
+      "sdl.repo.status",
+      "Throw a recovery-bearing test error.",
+      z.object({}),
+      async () => {
+        throw Object.assign(new PolicyDenialError("denied"), {
+          fallbackTools: [
+            "sdl.memory.query",
+            "memoryQuery",
+            "sdl.repo.status",
+          ],
+          nextCalls: [
+            {
+              action: "sdl.memory.query",
+              args: { repoId: "repo", query: "target" },
+            },
+            {
+              action: "memoryQuery",
+              args: { repoId: "repo", query: "target" },
+            },
+            {
+              action: "sdl.repo.status",
+              args: { repoId: "repo" },
+            },
+          ],
+        });
+      },
+    );
+
+    const client = new Client({ name: "recovery-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      const tools = await client.listTools();
+      assert.equal(
+        tools.tools.some((tool) => tool.name === "sdl.memory.query"),
+        false,
+      );
+
+      const response = (await client.callTool({
+        name: "sdl.repo.status",
+        arguments: {},
+      })) as {
+        isError?: boolean;
+        structuredContent?: {
+          error?: {
+            fallbackTools?: string[];
+            nextCalls?: RecoveryCall[];
+          };
+        };
+      };
+      const detail = response.structuredContent?.error;
+
+      assert.equal(response.isError, true);
+      assert.deepEqual(detail?.fallbackTools, ["sdl.repo.status"]);
+      assert.deepEqual(detail?.nextCalls, [
+        {
+          action: "sdl.repo.status",
+          args: {
+            detail: "compact",
+            includeTelemetry: false,
+            repoId: "repo",
+            surfaceMemories: false,
+          },
+        },
+      ]);
+      assert.doesNotMatch(
+        JSON.stringify(detail),
+        /sdl\.memory\.query|memoryQuery/,
+      );
+    } finally {
+      await client.close();
+      await server.stop();
+    }
   });
 
   it("projects requestSkeleton guidance through the executable retrieve surface", () => {

@@ -362,6 +362,58 @@ describe("agent-facing SDL tool contracts", () => {
     assert.equal("nextCalls" in detail, false);
   });
 
+  it("does not promote inherited recovery fields through exclusive error delivery", async () => {
+    const error = new ValidationError("Safe validation failure.");
+    const inheritedPrototype = Object.assign(
+      Object.create(Object.getPrototypeOf(error)) as Record<string, unknown>,
+      {
+        fallbackTools: ["sdl.symbol.search"],
+        nextCalls: [
+          {
+            action: "sdl.symbol.search",
+            args: { repoId: "repo-a", query: "target" },
+          },
+        ],
+        fallbackRationale: "Use sdl.symbol.search to retry.",
+      },
+    );
+    Object.setPrototypeOf(error, inheritedPrototype);
+
+    let thrown: unknown;
+    try {
+      await withExclusiveCodeModeRecoveryProjection(
+        true,
+        async () => {
+          throw error;
+        },
+        { repoId: "repo-a" },
+      );
+    } catch (caught) {
+      thrown = caught;
+    }
+
+    const detail = errorToMcpResponse(thrown).error as Record<string, unknown>;
+    assert.equal(thrown, error);
+    assert.deepEqual(
+      {
+        ownsFallbackTools: Object.hasOwn(error, "fallbackTools"),
+        ownsNextCalls: Object.hasOwn(error, "nextCalls"),
+        ownsFallbackRationale: Object.hasOwn(error, "fallbackRationale"),
+        fallbackTools: detail.fallbackTools,
+        nextCalls: detail.nextCalls,
+        fallbackRationale: detail.fallbackRationale,
+      },
+      {
+        ownsFallbackTools: false,
+        ownsNextCalls: false,
+        ownsFallbackRationale: false,
+        fallbackTools: undefined,
+        nextCalls: undefined,
+        fallbackRationale: undefined,
+      },
+    );
+  });
+
   it("preserves only valid typed policy guidance through exclusive error projection", async () => {
     const projectError = async (error: Error): Promise<Record<string, unknown>> => {
       let thrown: unknown;
