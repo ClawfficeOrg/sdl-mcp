@@ -41,7 +41,7 @@ import {
   SymbolSearchRequestSchema,
   UsageStatsRequestSchema,
 } from "../mcp/tools.js";
-import { FileGatewayRequestSchema } from "../mcp/tools/file-gateway.js";
+import { FileGatewayRequestSchema } from "../mcp/tools/file-gateway-schema.js";
 import { InfoRequestSchema } from "../mcp/tools/info.js";
 
 import { INTERNAL_TRANSFORMS } from "./transforms.js";
