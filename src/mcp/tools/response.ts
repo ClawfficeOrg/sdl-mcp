@@ -58,7 +58,10 @@ export async function handleResponseGet(
       full: request.full,
       maxBytes: request.maxBytes,
       maxTokens: request.maxTokens,
-      offsetBytes: request.offsetBytes,
+      offsetBytes:
+        request.offsetBytes !== 0
+          ? request.offsetBytes
+          : request.cursor.offsetBytes,
       jsonPath: request.jsonPath,
       raw: request.raw,
       offset: request.offset,
@@ -67,13 +70,58 @@ export async function handleResponseGet(
       maxFullBytes: runtimeConfig.maxArtifactBytes,
       sessionId: context?.sessionId,
     });
-    const { savings, metadata, range, ...rest } = response;
+    const { savings, metadata, range } = response;
     const publicMetadata = toPublicResponseArtifactMetadata(metadata);
-    const { estimatedReturnedTokens: _estimatedReturnedTokens, ...publicRange } = range;
+    const {
+      estimatedReturnedTokens: _estimatedReturnedTokens,
+      ...publicRange
+    } = range;
+    const pagingApplies =
+      !response.full &&
+      (request.jsonPath === undefined || response.pagination !== undefined);
+    const nextAction = response.complete
+      ? undefined
+      : {
+          action: "response.get" as const,
+          args: {
+            repoId: request.repoId,
+            handle: request.handle,
+            view: request.view,
+            cursor: {
+              offsetBytes:
+                response.pagination === undefined
+                  ? range.offsetBytes + range.returnedBytes
+                  : 0,
+            },
+            full: false,
+            maxBytes:
+              range.returnedBytes === 0
+                ? Math.max(request.maxBytes, 4)
+                : request.maxBytes,
+            offsetBytes: 0,
+            raw: false,
+            ...(request.jsonPath !== undefined
+              ? { jsonPath: request.jsonPath }
+              : {}),
+            ...(response.pagination?.nextOffset !== undefined
+              ? {
+                  offset: response.pagination.nextOffset,
+                  limit: request.limit ?? response.pagination.limit,
+                }
+              : {}),
+          },
+        };
     const publicResponse = {
-      ...rest,
+      handle: response.handle,
+      full: response.full,
+      complete: response.complete,
+      truncated: response.truncated,
+      contentKind: response.contentKind,
+      content: response.content,
       metadata: publicMetadata,
-      range: publicRange,
+      ...(pagingApplies ? { range: publicRange } : {}),
+      ...(response.pagination ? { pagination: response.pagination } : {}),
+      ...(nextAction ? { nextAction } : {}),
     };
     recordTokenSavings({
       repoId: request.repoId,

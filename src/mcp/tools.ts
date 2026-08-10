@@ -31,7 +31,10 @@ import { z } from "zod";
 
 import type { Range } from "../domain/types.js";
 import { RUNTIME_NAMES } from "../runtime/runtimes.js";
-import { MAX_RESPONSE_EXCERPT_BYTES } from "../runtime/response-artifacts.js";
+import {
+  DEFAULT_RESPONSE_EXCERPT_BYTES,
+  MAX_RESPONSE_EXCERPT_BYTES,
+} from "../runtime/response-artifacts.js";
 import {
   SYMBOL_SEARCH_MAX_RESULTS,
   PAGE_SIZE_MAX,
@@ -1185,13 +1188,12 @@ const ResponseArtifactMetadataSchema = z.object({
   storedBytes: z.number().int(),
   sha256: z.string(),
   etag: z.string(),
-  contentKind: z.enum(["json", "text"]),
+  contentKind: z.enum(["json", "text", "binary"]),
   requiresSameSession: z.boolean().optional(),
   sessionKeyHash: z.string().optional(),
 });
 
 const ResponseArtifactPublicMetadataSchema = ResponseArtifactMetadataSchema.pick({
-  handle: true,
   repoId: true,
   toolName: true,
   originalBytes: true,
@@ -3316,6 +3318,14 @@ export const ResponseGetRequestSchema = withProjectionRequestOptions(z.object({
         "handle must contain only alphanumerics, dashes, and underscores",
     })
     .describe("Response artifact handle returned by a large-response tool"),
+  view: z
+    .literal("model")
+    .default("model")
+    .describe("Sanitized model view of the stored response projection"),
+  cursor: z
+    .object({ offsetBytes: z.number().int().min(0) })
+    .default({ offsetBytes: 0 })
+    .describe("Byte cursor for deterministic page continuation"),
   full: z
     .boolean()
     .default(false)
@@ -3325,9 +3335,9 @@ export const ResponseGetRequestSchema = withProjectionRequestOptions(z.object({
     .int()
     .min(1)
     .max(MAX_RESPONSE_EXCERPT_BYTES)
-    .optional()
+    .default(DEFAULT_RESPONSE_EXCERPT_BYTES)
     .describe(
-      "Serialized UTF-8 byte bound for JSON-path strings and arrays when full=false; atomic JSON objects and non-string scalars remain whole. full:true bypasses excerpt bounds.",
+      "Serialized UTF-8 byte bound. Handle-only retrieval defaults to 8,192 bytes; full:true bypasses excerpt bounds.",
     ),
   maxTokens: z
     .number()
@@ -3375,15 +3385,18 @@ export const ResponseGetRequestSchema = withProjectionRequestOptions(z.object({
 export const ResponseGetResponseSchema = z.object({
   handle: z.string(),
   full: z.boolean(),
+  complete: z.boolean(),
   truncated: z.boolean(),
-  contentKind: z.enum(["json", "text"]),
+  contentKind: z.enum(["json", "text", "binary"]),
   content: z.unknown(),
   metadata: ResponseArtifactPublicMetadataSchema,
-  range: z.object({
-    offsetBytes: z.number().int(),
-    returnedBytes: z.number().int(),
-    totalBytes: z.number().int(),
-  }),
+  range: z
+    .object({
+      offsetBytes: z.number().int(),
+      returnedBytes: z.number().int(),
+      totalBytes: z.number().int(),
+    })
+    .optional(),
   pagination: z
     .object({
       offset: z.number().int().min(0),
@@ -3392,6 +3405,12 @@ export const ResponseGetResponseSchema = z.object({
       returned: z.number().int().min(0),
       hasMore: z.boolean(),
       nextOffset: z.number().int().min(0).optional(),
+    })
+    .optional(),
+  nextAction: z
+    .object({
+      action: z.literal("response.get"),
+      args: ResponseGetRequestSchema,
     })
     .optional(),
 });

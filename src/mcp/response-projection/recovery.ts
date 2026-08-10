@@ -321,12 +321,27 @@ function continuationProblem(
     if (typeof args.handle !== "string" || args.handle.length === 0) {
       return "response.get requires an artifact handle";
     }
+    const view = args.view ?? "model";
+    if (view !== "model") {
+      return "response.get requires the sanitized model view";
+    }
+    const cursor = isRecord(args.cursor)
+      ? args.cursor
+      : { offsetBytes: args.offsetBytes ?? 0 };
+    if (
+      typeof cursor.offsetBytes !== "number" ||
+      !Number.isInteger(cursor.offsetBytes) ||
+      cursor.offsetBytes < 0
+    ) {
+      return "response.get requires a schema-valid byte cursor";
+    }
     if (
       typeof args.maxBytes !== "number" ||
       !Number.isInteger(args.maxBytes) ||
-      args.maxBytes <= 0
+      args.maxBytes <= 0 ||
+      args.maxBytes > 65_536
     ) {
-      return "response.get requires a positive maxBytes bound";
+      return "response.get requires a positive maxBytes bound no larger than 65,536";
     }
   }
 
@@ -480,9 +495,14 @@ export function buildValidatedRecoveryAction(
     return invalidRecovery("candidate args fail the target input schema", definition.action);
   }
 
+  const parsedArgs = { ...parsed.data };
+  if (definition.action === "response.get") {
+    if (materialized.view === undefined) delete parsedArgs.view;
+    if (materialized.cursor === undefined) delete parsedArgs.cursor;
+  }
   const activeArgs = normalizeWorkflowArgsForActiveSurface(
     definition.action,
-    parsed.data,
+    parsedArgs,
     context,
   );
   if (!activeArgs) {

@@ -554,3 +554,86 @@ describe("MCP output schemas", () => {
     });
   });
 });
+
+describe("response artifact paging schemas", () => {
+  it("defaults handle-only retrieval to the bounded model page", () => {
+    const parsed = toolSchemas.ResponseGetRequestSchema.parse({
+      repoId: "repo-a",
+      handle: "response-repo-a-1778234400000-0123456789abcdef",
+    });
+
+    assert.equal(parsed.view, "model");
+    assert.deepStrictEqual(parsed.cursor, { offsetBytes: 0 });
+    assert.equal(parsed.maxBytes, 8_192);
+  });
+
+  it("rejects raw artifact views at the public boundary", () => {
+    const parsed = toolSchemas.ResponseGetRequestSchema.safeParse({
+      repoId: "repo-a",
+      handle: "response-repo-a-1778234400000-0123456789abcdef",
+      view: "raw",
+    });
+    assert.equal(parsed.success, false);
+  });
+
+  it("validates executable incomplete-page recovery and terminal pages", () => {
+    const nextAction = {
+      action: "response.get",
+      args: {
+        repoId: "repo-a",
+        handle: "response-repo-a-1778234400000-0123456789abcdef",
+        view: "model",
+        cursor: { offsetBytes: 8_190 },
+        maxBytes: 8_192,
+      },
+    };
+    toolSchemas.ResponseGetRequestSchema.parse(nextAction.args);
+
+    const incomplete = toolSchemas.ResponseGetResponseSchema.parse({
+      handle: nextAction.args.handle,
+      full: false,
+      complete: false,
+      truncated: true,
+      contentKind: "json",
+      content: "{\"partial\":",
+      metadata: {
+        repoId: "repo-a",
+        toolName: "runtime.execute",
+        originalBytes: 9_000,
+        etag: "etag",
+        contentKind: "json",
+      },
+      range: {
+        offsetBytes: 0,
+        returnedBytes: 8_190,
+        totalBytes: 9_000,
+      },
+      nextAction,
+    });
+    assert.equal(incomplete.nextAction?.action, "response.get");
+    assert.equal(incomplete.nextAction?.args.handle, nextAction.args.handle);
+    assert.equal(incomplete.nextAction?.args.view, "model");
+    assert.deepStrictEqual(incomplete.nextAction?.args.cursor, {
+      offsetBytes: 8_190,
+    });
+    assert.equal(incomplete.nextAction?.args.maxBytes, 8_192);
+
+    const terminal = toolSchemas.ResponseGetResponseSchema.parse({
+      handle: nextAction.args.handle,
+      full: true,
+      complete: true,
+      truncated: false,
+      contentKind: "json",
+      content: { status: "success" },
+      metadata: {
+        repoId: "repo-a",
+        toolName: "runtime.execute",
+        originalBytes: 20,
+        etag: "etag",
+        contentKind: "json",
+      },
+    });
+    assert.equal(terminal.nextAction, undefined);
+    assert.equal(terminal.range, undefined);
+  });
+});

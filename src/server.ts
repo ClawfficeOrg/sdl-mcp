@@ -37,6 +37,8 @@ import type {
   GatewayConfig,
   ToolNameFormat,
 } from "./config/types.js";
+import { RuntimeConfigSchema } from "./config/types.js";
+import { loadConfig } from "./config/loadConfig.js";
 import {
   extractReferencedSymbolIds,
   normalizeToolArguments,
@@ -67,6 +69,16 @@ import type {
   ProjectionStats,
 } from "./mcp/response-projection/types.js";
 import { logger } from "./util/logger.js";
+import { estimateTokens } from "./util/tokenize.js";
+import {
+  maybeStoreLargeResponse,
+  withCentralizedResponseArtifactHandling,
+} from "./runtime/response-artifacts.js";
+import {
+  ARTIFACT_PAGE_BYTES,
+  getOutputBudgetTokenLimit,
+  MODEL_VISIBLE_HARD_LIMIT_TOKENS,
+} from "./mcp/response-projection/budgets.js";
 import {
   attachTimingDiagnostics,
   hasTimingDiagnostics,
@@ -690,6 +702,151 @@ export function buildToolResponseEnvelope(
   }
 }
 
+const PAGE_NATIVE_RESPONSE_MODE_TOOLS = new Set([
+  "sdl.response.get",
+  "sdl.runtime.queryOutput",
+  "sdl.code.needWindow",
+  "sdl.file.read",
+  "sdl.search.edit",
+  "sdl.file",
+]);
+
+function ownsPageNativeResponseMode(toolName: string): boolean {
+  // These tools own byte, line, or plan continuations; the generic artifact
+  // boundary must not replace their executable paging semantics.
+  return PAGE_NATIVE_RESPONSE_MODE_TOOLS.has(toolName);
+}
+
+function combinedEnvelopeTokens(envelope: ToolResponseEnvelope): number {
+  const visibleText = envelope.content.map((block) => block.text).join("\n");
+  const structuredText = JSON.stringify(envelope.structuredContent ?? {});
+  return estimateTokens(visibleText) + estimateTokens(structuredText);
+}
+
+function responseArtifactEnvelope(
+  envelope: ToolResponseEnvelope,
+  artifact: object,
+): ToolResponseEnvelope {
+  const artifactEnvelope: ToolResponseEnvelope = {
+    content: [
+      {
+        type: "text",
+        text: "Response stored as an artifact. Continue with response.get.",
+      },
+    ],
+    structuredContent: { ...artifact },
+  };
+  return envelope.projectionStats
+    ? attachProjectionStats(
+        artifactEnvelope,
+        Object.freeze({
+          ...envelope.projectionStats,
+          responseHandled: true,
+          recoveryEmitted: true,
+        }),
+      )
+    : artifactEnvelope;
+}
+
+async function enforceProjectedResponseMode(
+  envelope: ToolResponseEnvelope,
+  toolName: string,
+  toolArgs: Readonly<Record<string, unknown>>,
+  profile: ProjectionProfile,
+  sessionId?: string,
+): Promise<ToolResponseEnvelope> {
+  const requestedMode = toolArgs.responseMode;
+  if (
+    requestedMode !== "inline" &&
+    requestedMode !== "auto" &&
+    requestedMode !== "handle"
+  ) {
+    return envelope;
+  }
+  if (
+    requestedMode !== "inline" &&
+    ownsPageNativeResponseMode(toolName)
+  ) {
+    return envelope;
+  }
+
+  const deliveredTokens = combinedEnvelopeTokens(envelope);
+  const exceedsInlineBudget =
+    deliveredTokens > MODEL_VISIBLE_HARD_LIMIT_TOKENS;
+  const shouldStore =
+    requestedMode === "handle" ||
+    (requestedMode === "auto" &&
+      deliveredTokens > getOutputBudgetTokenLimit(profile.budgetClass));
+  if (!shouldStore && !(requestedMode === "inline" && exceedsInlineBudget)) {
+    return envelope;
+  }
+
+  const repoId = toolArgs.repoId;
+  if (
+    typeof repoId !== "string" ||
+    repoId.length === 0 ||
+    !envelope.structuredContent
+  ) {
+    return buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true);
+  }
+
+  try {
+    const runtimeConfig = RuntimeConfigSchema.parse(loadConfig().runtime ?? {});
+    const stored = await maybeStoreLargeResponse({
+      repoId,
+      toolName,
+      payload: envelope.structuredContent,
+      responseMode: "handle",
+      contentKind: "json",
+      artifactBaseDir: runtimeConfig.artifactBaseDir,
+      maxArtifactBytes: runtimeConfig.maxArtifactBytes,
+      sessionId,
+      requiresSameSession: sessionId !== undefined,
+    });
+    if (stored.responseMode !== "handle") {
+      return buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true);
+    }
+
+    if (shouldStore) {
+      return responseArtifactEnvelope(
+        envelope,
+        stored.payload,
+      );
+    }
+
+    const nextAction = {
+      action: "response.get" as const,
+      args: {
+        repoId,
+        handle: stored.payload.handle,
+        view: "model" as const,
+        cursor: { offsetBytes: 0 },
+        maxBytes: ARTIFACT_PAGE_BYTES,
+      },
+    };
+    const structuredContent = {
+      status: "error",
+      error: {
+        code: "INLINE_RESPONSE_TOO_LARGE",
+        message: "Inline response exceeds the 8,000-token delivery limit.",
+      },
+      nextAction,
+    };
+    return {
+      content: [
+        {
+          type: "text",
+          text: "Inline response too large. Retrieve the sanitized response artifact with response.get.",
+        },
+      ],
+      structuredContent,
+      isError: true,
+    };
+  } catch {
+    return buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true);
+  }
+}
+
 export interface MCPServerOptions {
   /** OpenAI-compatible clients reject dots in tool names; keep canonical by default. */
   toolNameFormat?: ToolNameFormat;
@@ -937,6 +1094,11 @@ export class MCPServer {
             tool.inputSchema,
             parseResult.data,
           );
+          const centralizesHandlerArtifacts =
+            isRecordValue(parsedArgs) &&
+            (parsedArgs.responseMode === "auto" ||
+              parsedArgs.responseMode === "handle") &&
+            !ownsPageNativeResponseMode(toolName);
           try {
             if (
               !writeReady &&
@@ -985,7 +1147,11 @@ export class MCPServer {
                   );
                 }
               }
-              return tool.handler(parsedArgs, toolContext);
+              return centralizesHandlerArtifacts
+                ? withCentralizedResponseArtifactHandling(() =>
+                    tool.handler(parsedArgs, toolContext),
+                  )
+                : tool.handler(parsedArgs, toolContext);
             };
 
             // Pass the parsed (validated + coerced) data to the handler
@@ -1176,7 +1342,7 @@ export class MCPServer {
             const responseForProjection = includeDiagnostics
               ? attachTimingDiagnostics(canonicalResult, timer.snapshot())
               : canonicalResult;
-            const responseEnvelope = buildToolResponseEnvelope(
+            const projectedResponseEnvelope = buildToolResponseEnvelope(
               responseForProjection,
               userDisplay,
               "",
@@ -1187,6 +1353,13 @@ export class MCPServer {
               tool.projectionProfile,
               projectionOptions,
               this.responseProjectionBoundaryOverrides,
+            );
+            const responseEnvelope = await enforceProjectedResponseMode(
+              projectedResponseEnvelope,
+              toolName,
+              normalizedArgs as Record<string, unknown>,
+              tool.projectionProfile,
+              toolContext.sessionId,
             );
 
             const toolCallEvent = {

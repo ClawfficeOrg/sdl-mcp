@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "async_hooks";
 import { randomBytes } from "crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises";
 import { join } from "path";
@@ -27,13 +28,25 @@ const gunzipAsync = promisify(gunzip) as (
   options?: { maxOutputLength?: number },
 ) => Promise<Buffer>;
 
+const centralizedResponseArtifactHandling = new AsyncLocalStorage<boolean>();
+
+/**
+ * Keep caller-visible responseMode intact while the server takes ownership of
+ * generic artifact creation after model projection.
+ */
+export function withCentralizedResponseArtifactHandling<T>(
+  callback: () => Promise<T>,
+): Promise<T> {
+  return centralizedResponseArtifactHandling.run(true, callback);
+}
+
 export type ResponseMode = "inline" | "auto" | "handle";
-export type ResponseContentKind = "json" | "text";
+export type ResponseContentKind = "json" | "text" | "binary";
 
 export const DEFAULT_RESPONSE_ARTIFACT_TTL_HOURS = 24;
 export const DEFAULT_RESPONSE_ARTIFACT_THRESHOLD_TOKENS = 8_000;
 export const DEFAULT_RESPONSE_EXCERPT_BYTES = 8 * 1024;
-export const MAX_RESPONSE_EXCERPT_BYTES = 1024 * 1024;
+export const MAX_RESPONSE_EXCERPT_BYTES = 65_536;
 export const DEFAULT_RESPONSE_MAX_ARTIFACT_BYTES =
   RUNTIME_DEFAULT_MAX_ARTIFACT_BYTES;
 export const DEFAULT_RESPONSE_MAX_ARTIFACTS_PER_REPO =
@@ -83,7 +96,6 @@ export interface ResponseArtifactMetadata {
 }
 
 export interface ResponseArtifactPublicMetadata {
-  handle: string;
   repoId: string;
   toolName: string;
   originalBytes: number;
@@ -172,6 +184,7 @@ export interface ResponseArtifactPagination {
 export interface ResponseArtifactReadResult {
   handle: string;
   full: boolean;
+  complete: boolean;
   truncated: boolean;
   contentKind: ResponseContentKind;
   content: unknown;
@@ -318,8 +331,20 @@ function hashSessionScope(sessionId: string | undefined): string {
 function serializePayload(
   payload: unknown,
   requestedKind?: ResponseContentKind,
-): { content: string; contentKind: ResponseContentKind } {
-  const contentKind = requestedKind ?? (typeof payload === "string" ? "text" : "json");
+): { content: string | Buffer; contentKind: ResponseContentKind } {
+  const contentKind =
+    requestedKind ??
+    (Buffer.isBuffer(payload)
+      ? "binary"
+      : typeof payload === "string"
+        ? "text"
+        : "json");
+  if (contentKind === "binary") {
+    if (!Buffer.isBuffer(payload) && !(payload instanceof Uint8Array)) {
+      throw new ValidationError("Binary response artifacts require Buffer or Uint8Array payloads.");
+    }
+    return { content: Buffer.from(payload), contentKind };
+  }
   if (contentKind === "text") {
     return {
       content:
@@ -407,7 +432,6 @@ export function toPublicResponseArtifactMetadata(
   metadata: ResponseArtifactMetadata,
 ): ResponseArtifactPublicMetadata {
   return {
-    handle: metadata.handle,
     repoId: metadata.repoId,
     toolName: metadata.toolName,
     originalBytes: metadata.originalBytes,
@@ -429,9 +453,15 @@ function createReference(metadata: ResponseArtifactMetadata): ResponseArtifactRe
 export async function maybeStoreLargeResponse<T>(
   opts: MaybeStoreLargeResponseOptions<T>,
 ): Promise<MaybeStoreLargeResponseResult<T>> {
-  const responseMode = opts.responseMode ?? "inline";
+  const requestedMode = opts.responseMode ?? "inline";
+  const responseMode =
+    centralizedResponseArtifactHandling.getStore() === true
+      ? "inline"
+      : requestedMode;
   const { content, contentKind } = serializePayload(opts.payload, opts.contentKind);
-  const originalBytes = Buffer.byteLength(content, "utf-8");
+  const originalBytes = Buffer.isBuffer(content)
+    ? content.length
+    : Buffer.byteLength(content, "utf-8");
   const estimatedOriginalTokens = estimateTokensFromBytes(originalBytes);
   const threshold = opts.threshold ?? DEFAULT_RESPONSE_ARTIFACT_THRESHOLD_TOKENS;
   const maxArtifactBytes =
@@ -466,13 +496,17 @@ export async function maybeStoreLargeResponse<T>(
       `Response artifact exceeds maxArtifactBytes (${originalBytes} > ${maxArtifactBytes})`,
     );
   }
-  const compressed = await gzipAsync(Buffer.from(content, "utf-8"));
+  const compressed = await gzipAsync(
+    Buffer.isBuffer(content) ? content : Buffer.from(content, "utf-8"),
+  );
   if (compressed.length > maxArtifactBytes) {
     throw new Error(
       `Compressed response artifact exceeds maxArtifactBytes (${compressed.length} > ${maxArtifactBytes})`,
     );
   }
-  const sha256 = hashContent(content);
+  const sha256 = hashContent(
+    Buffer.isBuffer(content) ? content.toString("base64") : content,
+  );
   const ttlHours = opts.artifactTtlHours ?? DEFAULT_RESPONSE_ARTIFACT_TTL_HOURS;
   const metadata: ResponseArtifactMetadata = {
     id: handle,
@@ -573,7 +607,9 @@ function isResponseArtifactMetadata(
     isNonNegativeSafeInteger(metadata.storedBytes) &&
     typeof metadata.sha256 === "string" &&
     typeof metadata.etag === "string" &&
-    (metadata.contentKind === "json" || metadata.contentKind === "text") &&
+    (metadata.contentKind === "json" ||
+      metadata.contentKind === "text" ||
+      metadata.contentKind === "binary") &&
     (metadata.requiresSameSession === undefined ||
       typeof metadata.requiresSameSession === "boolean") &&
     (metadata.sessionKeyHash === undefined ||
@@ -745,6 +781,30 @@ async function enforceResponseArtifactQuota(
   }
 }
 
+function isUtf8ContinuationByte(byte: number | undefined): boolean {
+  return byte !== undefined && (byte & 0xc0) === 0x80;
+}
+
+function nextUtf8Boundary(content: Buffer, requestedOffset: number): number {
+  let offset = Math.min(Math.max(0, requestedOffset), content.length);
+  while (offset < content.length && isUtf8ContinuationByte(content[offset])) {
+    offset += 1;
+  }
+  return offset;
+}
+
+function sliceUtf8Page(content: Buffer, offset: number, maxBytes: number): Buffer {
+  let end = Math.min(offset + maxBytes, content.length);
+  while (
+    end > offset &&
+    end < content.length &&
+    isUtf8ContinuationByte(content[end])
+  ) {
+    end -= 1;
+  }
+  return content.subarray(offset, end);
+}
+
 export async function readResponseArtifact(
   opts: ResponseArtifactReadOptions,
 ): Promise<ResponseArtifactReadResult> {
@@ -789,8 +849,17 @@ export async function readResponseArtifact(
     );
   }
 
-  // Validate the retrieval contract before reading or slicing the stored body.
-  validateResponseArtifactReadMode(metadata, opts);
+  // Legacy structural selectors keep their validation; handle-only retrieval
+  // intentionally falls through to the bounded byte-page path.
+  if (
+    opts.full === true ||
+    opts.jsonPath !== undefined ||
+    opts.raw === true ||
+    opts.offset !== undefined ||
+    opts.limit !== undefined
+  ) {
+    validateResponseArtifactReadMode(metadata, opts);
+  }
 
   let compressed: Buffer;
   try {
@@ -922,6 +991,7 @@ export async function readResponseArtifact(
     return {
       handle: opts.handle,
       full: false,
+      complete: !(pagination?.hasMore ?? false),
       truncated: pagination?.hasMore ?? false,
       contentKind: metadata.contentKind,
       content,
@@ -937,10 +1007,14 @@ export async function readResponseArtifact(
     };
   }
 
-  const offsetBytes = Math.min(
+  const requestedOffsetBytes = Math.min(
     Math.max(0, opts.offsetBytes ?? 0),
     decompressed.length,
   );
+  const offsetBytes =
+    metadata.contentKind === "binary"
+      ? requestedOffsetBytes
+      : nextUtf8Boundary(decompressed, requestedOffsetBytes);
   const tokenBoundBytes =
     opts.maxTokens === undefined ? undefined : Math.max(1, opts.maxTokens * 4);
   const requestedMaxBytes = opts.maxBytes ?? tokenBoundBytes ?? DEFAULT_RESPONSE_EXCERPT_BYTES;
@@ -952,7 +1026,9 @@ export async function readResponseArtifact(
   const full = opts.full ?? false;
   let returnedBuffer = full
     ? decompressed
-    : decompressed.subarray(offsetBytes, offsetBytes + boundedMaxBytes);
+    : metadata.contentKind === "binary"
+      ? decompressed.subarray(offsetBytes, offsetBytes + boundedMaxBytes)
+      : sliceUtf8Page(decompressed, offsetBytes, boundedMaxBytes);
   if (!full && opts.maxTokens !== undefined) {
     // The 4-bytes-per-token pre-slice bound under-counts dense JSON; shrink
     // the excerpt until the content-based estimate fits the requested cap.
@@ -968,17 +1044,23 @@ export async function readResponseArtifact(
       estimated = estimateTokens(returnedBuffer.toString("utf-8"));
     }
   }
-  const returnedText = returnedBuffer.toString("utf-8");
-  const truncated = !full && offsetBytes + returnedBuffer.length < decompressed.length;
+  const returnedBytes = returnedBuffer.length;
+  const returnedText =
+    metadata.contentKind === "binary"
+      ? undefined
+      : returnedBuffer.toString("utf-8");
+  const truncated = !full && offsetBytes + returnedBytes < decompressed.length;
   const content =
-    full && metadata.contentKind === "json"
-      ? (JSON.parse(returnedText) as unknown)
-      : returnedText;
-  const returnedBytes = Buffer.byteLength(returnedText, "utf-8");
+    metadata.contentKind === "binary"
+      ? { encoding: "base64", data: returnedBuffer.toString("base64") }
+      : full && metadata.contentKind === "json"
+        ? (JSON.parse(returnedText ?? "") as unknown)
+        : returnedText;
 
   return {
     handle: opts.handle,
     full,
+    complete: !truncated,
     truncated,
     contentKind: metadata.contentKind,
     content,

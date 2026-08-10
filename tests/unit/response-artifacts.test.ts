@@ -128,12 +128,11 @@ describe("response artifact storage", () => {
       "metadata",
       "responseMode",
     ]);
-    assert.equal(result.payload.metadata.handle, result.payload.handle);
+    assert.equal("handle" in result.payload.metadata, false);
     assert.equal(result.payload.metadata.etag, result.metadata.etag);
     assert.deepStrictEqual(Object.keys(result.payload.metadata).sort(), [
       "contentKind",
       "etag",
-      "handle",
       "originalBytes",
       "repoId",
       "toolName",
@@ -418,7 +417,7 @@ describe("response artifact storage", () => {
     );
   });
 
-  it("requires an explicit retrieval selector before slicing JSON artifacts", async () => {
+  it("defaults handle-only JSON retrieval to a bounded first page", async () => {
     const baseDir = makeTempDir();
     const configPath = join(baseDir, "sdl.config.json");
     writeFileSync(
@@ -429,7 +428,7 @@ describe("response artifact storage", () => {
     invalidateConfigCache();
     const payload = {
       evidence: [{ symbolId: "symbol:alpha", rung: "card" }],
-      padding: "x".repeat(2000),
+      padding: "x".repeat(20_000),
     };
 
     const stored = await maybeStoreLargeResponse({
@@ -442,59 +441,16 @@ describe("response artifact storage", () => {
     });
     assert.strictEqual(stored.responseMode, "handle");
 
-    await assert.rejects(
-      () =>
-        handleResponseGet({
-          repoId: "repo-a",
-          handle: stored.payload.handle,
-          maxBytes: 20,
-        }),
-      (error: unknown) => {
-        assert.ok(error instanceof ValidationError);
-        assert.match(error.message, /full:true/);
-        assert.match(error.message, /jsonPath/);
-        assert.match(error.message, /raw:true/);
-        assert.match(error.message, /syntactically incomplete JSON/);
-        const recovery = error as ValidationError & {
-          fallbackTools?: string[];
-          nextCalls?: Array<{ action: string; args: Record<string, unknown> }>;
-        };
-        assert.deepStrictEqual(recovery.fallbackTools, ["response.get"]);
-        assert.deepStrictEqual(recovery.nextCalls, [
-          {
-            action: "response.get",
-            args: {
-              repoId: "repo-a",
-              handle: stored.payload.handle,
-              jsonPath: "evidence",
-              offset: 0,
-              limit: 20,
-            },
-          },
-          {
-            action: "response.get",
-            args: {
-              repoId: "repo-a",
-              handle: stored.payload.handle,
-              raw: true,
-              maxBytes: 20,
-            },
-          },
-        ]);
-        return true;
-      },
-    );
-
-    const raw = await readResponseArtifact({
+    const page = await handleResponseGet({
       repoId: "repo-a",
       handle: stored.payload.handle,
-      artifactBaseDir: baseDir,
-      maxBytes: 20,
-      raw: true,
     });
-
-    assert.equal(typeof raw.content, "string");
-    assert.equal(raw.truncated, true);
+    ResponseGetResponseSchema.parse(page);
+    assert.equal(page.complete, false);
+    assert.equal(page.truncated, true);
+    assert.equal(typeof page.content, "string");
+    assert.ok(page.nextAction);
+    ResponseGetRequestSchema.parse(page.nextAction.args);
   });
 
   it("rejects incompatible JSON retrieval option combinations", async () => {
@@ -622,7 +578,7 @@ describe("response artifact storage", () => {
     assert.ok(internalUsage.sdlTokens > 0);
     assert.ok(internalUsage.rawEquivalent > internalUsage.sdlTokens);
     assert.equal("estimatedOriginalTokens" in response.metadata, false);
-    assert.equal("estimatedReturnedTokens" in response.range, false);
+    assert.equal(response.range, undefined);
     assert.equal("_tokenUsage" in JSON.parse(serialized), false);
     assert.equal("savings" in response, false);
     assert.equal(serialized.includes("estimatedOriginalTokens"), false);
@@ -1355,5 +1311,73 @@ describe("response artifact maxTokens enforcement", () => {
         return true;
       },
     );
+  });
+});
+
+
+describe("response artifact bounded byte paging", () => {
+  it("uses UTF-8-safe byte boundaries and preserves every byte", async () => {
+    const baseDir = makeTempDir();
+    const stored = await maybeStoreLargeResponse({
+      repoId: "repo-a",
+      toolName: "test.tool",
+      payload: "a😀b",
+      responseMode: "handle",
+      contentKind: "text",
+      artifactBaseDir: baseDir,
+    });
+    assert.equal(stored.responseMode, "handle");
+    if (stored.responseMode !== "handle") assert.fail("expected handle");
+
+    const first = await readResponseArtifact({
+      repoId: "repo-a",
+      handle: stored.payload.handle,
+      maxBytes: 3,
+      artifactBaseDir: baseDir,
+    });
+    assert.equal(first.content, "a");
+    assert.equal(first.range.returnedBytes, 1);
+
+    const second = await readResponseArtifact({
+      repoId: "repo-a",
+      handle: stored.payload.handle,
+      offsetBytes: first.range.offsetBytes + first.range.returnedBytes,
+      maxBytes: 4,
+      artifactBaseDir: baseDir,
+    });
+    assert.equal(second.content, "😀");
+
+    const third = await readResponseArtifact({
+      repoId: "repo-a",
+      handle: stored.payload.handle,
+      offsetBytes: second.range.offsetBytes + second.range.returnedBytes,
+      maxBytes: 4,
+      artifactBaseDir: baseDir,
+    });
+    assert.equal(third.content, "b");
+    assert.equal(third.truncated, false);
+  });
+
+  it("enforces the 65,536-byte public page hard maximum", async () => {
+    const baseDir = makeTempDir();
+    const stored = await maybeStoreLargeResponse({
+      repoId: "repo-a",
+      toolName: "test.tool",
+      payload: "x".repeat(70_000),
+      responseMode: "handle",
+      contentKind: "text",
+      artifactBaseDir: baseDir,
+    });
+    assert.equal(stored.responseMode, "handle");
+    if (stored.responseMode !== "handle") assert.fail("expected handle");
+
+    const page = await readResponseArtifact({
+      repoId: "repo-a",
+      handle: stored.payload.handle,
+      maxBytes: 100_000,
+      artifactBaseDir: baseDir,
+    });
+    assert.equal(page.range.returnedBytes, 65_536);
+    assert.equal(page.truncated, true);
   });
 });
