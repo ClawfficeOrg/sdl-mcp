@@ -593,13 +593,48 @@ function projectionIsError(value: unknown, toolName: string): boolean {
     );
 }
 
+function workflowProjectionSummary(
+  value: unknown,
+  toolName: string,
+  footerText: string,
+): string | undefined {
+  if (toolName !== "sdl.workflow" || !isRecordValue(value)) return undefined;
+  const results = Array.isArray(value.results) ? value.results : [];
+  let ok = 0;
+  let error = 0;
+  let skipped = 0;
+  let budgetExceeded = 0;
+  for (const result of results) {
+    const status = isRecordValue(result) && typeof result.status === "string"
+      ? result.status
+      : "ok";
+    if (status === "ok") ok += 1;
+    else if (status === "skipped") skipped += 1;
+    else if (status === "budget_exceeded") budgetExceeded += 1;
+    else error += 1;
+  }
+  const summary = [
+    `workflow -> total=${results.length}`,
+    `ok=${ok}`,
+    `error=${error}`,
+    `skipped=${skipped}`,
+    `budgetExceeded=${budgetExceeded}`,
+    `truncated=${value.truncated === true}`,
+  ].join(" ");
+  return footerText ? `${summary}\n${footerText}` : summary;
+}
 function envelopeFromProjection(
   projection: ModelProjection,
   includeStructuredContent: boolean,
   toolName: string,
   visibleFooterText: string,
 ): ToolResponseEnvelope {
-  const content = [{ type: "text" as const, text: projection.summary }];
+  const summary = workflowProjectionSummary(
+    projection.value,
+    toolName,
+    visibleFooterText,
+  ) ?? projection.summary;
+  const content = [{ type: "text" as const, text: summary }];
   const isError = projectionIsError(projection.value, toolName);
   if (!includeStructuredContent) {
     return {

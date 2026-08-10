@@ -13,6 +13,7 @@ import {
 } from "../../dist/code-mode/index.js";
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "../../dist/mcp/server-instructions.js";
 import { resolveRefs } from "../../dist/code-mode/ref-resolver.js";
+import { WorkflowRequestSchema } from "../../dist/code-mode/types.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 
 const originalSdlConfig = process.env.SDL_CONFIG;
@@ -160,5 +161,16 @@ describe("code-mode regressions", () => {
 
     assert.equal(resolved.symbolId, undefined);
     assert.equal(resolved.fallback, "sym-0");
+  });
+  it("preserves child projection controls outside handler args", () => {
+    const parsed = WorkflowRequestSchema.parse({
+      repoId: "repo",
+      detail: "compact",
+      steps: [{ fn: "repoStatus", args: {}, detail: "full", includeDiagnostics: true }],
+    });
+
+    assert.equal(parsed.steps[0].detail, "full");
+    assert.equal(parsed.steps[0].includeDiagnostics, true);
+    assert.deepEqual(parsed.steps[0].args, {});
   });
 });

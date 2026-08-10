@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
+import { WorkflowRequestSchema } from "../../dist/code-mode/types.js";
 import type { ParsedWorkflowRequest } from "../../dist/code-mode/workflow-parser.js";
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import { ContextEngineV2 } from "../../dist/context/engine.js";
@@ -196,23 +197,23 @@ describe("sdl.context response artifacts", () => {
     assert.deepEqual(rawFailure.results[0].failureTrace?.details?.details, [
       "Available top-level keys: edges, evidence, nextActions, omitted, retrieval, status, taskType",
     ]);
-    const projectedFailure = projectExclusiveCodeModeRecovery(
-      projectToolResultForModelContent(
-        "sdl.workflow",
+    const projectedFailure = projectToolResultForModelContent(
+      "sdl.workflow",
+      projectExclusiveCodeModeRecovery(
         rawFailure as unknown as Record<string, unknown>,
-        {},
-      ),
-      "repo-a",
-    ) as { results: Array<{ failureTrace?: { details?: Record<string, unknown> } }> };
-    const recovery = projectedFailure.results[0].failureTrace?.details;
-    assert.deepEqual(recovery?.details, [
-      "Available top-level keys: edges, evidence, nextActions, omitted, retrieval, status, taskType",
-    ]);
-    assert.equal(
-      recovery?.fallbackRationale,
-      "Retry response.get against the same artifact handle with an available JSON path.",
-    );
-    assert.deepEqual(recovery?.nextCalls, [{
+        "repo-a",
+      ) as Record<string, unknown>,
+      { repoId: "repo-a", steps: invalidRequest.steps },
+    ) as {
+      results: Array<{
+        failureTrace?: unknown;
+        nextAction?: { action: string; args: unknown };
+      }>;
+    };
+    const projectedStep = projectedFailure.results[0];
+    const nextAction = projectedStep.nextAction;
+    assert.equal(projectedStep.failureTrace, undefined);
+    assert.deepEqual(nextAction, {
       action: "sdl.workflow",
       args: {
         includeTelemetry: false,
@@ -232,7 +233,12 @@ describe("sdl.context response artifacts", () => {
           fn: "responseGet",
         }],
       },
-    }]);
+    });
+    assert.equal(WorkflowRequestSchema.safeParse(nextAction?.args).success, true);
+    assert.equal(
+      (JSON.stringify(projectedStep).match(/"nextAction"/g) ?? []).length,
+      1,
+    );
 
     const retryRequest: ParsedWorkflowRequest = {
       ...invalidRequest,

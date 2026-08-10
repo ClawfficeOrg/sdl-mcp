@@ -19,7 +19,10 @@ import {
   INTERNAL_TRANSFORMS,
   TransformError,
 } from "./transforms.js";
-import { truncateStepResult } from "./workflow-truncation.js";
+import {
+  sanitizeWorkflowStepValue,
+  truncateStepResult,
+} from "./workflow-truncation.js";
 import {
   type WorkflowResponse,
   type WorkflowFailureTrace,
@@ -49,28 +52,54 @@ import {
  */
 function applyStepTruncation(
   stepResult: WorkflowStepResult,
-  step: { maxResponseTokens?: number },
+  step: ParsedWorkflowStep,
   defaultMaxResponseTokens: number | undefined,
-  result: unknown = stepResult.result,
+  projectStepResult?: WorkflowStepResultProjector,
+  resolvedArgs?: Record<string, unknown>,
 ): void {
-  stepResult.result = result;
   const maxResponseTokens = step.maxResponseTokens ?? defaultMaxResponseTokens;
   if (
-    maxResponseTokens != null &&
-    stepResult.status === "ok" &&
-    stepResult.result != null
+    maxResponseTokens == null
+    || stepResult.status !== "ok"
+    || stepResult.result == null
   ) {
-    const truncation = truncateStepResult(result, maxResponseTokens);
-    if (truncation.handle) {
-      stepResult.result = truncation.truncated;
-      stepResult.tokens = truncation.keptTokens;
-      stepResult.truncatedResponse = {
-        originalTokens: truncation.originalTokens,
-        keptTokens: truncation.keptTokens,
-        continuationHandle: truncation.handle,
-      };
-    }
+    return;
   }
+
+  // Direct executor callers may predate parser-supplied projection options.
+  const projectionOptions: EffectiveProjectionRequestOptions =
+    step.projectionOptions ?? {
+      detail: "compact",
+      includeDiagnostics: false,
+    };
+
+  // Projection is used only for the continuation artifact; the canonical
+  // result remains unchanged for subsequent $N references.
+  const projectedContinuationResult = projectStepResult && resolvedArgs
+    ? projectStepResult(
+        step.fn,
+        stepResult.result,
+        resolvedArgs,
+        projectionOptions,
+      )
+    : stepResult.result;
+  const continuationResult = sanitizeWorkflowStepValue(
+    projectedContinuationResult,
+    projectionOptions.includeDiagnostics,
+    resolvedArgs?.includeTelemetry === true,
+  );
+  const truncation = truncateStepResult(
+    continuationResult,
+    maxResponseTokens,
+  );
+  if (!truncation.handle) return;
+  stepResult.tokens = truncation.keptTokens;
+  stepResult.truncatedResponse = {
+    originalTokens: truncation.originalTokens,
+    keptTokens: truncation.keptTokens,
+    continuationHandle: truncation.handle,
+    maxTokens: maxResponseTokens,
+  };
 }
 
 function getDefaultStepResponseTokens(
@@ -608,25 +637,13 @@ export async function executeWorkflow(
 
         const stepDuration = Date.now() - stepStart;
         priorResults.push(result);
-        let resultForResponse: unknown = result;
-        if (Array.isArray(result) && result.length > 3) {
-          resultForResponse = {
-            _type: "array",
-            length: result.length,
-            sample: result.slice(0, 3),
-            hint:
-              "Full data available via $" +
-              i +
-              " reference in subsequent steps",
-          };
-        }
         const tokens =
-          WorkflowBudgetTracker.estimateResultTokens(resultForResponse);
+          WorkflowBudgetTracker.estimateResultTokens(result);
 
         const stepResult: WorkflowStepResult = {
           stepIndex: i,
           fn: step.fn,
-          result: resultForResponse,
+          result,
           tokens,
           durationMs: stepDuration,
           status: "ok",
@@ -635,7 +652,10 @@ export async function executeWorkflow(
           stepResult,
           step,
           getWorkflowAwareStepResponseTokens(request, budget, i, step),
+          projectStepResult,
+          resolvedArgs,
         );
+        if (projectStepResult) stepResult.tokens = tokens;
         budget.record(stepResult.tokens, stepDuration);
         attachStepMetadataToPriorResult(priorResults, i, result, stepResult, resolvedArgs);
         stepResults.push(stepResult);
@@ -788,14 +808,6 @@ export async function executeWorkflow(
           ? failureDetailsFrom(result)
           : undefined;
         priorResults.push(result);
-        const modelResult = projectStepResult
-          ? projectStepResult(
-              step.fn,
-              result,
-              resolvedArgs,
-              step.projectionOptions,
-            )
-          : result;
         const stepResult: WorkflowStepResult = {
           stepIndex: i,
           fn: step.fn,
@@ -821,7 +833,8 @@ export async function executeWorkflow(
           stepResult,
           step,
           getWorkflowAwareStepResponseTokens(request, budget, i, step),
-          modelResult,
+          projectStepResult,
+          resolvedArgs,
         );
         if (projectStepResult) stepResult.tokens = tokens;
         budget.record(stepResult.tokens, stepDuration);

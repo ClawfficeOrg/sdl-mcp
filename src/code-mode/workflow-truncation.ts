@@ -37,12 +37,13 @@ function evictExpired(): void {
   }
 }
 
-/** Store a complete result behind the workflow continuation retrieval action. */
-export function storeContinuation(result: unknown): string {
-  const handle = `cont-${Date.now()}-${randomBytes(4).toString("hex")}`;
-
+function upsertContinuation(handle: string, data: string): void {
   evictExpired();
-  if (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
+
+  if (CONTINUATION_STORE.has(handle)) {
+    // Reinsert existing handles to refresh their FIFO position without growing the store.
+    CONTINUATION_STORE.delete(handle);
+  } else if (CONTINUATION_STORE.size >= MAX_CONTINUATIONS) {
     // Batch eviction prevents rapid churn when a burst fills the bounded store.
     const evictCount = Math.max(1, Math.floor(MAX_CONTINUATIONS * 0.1));
     const keys = Array.from(CONTINUATION_STORE.keys()).slice(0, evictCount);
@@ -50,10 +51,18 @@ export function storeContinuation(result: unknown): string {
       CONTINUATION_STORE.delete(key);
     }
   }
+
   CONTINUATION_STORE.set(handle, {
-    data: safeJsonStringify(result),
+    data,
     expiresAt: Date.now() + CONTINUATION_TTL_MS,
   });
+}
+
+/** Store a complete result behind the workflow continuation retrieval action. */
+export function storeContinuation(result: unknown): string {
+  const handle = `cont-${Date.now()}-${randomBytes(4).toString("hex")}`;
+
+  upsertContinuation(handle, safeJsonStringify(result));
 
   return handle;
 }
@@ -208,7 +217,7 @@ function truncationMarker(): Record<string, unknown> {
   return {
     truncated: true,
     reason:
-      "maxResponseTokens is too low to include result fields; use truncatedResponse.continuationHandle to fetch the full result.",
+      "maxResponseTokens is too low to include result fields.",
   };
 }
 
@@ -258,12 +267,72 @@ function ensureVisibleTruncationPreview(
   return value;
 }
 
+const VOLATILE_WORKFLOW_FIELDS = new Set([
+  "durationMs",
+  "tokens",
+  "totalTokens",
+  "tokenEstimate",
+  "tokenMetrics",
+  "generatedAt",
+  "createdAt",
+  "updatedAt",
+  "startedAt",
+  "finishedAt",
+  "timestamp",
+  "sessionId",
+  "trace",
+  "diagnostics",
+]);
+
+const WORKFLOW_TELEMETRY_FIELDS = new Set([
+  "durationMs",
+  "tokens",
+  "totalTokens",
+  "tokenEstimate",
+  "tokenMetrics",
+]);
+
+/** Remove workflow-envelope volatility before a step projection is exposed or stored. */
+export function sanitizeWorkflowStepValue(
+  value: unknown,
+  includeDiagnostics = false,
+  includeTelemetry = false,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((child) =>
+      sanitizeWorkflowStepValue(child, includeDiagnostics, includeTelemetry)
+    );
+  }
+  if (!isRecordValue(value)) return value;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      !VOLATILE_WORKFLOW_FIELDS.has(key)
+      || (key === "diagnostics" && includeDiagnostics)
+      || (includeTelemetry && WORKFLOW_TELEMETRY_FIELDS.has(key))
+    ) {
+      sanitized[key] = sanitizeWorkflowStepValue(
+        child,
+        includeDiagnostics,
+        includeTelemetry,
+      );
+    }
+  }
+  return sanitized;
+}
+
 export function truncateStepResult(
   result: unknown,
   maxTokens: number,
+  continuationHandle?: string,
 ): TruncationResult {
   const json = safeJsonStringify(result);
   const originalTokens = estimateTokensCoarse(json);
+
+  if (continuationHandle) {
+    // Keep the executor-created handle synchronized even when reprojection now fits inline.
+    upsertContinuation(continuationHandle, json);
+  }
 
   if (originalTokens <= maxTokens) {
     return {
@@ -274,7 +343,7 @@ export function truncateStepResult(
     };
   }
 
-  const handle = storeContinuation(result);
+  const handle = continuationHandle || storeContinuation(result);
 
   const truncated = ensureVisibleTruncationPreview(
     smartTruncate(result, maxTokens),

@@ -27,6 +27,7 @@ import {
   ValidationError,
   errorToMcpResponse,
 } from "../../dist/mcp/errors.js";
+import { buildValidatedRecoveryAction } from "../../dist/mcp/response-projection/recovery.js";
 
 describe("agent-facing SDL tool contracts", () => {
   it("policy.set patches preserve only user-supplied policy keys", () => {
@@ -468,5 +469,42 @@ describe("agent-facing SDL tool contracts", () => {
         invalidHasNextBestAction: false,
       },
     );
+  });
+  it("materializes one schema-valid workflow recovery action", () => {
+    const context = {
+      repoId: "repo",
+      advertisedTools: ["sdl.workflow"],
+      activeWorkflowFunctions: ["repoStatus"],
+    };
+    const valid = buildValidatedRecoveryAction(
+      { action: "repo.status", args: { repoId: "repo" } },
+      context,
+    );
+    const invalid = buildValidatedRecoveryAction(
+      { action: "repo.status", args: { repoId: "repo" } },
+      {
+        ...context,
+        failedCall: { action: "repo.status", args: { repoId: "repo" } },
+      },
+    );
+
+    assert.deepEqual(valid.nextAction, {
+      action: "sdl.workflow",
+      args: {
+        includeTelemetry: false,
+        onError: "continue",
+        repoId: "repo",
+        steps: [{
+          fn: "repoStatus",
+          args: {
+            detail: "compact",
+            includeTelemetry: false,
+            surfaceMemories: false,
+          },
+        }],
+      },
+    });
+    assert.equal(invalid.nextAction, undefined);
+    assert.equal(invalid.invalidRecoveryCount, 1);
   });
 });

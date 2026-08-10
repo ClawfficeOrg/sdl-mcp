@@ -257,4 +257,23 @@ describe("context-response-projection", () => {
       { error: error.error },
     );
   });
+  it("keeps compact workflow failures single-sourced and ordered", () => {
+    const projected = projectToolResultForModelContent("sdl.workflow", {
+      results: [{
+        stepIndex: 3,
+        fn: "repoStatus",
+        status: "error",
+        result: { status: "failure", error: { message: "failed once" }, fallbackTools: ["sdl.repo.status"] },
+        tokens: 0,
+        durationMs: 9,
+        error: "failed once",
+        fallbackTools: ["sdl.repo.status"],
+        failureTrace: { stepIndex: 3, fn: "repoStatus", status: "error", message: "failed once", fallbackTools: ["sdl.repo.status"] },
+        nextAction: { action: "repo.status", args: { repoId: "repo" } },
+      }],
+    }, { repoId: "repo", detail: "compact" }) as { results: Array<Record<string, unknown>> };
+
+    assert.deepEqual(Object.keys(projected.results[0]), ["stepIndex", "fn", "status", "error", "nextAction"]);
+    assert.equal((JSON.stringify(projected.results[0]).match(/failed once/g) ?? []).length, 1);
+  });
 });

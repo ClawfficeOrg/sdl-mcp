@@ -117,6 +117,8 @@ export interface WorkflowStepResult {
     originalTokens: number;
     keptTokens: number;
     continuationHandle: string;
+    /** Internal truncation limit used to rebuild a sanitized public continuation. */
+    maxTokens?: number;
   };
 }
 

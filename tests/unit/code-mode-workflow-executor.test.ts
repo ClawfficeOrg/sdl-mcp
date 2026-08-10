@@ -8,7 +8,12 @@ import {
   readResponseArtifact,
 } from "../../dist/runtime/response-artifacts.js";
 import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
-import { getContinuation } from "../../dist/code-mode/workflow-truncation.js";
+import {
+  clearContinuationStore,
+  getContinuation,
+  storeContinuation,
+  truncateStepResult,
+} from "../../dist/code-mode/workflow-truncation.js";
 import * as responseProjection from "../../dist/mcp/context-response-projection.js";
 import type { ParsedWorkflowRequest } from "../../dist/code-mode/workflow-parser.js";
 import type { CodeModeConfig } from "../../dist/config/types.js";
@@ -188,6 +193,7 @@ describe("code-mode workflow executor", () => {
       ],
       onError: "continue",
     };
+    assert.strictEqual("projectionOptions" in request.steps[0], false);
     const result = await executeWorkflow(
       request,
       createMockActionMap(),
@@ -1169,6 +1175,138 @@ describe("code-mode workflow executor", () => {
     });
   });
 
+  it("defers no-projector continuation storage to the public family projection", async () => {
+    const rawResult = {
+      repoId: "test",
+      lastIndexedAt: "private-compact-omission",
+      rootAvailability: {
+        status: "available",
+        detail: "v".repeat(3_000),
+      },
+      filesIndexed: 1,
+      symbolsIndexed: 2,
+    };
+    const actionMap = {
+      ...createMockActionMap(),
+      "repo.status": {
+        schema: z.object({}).passthrough(),
+        handler: async () => rawResult,
+      },
+    };
+    const request: ParsedWorkflowRequest = {
+      repoId: "test",
+      steps: [{
+        fn: "repoStatus",
+        action: "repo.status",
+        args: {},
+        maxResponseTokens: 50,
+      }],
+      onError: "stop",
+    };
+
+    const executed = await executeWorkflow(request, actionMap, testConfig);
+    const executorHandle =
+      executed.results[0].truncatedResponse?.continuationHandle;
+    assert.ok(executorHandle);
+    const projected = responseProjection.projectToolResultForModelContent(
+      "sdl.workflow",
+      executed,
+      { repoId: "test", detail: "compact", steps: request.steps },
+    ) as {
+      results: Array<{
+        result: unknown;
+        nextAction?: {
+          args: { steps: Array<{ args: { handle: string } }> };
+        };
+      }>;
+    };
+    const publicStep = projected.results[0];
+    const publicHandle =
+      publicStep.nextAction?.args.steps[0].args.handle;
+    assert.ok(publicHandle);
+    assert.equal(publicHandle, executorHandle);
+    const stored = getContinuation(publicHandle)?.data;
+
+    assert.equal(
+      (executed.results[0].result as Record<string, unknown>).lastIndexedAt,
+      "private-compact-omission",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(publicStep.result),
+      /lastIndexedAt|private-compact-omission/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(stored),
+      /lastIndexedAt|private-compact-omission/,
+    );
+  });
+
+  it("sanitizes an existing handle when family projection shrinks below the cap", async () => {
+    const secret = "private-compact-omission".repeat(200);
+    const actionMap = {
+      ...createMockActionMap(),
+      "repo.status": {
+        schema: z.object({}).passthrough(),
+        handler: async () => ({
+          repoId: "test",
+          lastIndexedAt: secret,
+          rootAvailability: { status: "available" },
+          filesIndexed: 1,
+          symbolsIndexed: 2,
+        }),
+      },
+    };
+    const request: ParsedWorkflowRequest = {
+      repoId: "test",
+      steps: [{
+        fn: "repoStatus",
+        action: "repo.status",
+        args: {},
+        maxResponseTokens: 50,
+      }],
+      onError: "stop",
+    };
+
+    const executed = await executeWorkflow(request, actionMap, testConfig);
+    const handle = executed.results[0].truncatedResponse?.continuationHandle;
+    assert.ok(handle);
+    const projected = responseProjection.projectToolResultForModelContent(
+      "sdl.workflow",
+      executed,
+      { repoId: "test", detail: "compact", steps: request.steps },
+    ) as {
+      results: Array<{ result: unknown; nextAction?: unknown }>;
+    };
+    const publicStep = projected.results[0];
+
+    assert.equal(publicStep.nextAction, undefined);
+    assert.doesNotMatch(JSON.stringify(publicStep.result), /lastIndexedAt/);
+    assert.doesNotMatch(JSON.stringify(getContinuation(handle)?.data), /lastIndexedAt/);
+  });
+
+  it("upserts an evicted explicit handle under the capacity policy", () => {
+    clearContinuationStore();
+    try {
+      const handle = storeContinuation({ secret: true });
+      const fillerHandles = Array.from({ length: 109 }, (_, index) =>
+        storeContinuation({ index })
+      );
+      assert.equal(getContinuation(handle), null);
+
+      const replacement = { safe: "x".repeat(500) };
+      const truncated = truncateStepResult(replacement, 1, handle);
+      assert.equal(truncated.handle, handle);
+      assert.deepStrictEqual(getContinuation(handle)?.data, replacement);
+      assert.equal(
+        fillerHandles.filter((candidate) => getContinuation(candidate)).length
+          + 1,
+        91,
+      );
+    } finally {
+      clearContinuationStore();
+    }
+  });
+
   it("returns an explanatory truncation preview when maxResponseTokens is too low", async () => {
     const request: ParsedWorkflowRequest = {
       repoId: "test",
@@ -1185,11 +1323,24 @@ describe("code-mode workflow executor", () => {
 
     const result = await executeWorkflow(request, createMockActionMap(), testConfig);
     const step = result.results[0];
+    const canonical = step.result as { results: unknown[] };
+    const projected = responseProjection.projectToolResultForModelContent(
+      "sdl.workflow",
+      result,
+      { repoId: "test", detail: "compact", steps: request.steps },
+    ) as { results: Array<{ result: unknown }> };
+    const publicResult = projected.results[0].result;
+    const handle = step.truncatedResponse?.continuationHandle;
+    assert.ok(handle);
+    const stored = getContinuation(handle)?.data as { results: unknown[] };
 
     assert.strictEqual(step.status, "ok");
-    assert.ok(step.truncatedResponse);
-    assert.notDeepStrictEqual(step.result, {});
-    assert.match(JSON.stringify(step.result), /truncated/i);
+    assert.equal(canonical.results.length, 12);
+    assert.equal(stored.results.length, 12);
+    assert.match(JSON.stringify(publicResult), /truncated/i);
+    assert.ok(
+      JSON.stringify(publicResult).length < JSON.stringify(canonical).length,
+    );
   });
 
   it("preserves real empty fields in truncation previews", async () => {
@@ -1207,11 +1358,32 @@ describe("code-mode workflow executor", () => {
     };
 
     const result = await executeWorkflow(request, createMockActionMap(), testConfig);
-    const stepResult = result.results[0].result as Record<string, unknown>;
+    const step = result.results[0];
+    const stepResult = step.result as Record<string, unknown>;
+    const projected = responseProjection.projectToolResultForModelContent(
+      "sdl.workflow",
+      result,
+      { repoId: "test", detail: "compact", steps: request.steps },
+    ) as { results: Array<{ result: Record<string, unknown> }> };
+    const publicResult = projected.results[0].result;
+    const handle = step.truncatedResponse?.continuationHandle;
+    assert.ok(handle);
+    const stored = getContinuation(handle)?.data as Record<string, unknown>;
+    const unbounded = structuredClone(result);
+    delete unbounded.results[0].truncatedResponse;
+    const effective = responseProjection.projectToolResultForModelContent(
+      "sdl.workflow",
+      unbounded,
+      { repoId: "test", detail: "compact", steps: request.steps },
+    ) as { results: Array<{ result: Record<string, unknown> }> };
+    const effectiveResult = effective.results[0].result;
 
     assert.deepStrictEqual(stepResult.emptyList, []);
     assert.deepStrictEqual(stepResult.emptyObject, {});
-    assert.match(String(stepResult.body), /truncated/i);
+    assert.equal(stepResult.body, "x".repeat(5_000));
+    assert.match(String(publicResult.body), /truncated/i);
+    assert.deepStrictEqual(stored, effectiveResult);
+    assert.deepStrictEqual(stored.emptyList, []);
   });
 
   it("dryRun validates static args and marks ref-backed schemas pending", async () => {
