@@ -63,7 +63,10 @@
         "budget": {
           "maxTokens": 2048
         },
-        "focusSymbols": ["UserRepository", "findById"],
+        "focusSymbols": [
+          "UserRepository",
+          "findById"
+        ],
         "refsMode": "off",
         "responseMode": "inline",
         "wireFormat": "json"
@@ -78,7 +81,10 @@
         "budget": {
           "maxTokens": 2048
         },
-        "focusSymbols": ["UserRepository", "findById"],
+        "focusSymbols": [
+          "UserRepository",
+          "findById"
+        ],
         "refsMode": "off",
         "responseMode": "inline",
         "wireFormat": "packed"
@@ -94,7 +100,9 @@
         "budget": {
           "maxTokens": 1000
         },
-        "focusPaths": ["src/javascript/no-symbols.js"],
+        "focusPaths": [
+          "src/javascript/no-symbols.js"
+        ],
         "refsMode": "off",
         "responseMode": "inline",
         "wireFormat": "json"
@@ -171,7 +179,9 @@
           "name": "UserRepository",
           "file": "src/typescript/models.ts"
         },
-        "identifiersToFind": ["findById"],
+        "identifiersToFind": [
+          "findById"
+        ],
         "maxLines": 40
       }
     },
@@ -187,7 +197,9 @@
         "reason": "Inspect deterministic repository lookup behavior",
         "expectedLines": 5,
         "maxTokens": 160,
-        "identifiersToFind": ["users"]
+        "identifiersToFind": [
+          "users"
+        ]
       }
     },
     {
@@ -319,5 +331,253 @@
       "tool": "sdl.search.edit",
       "reason": "Cross-file edit preview/apply surface creates expiring plans and may mutate files."
     }
-  ]
+  ],
+  "projectionCases": [
+    {
+      "action": "symbol.search",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "symbol.getCard",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "symbol.edit",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "slice.build",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "slice.refresh",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "slice.spillover.get",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "delta.get",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "pr.risk.analyze",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "code.needWindow",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "code.getSkeleton",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "code.getHotPath",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "repo.register",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "repo.status",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "repo.unregister",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "repo.overview",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "index.refresh",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "policy.get",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "policy.set",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "usage.stats",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "file.read",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "file.write",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "search.edit",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "semantic.enrichment.refresh",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "semantic.enrichment.status",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "agent.feedback",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "agent.feedback.query",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "buffer.push",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "buffer.checkpoint",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "buffer.status",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "runtime.execute",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "runtime.queryOutput",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "response.get",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "memory.store",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "memory.query",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "memory.remove",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "memory.surface",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataPick",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataMap",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataFilter",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataSort",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataTemplate",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "workflowContinuationGet",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "action.search",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "info",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "manual",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "context",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "file",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "retrieve",
+      "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "workflow",
+      "detail": "compact",
+      "includeDiagnostics": false
+    }
+  ],
+  "projectionDiagnosticVolatilityAllowlist": []
 }

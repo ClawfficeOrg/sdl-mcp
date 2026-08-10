@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { INTERNAL_TRANSFORMS } from "./transforms.js";
+import { INTERNAL_TRANSFORM_NAMES, INTERNAL_TRANSFORMS } from "./transforms.js";
 import {
   AgentFeedbackQueryRequestSchema,
   AgentFeedbackRequestSchema,
@@ -86,6 +86,22 @@ const META_TOOL_SCHEMAS: Record<string, z.ZodType> = {
 };
 
 // --- Action Tags / Categories ---
+
+/** Raw result contracts for workflow-only transforms, which are not MCP tools. */
+export const INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION = Object.freeze({
+  dataPick: z.record(z.string(), z.unknown()),
+  dataMap: z.array(z.record(z.string(), z.unknown())),
+  dataFilter: z.array(z.unknown()),
+  dataSort: z.array(z.unknown()),
+  dataTemplate: z.string(),
+  workflowContinuationGet: z
+    .object({
+      data: z.unknown(),
+      totalTokens: z.number().nonnegative(),
+      hasMore: z.boolean(),
+    })
+    .passthrough(),
+} satisfies Record<(typeof INTERNAL_TRANSFORM_NAMES)[number], z.ZodType>);
 
 export type ActionTag =
   | "query"
@@ -426,9 +442,10 @@ function describeDiscriminatedUnionVariants(
     if (typeof value !== "string") continue;
 
     const requiredFields = Object.entries(shape)
-      .filter(([name, fieldSchema]) =>
-        name === discriminator ||
-        describeField(name, fieldSchema, active, depth + 1).required,
+      .filter(
+        ([name, fieldSchema]) =>
+          name === discriminator ||
+          describeField(name, fieldSchema, active, depth + 1).required,
       )
       .map(([name]) => name);
     const existing = variants.find((variant) => variant.value === value);
@@ -541,7 +558,9 @@ function schemaSummaryFieldsEqual(
       const candidate = right.find(
         (rightField) => rightField.name === field.name,
       );
-      return candidate !== undefined && schemaSummaryFieldEquals(field, candidate);
+      return (
+        candidate !== undefined && schemaSummaryFieldEquals(field, candidate)
+      );
     })
   );
 }
@@ -554,7 +573,9 @@ function schemaSummaryFieldEquals(
     left.enumValues === undefined || right.enumValues === undefined
       ? left.enumValues === right.enumValues
       : left.enumValues.length === right.enumValues.length &&
-        left.enumValues.every((value, index) => value === right.enumValues?.[index]);
+        left.enumValues.every(
+          (value, index) => value === right.enumValues?.[index],
+        );
   const variantsEqual =
     left.variants === undefined || right.variants === undefined
       ? left.variants === right.variants
@@ -710,7 +731,12 @@ function describeField(
     const elemType = asZodType(def.element ?? def.innerType);
     const elemShape = elemType ? getObjectShape(elemType) : undefined;
     if (elemType && elemShape) {
-      field.subFields = describeObjectFields(elemType, elemShape, active, depth);
+      field.subFields = describeObjectFields(
+        elemType,
+        elemShape,
+        active,
+        depth,
+      );
     }
   }
 
@@ -740,8 +766,9 @@ function resolveTypeName(schema: z.ZodType): string {
       return `literal(${JSON.stringify(litVal)})`;
     }
     case "union":
-      return [...new Set(getUnionOptions(schema).map(resolveTypeName))]
-        .join(" | ");
+      return [...new Set(getUnionOptions(schema).map(resolveTypeName))].join(
+        " | ",
+      );
     default:
       return "unknown";
   }
@@ -967,7 +994,8 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   "code.getSkeleton": "Get skeleton IR (signatures + control flow)",
   "code.getHotPath": "Get hot-path excerpt for specific identifiers",
   "repo.register": "Register a repository",
-  "repo.status": "Get repository status, including active and recent async index operation states",
+  "repo.status":
+    "Get repository status, including active and recent async index operation states",
   "repo.unregister": "Permanently remove a runtime repository registration",
   "repo.overview": "Get codebase overview",
   "index.refresh":
@@ -982,15 +1010,17 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
     "Request buffer checkpoint. Zero-file success responses include a message explaining why no clean buffers were checkpointed.",
   "buffer.status": "Get buffer status",
   "runtime.execute":
-    "Execute runtime command. Shell runtime requires code; direct args-only shell execution is rejected. Use outputMode:\"digest\" for build/test/lint failures, then runtime.queryOutput for full logs. Node code runs as ESM (use import/createRequire, not require()). Use stdin for multiline scripts/input; maxResponseLines accepts 5-1000 lines (default 100).",
+    'Execute runtime command. Shell runtime requires code; direct args-only shell execution is rejected. Use outputMode:"digest" for build/test/lint failures, then runtime.queryOutput for full logs. Node code runs as ESM (use import/createRequire, not require()). Use stdin for multiline scripts/input; maxResponseLines accepts 5-1000 lines (default 100).',
   "runtime.queryOutput": "Query stored command output by keywords",
   "response.get": "Retrieve a stored large tool response by handle",
   "memory.store": "Store a development memory",
   "memory.query": "Query memories",
   "memory.remove": "Soft-delete a memory",
   "memory.surface": "Auto-surface relevant memories",
-  "usage.stats": "Get cumulative token savings statistics, including Signal density in compact output",
-  "file.read": "Read non-indexed file content (templates, configs, docs); large untargeted reads include a targeted-mode hint",
+  "usage.stats":
+    "Get cumulative token savings statistics, including Signal density in compact output",
+  "file.read":
+    "Read non-indexed file content (templates, configs, docs); large untargeted reads include a targeted-mode hint",
   "file.write":
     "Write to a single file (indexed or non-indexed) with targeted modes (line replace, pattern replace, JSON path, insert, append); indexed source is syntax-validated before commit and synchronously reconciled; use search.edit for cross-file batching",
   "search.edit":
@@ -1004,8 +1034,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
 const META_TOOL_DESCRIPTIONS: Record<string, string> = {
   "action.search":
     "Search the SDL-MCP catalog before choosing a tool. Best starting point when you are unsure whether to use context or workflow; limit accepts at most 50 results.",
-  info:
-    "Get SDL-MCP server information, version, runtime capabilities, configuration, logging, LadybugDB, and native-addon status.",
+  info: "Get SDL-MCP server information, version, runtime capabilities, configuration, logging, LadybugDB, and native-addon status.",
   manual:
     "Load the focused SDL-MCP manual after discovery. Use this before composing workflow steps.",
   context:
@@ -1445,8 +1474,8 @@ export const LADDER_RUNG_BY_ACTION: Readonly<Record<string, LadderRung>> =
   );
 
 function requiredParamsForSchema(schema: z.ZodType): string[] {
-  return zodToSchemaSummary(schema).fields
-    .filter((field) => field.required && field.name !== "repoId")
+  return zodToSchemaSummary(schema)
+    .fields.filter((field) => field.required && field.name !== "repoId")
     .map((field) => field.name);
 }
 
@@ -1525,19 +1554,18 @@ const META_ACTION_DEFINITIONS: readonly ActionDefinition[] = Object.freeze(
     "file",
     "retrieve",
     "workflow",
-  ].map(
-    (action) =>
-      createDefinition(
-        action,
-        action,
-        `sdl.${action}`,
-        META_TOOL_SCHEMAS[action],
-        META_TOOL_DESCRIPTIONS[action] ?? "",
-        META_TOOL_EXAMPLES[action],
-        META_TOOL_TAGS[action] ?? ["meta"],
-        "meta",
-        [],
-      ),
+  ].map((action) =>
+    createDefinition(
+      action,
+      action,
+      `sdl.${action}`,
+      META_TOOL_SCHEMAS[action],
+      META_TOOL_DESCRIPTIONS[action] ?? "",
+      META_TOOL_EXAMPLES[action],
+      META_TOOL_TAGS[action] ?? ["meta"],
+      "meta",
+      [],
+    ),
   ),
 );
 
@@ -1602,9 +1630,9 @@ export function buildCatalog(opts?: {
   const detail = opts?.detail ?? "compact";
 
   if (
-    cachedCatalog === null
-    || cachedMemoryVisible !== memoryVisible
-    || cachedInfoVisible !== infoVisible
+    cachedCatalog === null ||
+    cachedMemoryVisible !== memoryVisible ||
+    cachedInfoVisible !== infoVisible
   ) {
     cachedCatalog = buildBaseCatalog(memoryVisible, infoVisible);
     cachedMemoryVisible = memoryVisible;
@@ -1621,9 +1649,8 @@ export function buildCatalog(opts?: {
 
     if (includeSchemas && definition) {
       const schemaSummary = zodToSchemaSummary(definition.schema);
-      result.schemaSummary = detail === "full"
-        ? schemaSummary
-        : compactSchemaSummary(schemaSummary);
+      result.schemaSummary =
+        detail === "full" ? schemaSummary : compactSchemaSummary(schemaSummary);
     }
 
     if (includeExamples && definition?.example) {
@@ -1632,6 +1659,13 @@ export function buildCatalog(opts?: {
 
     return result;
   });
+}
+
+/** Return the complete Code Mode action inventory for startup policy checks. */
+export function getProjectionCatalogActions(): readonly string[] {
+  return buildCatalog({ memoryVisible: true, infoVisible: true }).map(
+    (entry) => entry.action,
+  );
 }
 
 // Keep compact schemas one level deep so recursive detail is always opt-in.
@@ -1790,7 +1824,10 @@ export function rankCatalog(
   query: string,
 ): ActionCatalogEntry[] {
   const q = query.toLowerCase();
-  const rawTerms = q.split(/\s+/).filter(Boolean).map(normalizeActionSearchTerm);
+  const rawTerms = q
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(normalizeActionSearchTerm);
 
   // Expand synonyms: add related terms for better matching
   const terms = rawTerms.flatMap((term) => {

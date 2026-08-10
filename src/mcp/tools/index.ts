@@ -5,6 +5,7 @@ import { InfoRequestSchema, handleInfo } from "./info.js";
 import type { ToolServices } from "../../gateway/index.js";
 import { createActionMap } from "../../gateway/router.js";
 import {
+  assertCodeModeProjectionProfiles,
   registerActionSearchTool,
   registerCodeModeTools,
 } from "../../code-mode/index.js";
@@ -13,9 +14,22 @@ import { loadConfig } from "../../config/loadConfig.js";
 import { anyRepoHasMemoryTools } from "../../config/memory-config.js";
 import { InfoResponseSchema } from "../tools.js";
 import {
+  assertProjectionProfilesForActions,
+} from "../response-projection/registry.js";
+import {
   buildFlatToolDescriptors,
   registerFlatTools,
 } from "./tool-descriptors.js";
+
+export function getPublicFlatToolNames(
+  services: ToolServices = {},
+): readonly string[] {
+  return [
+    "sdl.action.search",
+    "sdl.info",
+    ...buildFlatToolDescriptors(services).map((descriptor) => descriptor.name),
+  ];
+}
 
 export function registerTools(
   server: MCPServer,
@@ -34,6 +48,12 @@ export function registerTools(
       infoTool: true,
     },
   };
+
+  assertProjectionProfilesForActions(
+    getPublicFlatToolNames(stableServices),
+    "flat MCP",
+  );
+  assertCodeModeProjectionProfiles();
 
   // Register memory hint hook for all modes
   server.registerPostDispatchHook(createMemoryHintHook());

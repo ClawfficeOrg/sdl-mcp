@@ -5,10 +5,19 @@ import { describe, it } from "node:test";
 
 import { ACTION_DEFINITION_BY_ACTION } from "../../dist/code-mode/action-catalog.js";
 import {
+  COMPATIBILITY_WORKFLOW_CHILD_ACTIONS,
   CUSTOM_RESPONSE_PROJECTION_ACTIONS,
   RESPONSE_PROJECTION_RULES,
   createResponseProjectionRegistry,
+  getWorkflowChildAction,
 } from "../../dist/mcp/context-response-projection-registry.js";
+import {
+  PROJECTION_PROFILE_REGISTRY,
+  WORKFLOW_CHILD_ACTION_BINDINGS,
+  assertProjectionProfilesForActions,
+  createProjectionProfileRegistry,
+  getProjectionProfile,
+} from "../../dist/mcp/response-projection/registry.js";
 import {
   CARD_WIRE_FIELD_ORDER,
   compactCardForWire,
@@ -48,6 +57,66 @@ describe("response projection registry", () => {
     );
   });
 
+  it("fails closed for missing, duplicate, or unknown profiles", () => {
+    const infoProfile = PROJECTION_PROFILE_REGISTRY.info;
+
+    assert.throws(
+      () =>
+        createProjectionProfileRegistry(
+          [
+            ["info", infoProfile],
+            ["info", infoProfile],
+          ],
+          ["info"],
+        ),
+      /Duplicate projection profile action: info/,
+    );
+    assert.throws(
+      () =>
+        createProjectionProfileRegistry(
+          [["info", infoProfile]],
+          ["info", "manual"],
+        ),
+      /Missing projection profile action: manual/,
+    );
+    assert.throws(
+      () =>
+        createProjectionProfileRegistry(
+          [["unknown.action", infoProfile]],
+          ["info"],
+        ),
+      /Unknown projection profile action: unknown.action/,
+    );
+    assert.throws(
+      () => getProjectionProfile("unknown.action"),
+      /Missing response projection profile: unknown.action/,
+    );
+    assert.throws(
+      () => assertProjectionProfilesForActions(["sdl.info", "info"]),
+      /Duplicate public actions projection action: info/,
+    );
+  });
+
+  it("keeps compatibility-only workflow aliases disjoint from canonical bindings", () => {
+    assert.deepEqual(COMPATIBILITY_WORKFLOW_CHILD_ACTIONS, {
+      actionSearch: "action.search",
+      file: "sdl.file",
+      sdlFile: "sdl.file",
+      symbolGetCards: "symbol.getCards",
+    });
+    for (const fn of Object.keys(WORKFLOW_CHILD_ACTION_BINDINGS)) {
+      assert.equal(
+        Object.hasOwn(COMPATIBILITY_WORKFLOW_CHILD_ACTIONS, fn),
+        false,
+        fn,
+      );
+    }
+
+    assert.equal(getWorkflowChildAction("repoRegister"), "repo.register");
+    assert.equal(getWorkflowChildAction("actionSearch"), "action.search");
+    assert.equal(getWorkflowChildAction("unknownFunction"), "workflow");
+  });
+
   it("owns action rules outside the projection implementation", () => {
     const source = readFileSync(
       join(process.cwd(), "src/mcp/context-response-projection.ts"),
@@ -56,6 +125,13 @@ describe("response projection registry", () => {
     assert.equal(source.includes("WORKFLOW_CHILD_TOOL_NAMES"), false);
     assert.equal(source.includes("USAGE_STATS_TOOLS"), false);
     assert.equal(source.includes("CODE_NEED_WINDOW_TOOLS"), false);
+
+    const registrySource = readFileSync(
+      join(process.cwd(), "src/mcp/response-projection/registry.ts"),
+      "utf8",
+    );
+    assert.equal(registrySource.includes("../tools"), false);
+    assert.equal(registrySource.includes("../gateway"), false);
   });
 });
 

@@ -11,6 +11,10 @@ import {
 import { handleAgentContext } from "../mcp/tools/context.js";
 import { projectWorkflowChildResultForModel } from "../mcp/context-response-projection.js";
 import {
+  assertProjectionProfileInventory,
+  assertWorkflowProjectionBindings,
+} from "../mcp/response-projection/registry.js";
+import {
   FileGatewayOutputSchema,
   FileGatewayRequestSchema,
   handleFileGateway,
@@ -21,6 +25,7 @@ import { estimateTokens } from "../util/tokenize.js";
 import { withExclusiveCodeModeRecoveryProjection } from "./action-reference-projection.js";
 import {
   buildCatalog,
+  getProjectionCatalogActions,
   rankCatalog,
   META_ACTION_SEARCH_SCHEMA,
   type ActionCatalogEntry,
@@ -445,6 +450,11 @@ export function registerActionSearchTool(
   );
 }
 
+export function assertCodeModeProjectionProfiles(): void {
+  assertProjectionProfileInventory(getProjectionCatalogActions());
+  assertWorkflowProjectionBindings(getActiveFnNameMap(true));
+}
+
 /**
  * Register Code Mode tools (sdl.manual + sdl.workflow + sdl.context + sdl.file) on the MCP server.
  *
@@ -457,6 +467,7 @@ export function registerCodeModeTools(
   config: CodeModeConfig,
   prebuiltActionMap?: ActionMap,
 ): void {
+  assertCodeModeProjectionProfiles();
   const actionMap = prebuiltActionMap ?? createActionMap(
     services.liveIndex,
     services.actionAvailability,

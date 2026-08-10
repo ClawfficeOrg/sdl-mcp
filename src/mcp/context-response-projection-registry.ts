@@ -1,3 +1,21 @@
+import { getWorkflowProjectionAction } from "./response-projection/registry.js";
+
+export {
+  PROJECTION_PROFILE_ACTIONS,
+  PROJECTION_PROFILE_REGISTRY,
+  WORKFLOW_CHILD_ACTION_BINDINGS,
+  assertProjectionProfileInventory,
+  assertProjectionProfilesForActions,
+  assertWorkflowProjectionBindings,
+  createProjectionProfileRegistry,
+  getProjectionProfile,
+  getWorkflowProjectionAction,
+} from "./response-projection/registry.js";
+export type {
+  ProjectionAction,
+  ProjectionProfileEntry,
+} from "./response-projection/registry.js";
+
 export const CUSTOM_RESPONSE_PROJECTION_ACTIONS = [
   "action.search",
   "buffer.checkpoint",
@@ -42,7 +60,9 @@ const CUSTOM_ACTION_SET = new Set<string>(CUSTOM_RESPONSE_PROJECTION_ACTIONS);
 /** Build the closed custom-projection registry and reject accidental drift. */
 export function createResponseProjectionRegistry(
   entries: readonly ResponseProjectionEntry[],
-): Readonly<Record<ResponseProjectionAction, Readonly<ResponseProjectionRule>>> {
+): Readonly<
+  Record<ResponseProjectionAction, Readonly<ResponseProjectionRule>>
+> {
   const registry: Partial<
     Record<ResponseProjectionAction, Readonly<ResponseProjectionRule>>
   > = {};
@@ -102,36 +122,20 @@ export function getResponseProjectionRule(
     : undefined;
 }
 
-const WORKFLOW_CHILD_ACTIONS: Readonly<Record<string, string>> = Object.freeze({
+/** Legacy aliases that are not members of the active workflow function map. */
+export const COMPATIBILITY_WORKFLOW_CHILD_ACTIONS: Readonly<
+  Record<string, string>
+> = Object.freeze({
   actionSearch: "action.search",
-  codeHotPath: "code.getHotPath",
-  codeNeedWindow: "code.needWindow",
-  codeSkeleton: "code.getSkeleton",
-  deltaGet: "delta.get",
   file: "sdl.file",
   sdlFile: "sdl.file",
-  fileRead: "file.read",
-  fileWrite: "file.write",
-  indexRefresh: "index.refresh",
-  policyGet: "policy.get",
-  policySet: "policy.set",
-  prRiskAnalyze: "pr.risk.analyze",
-  repoOverview: "repo.overview",
-  repoStatus: "repo.status",
-  semanticEnrichmentStatus: "semantic.enrichment.status",
-  bufferStatus: "buffer.status",
-  runtimeExecute: "runtime.execute",
-  runtimeQueryOutput: "runtime.queryOutput",
-  searchEdit: "search.edit",
-  sliceBuild: "slice.build",
-  sliceRefresh: "slice.refresh",
-  symbolEdit: "symbol.edit",
-  symbolGetCard: "symbol.getCard",
   symbolGetCards: "symbol.getCards",
-  symbolSearch: "symbol.search",
-  usageStats: "usage.stats",
 });
 
 export function getWorkflowChildAction(fn: string): string {
-  return WORKFLOW_CHILD_ACTIONS[fn] ?? "workflow";
+  return (
+    getWorkflowProjectionAction(fn) ??
+    COMPATIBILITY_WORKFLOW_CHILD_ACTIONS[fn] ??
+    "workflow"
+  );
 }
