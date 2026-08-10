@@ -882,7 +882,8 @@ export const AGENT_OUTPUT_CASES = [
     },
     canonicalResultFactory: () => ({
       handle: "response-fixture",
-      full: true,
+      full: false,
+      complete: false,
       truncated: true,
       contentKind: "json",
       content: { results: [{ symbolId: "symbol-user-repository" }] },
@@ -905,6 +906,7 @@ export const AGENT_OUTPUT_CASES = [
     expectedCompactKeys: [
       "handle",
       "full",
+      "complete",
       "truncated",
       "contentKind",
       "content",
