@@ -1,6 +1,9 @@
-import type { z } from "zod";
+import { z } from "zod";
 
+import { loadConfig } from "../config/loadConfig.js";
+import { anyRepoHasMemoryTools } from "../config/memory-config.js";
 import {
+  AgentContextRequestSchema,
   AgentFeedbackQueryRequestSchema,
   AgentFeedbackRequestSchema,
   BufferCheckpointRequestSchema,
@@ -38,9 +41,11 @@ import {
   SymbolSearchRequestSchema,
   UsageStatsRequestSchema,
 } from "../mcp/tools.js";
-import { WORKFLOW_CHILD_ACTION_BINDINGS } from "../mcp/response-projection/registry.js";
+import { FileGatewayRequestSchema } from "../mcp/tools/file-gateway.js";
+import { InfoRequestSchema } from "../mcp/tools/info.js";
 
 import { INTERNAL_TRANSFORMS } from "./transforms.js";
+import { RetrieveRequestSchema } from "./retrieve-schema.js";
 import { WorkflowRequestSchema } from "./types.js";
 
 export interface RecoveryActionDefinition {
@@ -57,67 +62,122 @@ export interface RecoveryActionDefinition {
  * recovery validation never depends on action-catalog import side effects.
  */
 export const RECOVERY_GATEWAY_ACTION_SCHEMAS = [
-  ["symbol.search", SymbolSearchRequestSchema],
-  ["symbol.getCard", SymbolGetCardRequestSchema],
-  ["symbol.edit", SymbolEditRequestSchema],
-  ["slice.build", SliceBuildRequestSchema],
-  ["slice.refresh", SliceRefreshRequestSchema],
-  ["slice.spillover.get", SliceSpilloverGetRequestSchema],
-  ["delta.get", DeltaGetRequestSchema],
-  ["pr.risk.analyze", PRRiskAnalysisRequestSchema],
-  ["code.needWindow", CodeNeedWindowRequestSchema],
-  ["code.getSkeleton", GetSkeletonRequestSchema],
-  ["code.getHotPath", GetHotPathRequestSchema],
-  ["repo.register", RepoRegisterRequestSchema],
-  ["repo.status", RepoStatusRequestSchema],
-  ["repo.unregister", RepoUnregisterRequestSchema],
-  ["repo.overview", RepoOverviewRequestSchema],
-  ["index.refresh", IndexRefreshRequestSchema],
-  ["policy.get", PolicyGetRequestSchema],
-  ["policy.set", PolicySetRequestSchema],
-  ["usage.stats", UsageStatsRequestSchema],
-  ["file.read", FileReadRequestSchema],
-  ["file.write", FileWriteRequestSchema],
-  ["search.edit", SearchEditRequestSchema],
-  ["semantic.enrichment.refresh", SemanticEnrichmentRefreshRequestSchema],
-  ["semantic.enrichment.status", SemanticEnrichmentStatusRequestSchema],
-  ["agent.feedback", AgentFeedbackRequestSchema],
-  ["agent.feedback.query", AgentFeedbackQueryRequestSchema],
-  ["buffer.push", BufferPushRequestSchema],
-  ["buffer.checkpoint", BufferCheckpointRequestSchema],
-  ["buffer.status", BufferStatusRequestSchema],
-  ["runtime.execute", RuntimeExecuteRequestSchema],
-  ["runtime.queryOutput", RuntimeQueryOutputRequestSchema],
-  ["response.get", ResponseGetRequestSchema],
-  ["memory.store", MemoryStoreRequestSchema],
-  ["memory.query", MemoryQueryRequestSchema],
-  ["memory.remove", MemoryRemoveRequestSchema],
-  ["memory.surface", MemorySurfaceRequestSchema],
+  ["symbol.search", "symbolSearch", SymbolSearchRequestSchema],
+  ["symbol.getCard", "symbolGetCard", SymbolGetCardRequestSchema],
+  ["symbol.edit", "symbolEdit", SymbolEditRequestSchema],
+  ["slice.build", "sliceBuild", SliceBuildRequestSchema],
+  ["slice.refresh", "sliceRefresh", SliceRefreshRequestSchema],
+  ["slice.spillover.get", "sliceSpilloverGet", SliceSpilloverGetRequestSchema],
+  ["delta.get", "deltaGet", DeltaGetRequestSchema],
+  ["pr.risk.analyze", "prRiskAnalyze", PRRiskAnalysisRequestSchema],
+  ["code.needWindow", "codeNeedWindow", CodeNeedWindowRequestSchema],
+  ["code.getSkeleton", "codeSkeleton", GetSkeletonRequestSchema],
+  ["code.getHotPath", "codeHotPath", GetHotPathRequestSchema],
+  ["repo.register", "repoRegister", RepoRegisterRequestSchema],
+  ["repo.status", "repoStatus", RepoStatusRequestSchema],
+  ["repo.unregister", "repoUnregister", RepoUnregisterRequestSchema],
+  ["repo.overview", "repoOverview", RepoOverviewRequestSchema],
+  ["index.refresh", "indexRefresh", IndexRefreshRequestSchema],
+  ["policy.get", "policyGet", PolicyGetRequestSchema],
+  ["policy.set", "policySet", PolicySetRequestSchema],
+  ["usage.stats", "usageStats", UsageStatsRequestSchema],
+  ["file.read", "fileRead", FileReadRequestSchema],
+  ["file.write", "fileWrite", FileWriteRequestSchema],
+  ["search.edit", "searchEdit", SearchEditRequestSchema],
+  [
+    "semantic.enrichment.refresh",
+    "semanticEnrichmentRefresh",
+    SemanticEnrichmentRefreshRequestSchema,
+  ],
+  [
+    "semantic.enrichment.status",
+    "semanticEnrichmentStatus",
+    SemanticEnrichmentStatusRequestSchema,
+  ],
+  ["agent.feedback", "agentFeedback", AgentFeedbackRequestSchema],
+  [
+    "agent.feedback.query",
+    "agentFeedbackQuery",
+    AgentFeedbackQueryRequestSchema,
+  ],
+  ["buffer.push", "bufferPush", BufferPushRequestSchema],
+  ["buffer.checkpoint", "bufferCheckpoint", BufferCheckpointRequestSchema],
+  ["buffer.status", "bufferStatus", BufferStatusRequestSchema],
+  ["runtime.execute", "runtimeExecute", RuntimeExecuteRequestSchema],
+  ["runtime.queryOutput", "runtimeQueryOutput", RuntimeQueryOutputRequestSchema],
+  ["response.get", "responseGet", ResponseGetRequestSchema],
+  ["memory.store", "memoryStore", MemoryStoreRequestSchema],
+  ["memory.query", "memoryQuery", MemoryQueryRequestSchema],
+  ["memory.remove", "memoryRemove", MemoryRemoveRequestSchema],
+  ["memory.surface", "memorySurface", MemorySurfaceRequestSchema],
 ] as const satisfies ReadonlyArray<
-  readonly [action: string, schema: z.ZodType]
+  readonly [action: string, fn: string, schema: z.ZodType]
 >;
 
-export const RECOVERY_FN_NAME_MAP: Readonly<Record<string, string>> =
-  WORKFLOW_CHILD_ACTION_BINDINGS;
-
-const ACTION_TO_FN: Readonly<Record<string, string>> = Object.freeze(
+export const RECOVERY_FN_NAME_MAP: Readonly<Record<string, string>> = Object.freeze(
   Object.fromEntries(
-    Object.entries(RECOVERY_FN_NAME_MAP).map(([fn, action]) => [action, fn]),
+    RECOVERY_GATEWAY_ACTION_SCHEMAS.map(([action, fn]) => [fn, action]),
   ),
 );
 
 export const RECOVERY_GATEWAY_ACTION_DEFINITIONS: readonly RecoveryActionDefinition[] =
   Object.freeze(
-    RECOVERY_GATEWAY_ACTION_SCHEMAS.map(([action, schema]) =>
+    RECOVERY_GATEWAY_ACTION_SCHEMAS.map(([action, fn, schema]) =>
       Object.freeze({
         action,
-        fn: ACTION_TO_FN[action] ?? null,
+        fn,
         toolName: `sdl.${action}`,
         schema,
         ...(action === "code.getSkeleton"
           ? { aliases: Object.freeze({ filePath: "file" }) }
           : {}),
         kind: "gateway" as const,
+      }),
+    ),
+  );
+
+const RECOVERY_META_ACTION_SEARCH_SCHEMA = z.object({
+  query: z.string().min(1),
+  limit: z.number().int().min(1).max(50).optional(),
+  offset: z.number().int().min(0).optional(),
+  includeSchemas: z.boolean().optional(),
+  includeExamples: z.boolean().optional(),
+  excludeDisabled: z.boolean().optional(),
+  summaryOnly: z.boolean().optional(),
+  detail: z.enum(["compact", "full"]).optional().default("compact"),
+  maxTokens: z.number().int().min(500).max(32000).optional().default(4000),
+});
+
+const RECOVERY_META_MANUAL_SCHEMA = z.object({
+  format: z.enum(["typescript", "markdown", "json"]).optional(),
+  query: z.string().optional(),
+  actions: z.array(z.string()).optional(),
+  includeSchemas: z.boolean().optional(),
+  includeExamples: z.boolean().optional(),
+  detail: z.enum(["compact", "full"]).optional().default("compact"),
+});
+
+const RECOVERY_META_ACTION_SCHEMAS = [
+  ["action.search", RECOVERY_META_ACTION_SEARCH_SCHEMA],
+  ["info", InfoRequestSchema],
+  ["manual", RECOVERY_META_MANUAL_SCHEMA],
+  ["context", AgentContextRequestSchema],
+  ["file", FileGatewayRequestSchema],
+  ["retrieve", RetrieveRequestSchema],
+  ["workflow", WorkflowRequestSchema],
+] as const satisfies ReadonlyArray<
+  readonly [action: string, schema: z.ZodType]
+>;
+
+const META_RECOVERY_ACTION_DEFINITIONS: readonly RecoveryActionDefinition[] =
+  Object.freeze(
+    RECOVERY_META_ACTION_SCHEMAS.map(([action, schema]) =>
+      Object.freeze({
+        action,
+        fn: null,
+        toolName: `sdl.${action}`,
+        schema,
+        kind: "meta" as const,
       }),
     ),
   );
@@ -135,15 +195,6 @@ const INTERNAL_RECOVERY_ACTION_DEFINITIONS: readonly RecoveryActionDefinition[] 
     ),
   );
 
-const WORKFLOW_RECOVERY_ACTION_DEFINITION: RecoveryActionDefinition =
-  Object.freeze({
-    action: "workflow",
-    fn: "workflow",
-    toolName: "sdl.workflow",
-    schema: WorkflowRequestSchema,
-    kind: "meta",
-  });
-
 const RECOVERY_ACTION_DEFINITION_BY_ACTION: Readonly<
   Record<string, RecoveryActionDefinition>
 > = Object.freeze(
@@ -151,10 +202,17 @@ const RECOVERY_ACTION_DEFINITION_BY_ACTION: Readonly<
     [
       ...RECOVERY_GATEWAY_ACTION_DEFINITIONS,
       ...INTERNAL_RECOVERY_ACTION_DEFINITIONS,
-      WORKFLOW_RECOVERY_ACTION_DEFINITION,
+      ...META_RECOVERY_ACTION_DEFINITIONS,
     ].map((definition) => [definition.action, definition]),
   ),
 );
+
+const MEMORY_RECOVERY_FN_NAMES = new Set([
+  "memoryStore",
+  "memoryQuery",
+  "memoryRemove",
+  "memorySurface",
+]);
 
 /** Resolve canonical, flat-tool, and workflow-fn names without load-order state. */
 export function resolveRecoveryActionDefinition(
@@ -179,7 +237,12 @@ export function resolveRecoveryWorkflowFunction(
   if (!definition?.fn) return undefined;
 
   if (definition.kind === "gateway") {
-    return RECOVERY_FN_NAME_MAP[definition.fn] === definition.action
+    // Match the workflow executor's current availability rather than the
+    // release-static projection inventory used to describe result shapes.
+    const active =
+      !MEMORY_RECOVERY_FN_NAMES.has(definition.fn) ||
+      anyRepoHasMemoryTools(loadConfig());
+    return active && RECOVERY_FN_NAME_MAP[definition.fn] === definition.action
       ? definition.fn
       : undefined;
   }

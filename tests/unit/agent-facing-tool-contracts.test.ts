@@ -380,7 +380,9 @@ describe("agent-facing SDL tool contracts", () => {
     };
 
     const valid = await projectError(
-      createPolicyDenial("Use a cheaper context rung.", "requestSkeleton"),
+      createPolicyDenial("Use a cheaper context rung.", "requestSkeleton", {
+        requestSkeleton: { repoId: "repo-a", symbolId: "symbol-a" },
+      }),
     );
     const invalid = await projectError(
       Object.assign(new ValidationError("Safe validation failure."), {
@@ -392,12 +394,23 @@ describe("agent-facing SDL tool contracts", () => {
       {
         validNextBestAction: valid.nextBestAction,
         validFallbackTools: valid.fallbackTools,
+        validNextCalls: valid.nextCalls,
         validFallbackRationale: valid.fallbackRationale,
         invalidHasNextBestAction: Object.hasOwn(invalid, "nextBestAction"),
       },
       {
         validNextBestAction: "requestSkeleton",
-        validFallbackTools: ["sdl.code.getSkeleton"],
+        validFallbackTools: ["sdl.retrieve"],
+        validNextCalls: [
+          {
+            action: "sdl.retrieve",
+            args: {
+              args: { symbolId: "symbol-a" },
+              op: "codeSkeleton",
+              repoId: "repo-a",
+            },
+          },
+        ],
         validFallbackRationale:
           "Use a skeleton request first to stay on the context ladder.",
         invalidHasNextBestAction: false,

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import * as recoveryProjection from "../../dist/code-mode/action-reference-projection.js";
 import { ACTION_DEFINITION_BY_ACTION } from "../../dist/code-mode/action-catalog.js";
 import { parseWorkflowRequest } from "../../dist/code-mode/workflow-parser.js";
 import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
+import { getActiveFnNameMap } from "../../dist/code-mode/manual-generator.js";
+import {
+  PolicyDenialError,
+  errorToMcpResponse,
+} from "../../dist/mcp/errors.js";
 import {
   dispatchAction,
   type ActionMap,
@@ -537,6 +543,159 @@ describe("generated recovery validation", () => {
         jsonValuePrototypeIsDefault: true,
         inheritedPollution: undefined,
         ownProtoValue: { polluted: true },
+      },
+    );
+  });
+
+  it("accepts advertised meta recoveries when errors initializes the cold catalog", () => {
+    const script = `
+      import { resolve } from "node:path";
+      import { pathToFileURL } from "node:url";
+
+      const errorsUrl = pathToFileURL(resolve("dist/mcp/errors.js")).href;
+      const { PolicyDenialError, errorToMcpResponse } = await import(errorsUrl);
+      const error = new PolicyDenialError("denied");
+      error.nextCalls = [
+        { action: "sdl.action.search", args: { query: "repo" } },
+        { action: "sdl.info", args: { redactPaths: true } },
+        { action: "sdl.manual", args: {} },
+        {
+          action: "sdl.context",
+          args: {
+            repoId: "repo",
+            taskType: "explain",
+            taskText: "inspect",
+            budget: { maxTokens: 1000 },
+          },
+        },
+        {
+          action: "sdl.file",
+          args: { op: "read", repoId: "repo", filePath: "package.json" },
+        },
+        {
+          action: "sdl.retrieve",
+          args: {
+            op: "symbolSearch",
+            repoId: "repo",
+            args: { query: "target" },
+          },
+        },
+      ];
+      process.stdout.write(JSON.stringify(errorToMcpResponse(error)));
+    `;
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    assert.equal(child.status, 0, child.stderr);
+    const output = child.stdout.trim().split(/\r?\n/).at(-1);
+    assert.ok(output);
+    const response = JSON.parse(output) as {
+      error?: { nextCalls?: RecoveryCall[] };
+    };
+    assert.deepEqual(
+      response.error?.nextCalls?.map((call) => call.action),
+      [
+        "sdl.action.search",
+        "sdl.info",
+        "sdl.manual",
+        "sdl.context",
+        "sdl.file",
+        "sdl.retrieve",
+      ],
+    );
+  });
+
+  it("omits disabled workflow functions instead of emitting an unexecutable recovery", () => {
+    const activeFnNameMap = getActiveFnNameMap();
+    assert.equal(Object.hasOwn(activeFnNameMap, "memoryQuery"), false);
+
+    const result = recoveryBuilder()(
+      { action: "sdl.memory.query", args: { query: "target" } },
+      { repoId: "repo", advertisedTools: ["sdl.workflow"] },
+    );
+
+    assert.equal(result.nextAction, undefined);
+    assert.equal(result.invalidRecoveryCount, 1);
+  });
+
+  it("projects requestSkeleton guidance through the executable retrieve surface", () => {
+    const response = errorToMcpResponse(
+      new PolicyDenialError("denied", "requestSkeleton", {
+        requestSkeleton: { repoId: "repo", symbolId: "symbol" },
+      }),
+    ) as {
+      error?: {
+        nextBestAction?: string;
+        fallbackTools?: string[];
+        nextCalls?: RecoveryCall[];
+      };
+    };
+
+    assert.deepEqual(
+      {
+        nextBestAction: response.error?.nextBestAction,
+        fallbackTools: response.error?.fallbackTools,
+        nextCalls: response.error?.nextCalls,
+      },
+      {
+        nextBestAction: "requestSkeleton",
+        fallbackTools: ["sdl.retrieve"],
+        nextCalls: [
+          {
+            action: "sdl.retrieve",
+            args: {
+              args: { symbolId: "symbol" },
+              op: "codeSkeleton",
+              repoId: "repo",
+            },
+          },
+        ],
+      },
+    );
+  });
+
+  it("ignores inherited policy guidance properties", () => {
+    const error = new PolicyDenialError("denied");
+    const mutableError = error as unknown as Record<string, unknown>;
+    delete mutableError.nextBestAction;
+    delete mutableError.requiredFieldsForNext;
+    Object.setPrototypeOf(
+      error,
+      Object.assign(Object.create(PolicyDenialError.prototype), {
+        nextBestAction: "requestSkeleton",
+        requiredFieldsForNext: {
+          requestSkeleton: { repoId: "repo", symbolId: "symbol" },
+        },
+      }),
+    );
+
+    const response = errorToMcpResponse(error) as {
+      error?: {
+        nextBestAction?: string;
+        requiredFieldsForNext?: unknown;
+        fallbackTools?: string[];
+        nextCalls?: RecoveryCall[];
+      };
+    };
+
+    assert.deepEqual(
+      {
+        nextBestAction: response.error?.nextBestAction,
+        requiredFieldsForNext: response.error?.requiredFieldsForNext,
+        fallbackTools: response.error?.fallbackTools,
+        nextCalls: response.error?.nextCalls,
+      },
+      {
+        nextBestAction: undefined,
+        requiredFieldsForNext: undefined,
+        fallbackTools: undefined,
+        nextCalls: undefined,
       },
     );
   });

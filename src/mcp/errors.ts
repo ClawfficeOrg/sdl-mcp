@@ -4,7 +4,10 @@ import {
   isPolicyNextBestAction,
   RECOVERY_DEFAULT_MAX_BYTES,
 } from "./response-projection/recovery.js";
-import { FLAT_RECOVERY_TOOL_NAMES } from "./response-projection/registry.js";
+import {
+  FLAT_RECOVERY_TOOL_NAMES,
+  getRecoverySurfaceToolNames,
+} from "./response-projection/registry.js";
 
 // Re-export domain error types for backward compatibility
 export {
@@ -125,23 +128,6 @@ function defaultRetryable(code?: string): boolean | undefined {
   }
 }
 
-function fallbackToolsForNextAction(nextBestAction?: NextBestAction): string[] | undefined {
-  switch (nextBestAction) {
-    case "requestSkeleton":
-      return ["sdl.code.getSkeleton"];
-    case "requestHotPath":
-      return ["sdl.code.getHotPath"];
-    case "refreshSlice":
-      return ["sdl.slice.refresh"];
-    case "buildSlice":
-      return ["sdl.slice.build"];
-    case "retryWithSameInputs":
-      return ["sdl.code.needWindow"];
-    default:
-      return undefined;
-  }
-}
-
 function fallbackRationaleForNextAction(nextBestAction?: NextBestAction): string | undefined {
   switch (nextBestAction) {
     case "requestSkeleton":
@@ -166,6 +152,70 @@ function ownString(
   return Object.hasOwn(value, key) && typeof value[key] === "string"
     ? value[key]
     : undefined;
+}
+
+interface ValidatedPolicyGuidance {
+  nextBestAction: NextBestAction;
+  requiredFieldsForNext: RequiredFieldsForNext;
+  nextCall: { action: string; args: Record<string, unknown> };
+}
+
+function ownRecord(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): Readonly<Record<string, unknown>> | undefined {
+  if (!Object.hasOwn(value, key)) return undefined;
+  const candidate = value[key];
+  return typeof candidate === "object" &&
+    candidate !== null &&
+    !Array.isArray(candidate)
+    ? (candidate as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+function validatePolicyGuidance(
+  policyError: Readonly<Record<string, unknown>>,
+): ValidatedPolicyGuidance | undefined {
+  const nextBestAction = ownString(policyError, "nextBestAction");
+  if (!isPolicyNextBestAction(nextBestAction)) return undefined;
+
+  const requiredFields = ownRecord(policyError, "requiredFieldsForNext");
+  if (nextBestAction !== "requestSkeleton" || !requiredFields) {
+    return undefined;
+  }
+
+  const requestSkeleton = ownRecord(requiredFields, "requestSkeleton");
+  if (!requestSkeleton) return undefined;
+  const repoId = ownString(requestSkeleton, "repoId");
+  const symbolId = ownString(requestSkeleton, "symbolId");
+  if (!repoId || !symbolId) return undefined;
+
+  const validated = buildValidatedRecoveryAction(
+    {
+      action: "sdl.retrieve",
+      args: {
+        repoId,
+        op: "codeSkeleton",
+        args: { symbolId },
+      },
+    },
+    {
+      repoId,
+      advertisedTools: getRecoverySurfaceToolNames(true),
+    },
+  );
+  if (!validated.nextAction) return undefined;
+
+  return {
+    nextBestAction,
+    requiredFieldsForNext: {
+      requestSkeleton: { repoId, symbolId },
+    },
+    nextCall: {
+      action: validated.nextAction.action,
+      args: { ...validated.nextAction.args },
+    },
+  };
 }
 
 function validateGeneratedRecoveryCalls(
@@ -241,12 +291,12 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
       detail.details = detailError.details;
     }
 
-    const policyError = error as Partial<PolicyDenialError>;
-    if (isPolicyNextBestAction(policyError.nextBestAction)) {
-      detail.nextBestAction = policyError.nextBestAction;
-    }
-    if (policyError.requiredFieldsForNext) {
-      detail.requiredFieldsForNext = policyError.requiredFieldsForNext;
+    const policyGuidance = validatePolicyGuidance(
+      error as unknown as Readonly<Record<string, unknown>>,
+    );
+    if (policyGuidance) {
+      detail.nextBestAction = policyGuidance.nextBestAction;
+      detail.requiredFieldsForNext = policyGuidance.requiredFieldsForNext;
     }
 
     const classifiedError = error as {
@@ -269,23 +319,36 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
     if (classifiedError.suggestedRetryDelayMs !== undefined) {
       detail.suggestedRetryDelayMs = classifiedError.suggestedRetryDelayMs;
     }
-    if (Array.isArray(classifiedError.fallbackTools)) {
+    if (
+      Object.hasOwn(classifiedError, "fallbackTools") &&
+      Array.isArray(classifiedError.fallbackTools)
+    ) {
       detail.fallbackTools = classifiedError.fallbackTools;
-    } else if (detail.nextBestAction) {
-      detail.fallbackTools = fallbackToolsForNextAction(detail.nextBestAction);
+    } else if (policyGuidance) {
+      detail.fallbackTools = [policyGuidance.nextCall.action];
     }
-    if (Array.isArray(classifiedError.nextCalls)) {
+    if (
+      Object.hasOwn(classifiedError, "nextCalls") &&
+      Array.isArray(classifiedError.nextCalls)
+    ) {
       const validatedNextCalls = validateGeneratedRecoveryCalls(
         classifiedError.nextCalls,
       );
       if (validatedNextCalls) {
         detail.nextCalls = validatedNextCalls;
       }
+    } else if (policyGuidance) {
+      detail.nextCalls = [policyGuidance.nextCall];
     }
-    if (classifiedError.fallbackRationale) {
+    if (
+      Object.hasOwn(classifiedError, "fallbackRationale") &&
+      typeof classifiedError.fallbackRationale === "string"
+    ) {
       detail.fallbackRationale = classifiedError.fallbackRationale;
-    } else if (detail.nextBestAction) {
-      detail.fallbackRationale = fallbackRationaleForNextAction(detail.nextBestAction);
+    } else if (policyGuidance) {
+      detail.fallbackRationale = fallbackRationaleForNextAction(
+        policyGuidance.nextBestAction,
+      );
     }
     if (Array.isArray(classifiedError.candidates)) {
       detail.candidates = classifiedError.candidates;
