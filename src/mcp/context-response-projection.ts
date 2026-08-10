@@ -8,6 +8,41 @@ import {
   getWorkflowChildAction,
 } from "./context-response-projection-registry.js";
 
+export {
+  ARTIFACT_HARD_MAX_BYTES,
+  ARTIFACT_PAGE_BYTES,
+  MODEL_VISIBLE_HARD_LIMIT_TOKENS,
+  OUTPUT_BUDGET_TOKEN_LIMITS,
+  getCombinedModelVisibleTokenLimit,
+  getOutputBudgetTokenLimit,
+} from "./response-projection/budgets.js";
+export {
+  buildStableObject,
+  compareDetailLevels,
+  filterDiagnosticFields,
+  isDefaultProjectionValue,
+  isDetailAtLeast,
+  isEmptyProjectionValue,
+  isNullishProjectionValue,
+} from "./response-projection/core.js";
+export {
+  measureProjectionPair,
+  measureProjectionValue,
+  serializeProjectionValue,
+} from "./response-projection/measure.js";
+export type {
+  DetailLevel,
+  LargeResponseStrategy,
+  ModelProjection,
+  ObservabilityProfileId,
+  OutputBudgetClass,
+  ProjectionProfile,
+  ProjectionRequestOptions,
+  ProjectionStats,
+  ProjectorId,
+  RecoveryPolicy,
+} from "./response-projection/types.js";
+
 type ProjectionDetail = "compact" | "standard" | "full";
 
 interface ModelContentProjectionOptions {
