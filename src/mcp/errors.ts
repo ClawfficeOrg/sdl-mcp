@@ -145,6 +145,10 @@ function fallbackRationaleForNextAction(nextBestAction?: NextBestAction): string
   }
 }
 
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function ownString(
   value: Readonly<Record<string, unknown>>,
   key: string,
@@ -166,11 +170,7 @@ function ownRecord(
 ): Readonly<Record<string, unknown>> | undefined {
   if (!Object.hasOwn(value, key)) return undefined;
   const candidate = value[key];
-  return typeof candidate === "object" &&
-    candidate !== null &&
-    !Array.isArray(candidate)
-    ? (candidate as Readonly<Record<string, unknown>>)
-    : undefined;
+  return isRecord(candidate) ? candidate : undefined;
 }
 
 function validatePolicyGuidance(
@@ -246,13 +246,7 @@ function validateGeneratedRecoveryCalls(
   const seenCalls = new Set<string>();
 
   for (const nextCall of nextCalls) {
-    if (
-      typeof nextCall !== "object" ||
-      nextCall === null ||
-      Array.isArray(nextCall)
-    ) {
-      continue;
-    }
+    if (!isRecord(nextCall)) continue;
     const args = ownRecord(nextCall, "args");
     if (!args) continue;
 

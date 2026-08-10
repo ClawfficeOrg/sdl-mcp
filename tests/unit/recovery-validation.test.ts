@@ -951,6 +951,43 @@ describe("generated recovery validation", () => {
     }
   });
 
+  it("projects a deeply nested flat exclusive envelope without replacing its typed error", () => {
+    let deepEnvelope: Record<string, unknown> = {
+      fallbackRationale: "Use sdl.symbol.search.",
+    };
+    for (let depth = 0; depth < 12_000; depth += 1) {
+      deepEnvelope = { error: deepEnvelope };
+    }
+
+    const typedError = Object.assign(
+      new PolicyDenialError("deep exclusive denial"),
+      { error: deepEnvelope },
+    );
+    const projected = recoveryProjection.projectExclusiveCodeModeRecovery(
+      { error: typedError },
+      "repo",
+    );
+
+    assert.equal(projected.error, typedError);
+    assert.equal(projected.error.message, "deep exclusive denial");
+
+    let current: unknown = projected.error.error;
+    for (let depth = 0; depth < 12_000; depth += 1) {
+      if (
+        typeof current !== "object" ||
+        current === null ||
+        Array.isArray(current)
+      ) {
+        assert.fail("missing projected error envelope at depth " + depth);
+      }
+      assert.equal(Object.hasOwn(current, "error"), true);
+      current = Reflect.get(current, "error");
+    }
+    assert.deepEqual(current, {
+      fallbackRationale: "Use sdl.retrieve op:\"symbolSearch\".",
+    });
+  });
+
   it("delivers only recoveries executable by the server's fixed workflow surface", async () => {
     const previousConfig = process.env.SDL_CONFIG;
     const previousConfigPath = process.env.SDL_CONFIG_PATH;
