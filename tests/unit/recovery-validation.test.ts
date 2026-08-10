@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import * as recoveryProjection from "../../dist/code-mode/action-reference-projection.js";
 import { ACTION_DEFINITION_BY_ACTION } from "../../dist/code-mode/action-catalog.js";
+import { registerCodeModeTools } from "../../dist/code-mode/index.js";
 import { parseWorkflowRequest } from "../../dist/code-mode/workflow-parser.js";
 import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
 import { getActiveFnNameMap } from "../../dist/code-mode/manual-generator.js";
@@ -951,7 +952,21 @@ describe("generated recovery validation", () => {
     }
   });
 
-  it("projects a deeply nested flat exclusive envelope without replacing its typed error", () => {
+  it("projects a deeply nested exclusive retrieve error without replacing its typed error", async () => {
+    type RegisteredCodeModeHandler = (args: unknown) => Promise<unknown>;
+
+    const registeredHandlers = new Map<string, RegisteredCodeModeHandler>();
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: z.ZodType,
+        handler: RegisteredCodeModeHandler,
+      ): void {
+        registeredHandlers.set(name, handler);
+      },
+    } as unknown as Parameters<typeof registerCodeModeTools>[0];
+
     let deepEnvelope: Record<string, unknown> = {
       fallbackRationale: "Use sdl.symbol.search.",
     };
@@ -963,15 +978,53 @@ describe("generated recovery validation", () => {
       new PolicyDenialError("deep exclusive denial"),
       { error: deepEnvelope },
     );
-    const projected = recoveryProjection.projectExclusiveCodeModeRecovery(
-      { error: typedError },
-      "repo",
+    let registeredExclusiveRetrieveInvocations = 0;
+    const definition = ACTION_DEFINITION_BY_ACTION["symbol.search"];
+    assert.ok(definition);
+    const actionMap: ActionMap = {
+      "symbol.search": {
+        schema: definition.schema,
+        definition,
+        handler: async () => {
+          registeredExclusiveRetrieveInvocations += 1;
+          throw typedError;
+        },
+      },
+    };
+
+    registerCodeModeTools(
+      fakeServer,
+      { actionAvailability: { memoryTools: false, infoTool: true } },
+      {
+        enabled: true,
+        exclusive: true,
+        maxWorkflowSteps: 20,
+        maxWorkflowTokens: 50_000,
+        maxWorkflowDurationMs: 30_000,
+        ladderValidation: "warn",
+        etagCaching: true,
+      },
+      actionMap,
     );
+    const retrieveHandler = registeredHandlers.get("sdl.retrieve");
+    assert.ok(retrieveHandler);
 
-    assert.equal(projected.error, typedError);
-    assert.equal(projected.error.message, "deep exclusive denial");
+    let deliveredError: unknown;
+    try {
+      await retrieveHandler({
+        op: "symbolSearch",
+        repoId: "repo",
+        args: { query: "missing" },
+      });
+    } catch (error) {
+      deliveredError = error;
+    }
 
-    let current: unknown = projected.error.error;
+    assert.equal(registeredExclusiveRetrieveInvocations, 1);
+    assert.equal(deliveredError, typedError);
+    assert.equal(typedError.message, "deep exclusive denial");
+
+    let current: unknown = typedError.error;
     for (let depth = 0; depth < 12_000; depth += 1) {
       if (
         typeof current !== "object" ||
