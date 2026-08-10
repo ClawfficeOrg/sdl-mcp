@@ -235,12 +235,7 @@ function filterAdvertisedFallbackTools(
 }
 
 function validateGeneratedRecoveryCalls(
-  nextCalls: Array<{
-    action?: string;
-    tool?: string;
-    id?: string;
-    args: Record<string, unknown>;
-  }>,
+  nextCalls: readonly unknown[],
   advertisedTools: readonly string[],
   activeWorkflowFunctions?: readonly string[],
 ): Array<{ action: string; args: Record<string, unknown> }> | undefined {
@@ -251,11 +246,17 @@ function validateGeneratedRecoveryCalls(
   const seenCalls = new Set<string>();
 
   for (const nextCall of nextCalls) {
-    const repoId =
-      Object.hasOwn(nextCall.args, "repoId") &&
-      typeof nextCall.args.repoId === "string"
-        ? nextCall.args.repoId
-        : undefined;
+    if (
+      typeof nextCall !== "object" ||
+      nextCall === null ||
+      Array.isArray(nextCall)
+    ) {
+      continue;
+    }
+    const args = ownRecord(nextCall, "args");
+    if (!args) continue;
+
+    const repoId = ownString(args, "repoId");
     const actionName =
       ownString(nextCall, "action") ??
       ownString(nextCall, "tool") ??
@@ -266,12 +267,12 @@ function validateGeneratedRecoveryCalls(
     const continuation =
       canonicalAction === "response.get"
         ? {
-            ...(typeof nextCall.args.handle === "string"
-              ? { handle: nextCall.args.handle }
+            ...(typeof args.handle === "string"
+              ? { handle: args.handle }
               : {}),
             maxBytes:
-              typeof nextCall.args.maxBytes === "number"
-                ? nextCall.args.maxBytes
+              typeof args.maxBytes === "number"
+                ? args.maxBytes
                 : RECOVERY_DEFAULT_MAX_BYTES,
           }
         : undefined;

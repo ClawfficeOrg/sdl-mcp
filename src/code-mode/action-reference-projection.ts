@@ -41,6 +41,7 @@ const EXCLUSIVE_RECOVERY_TOOL_SET = new Set<string>(
 
 const RECOVERY_TEXT_FIELDS = ["fallbackRationale", "downgradeGuidance"] as const;
 const RECOVERY_TEXT_ARRAY_FIELDS = ["whyDenied", "warnings"] as const;
+const MAX_RECOVERY_PROJECTION_RECORDS = 16_384;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -237,159 +238,188 @@ function projectRecoveryValue<T>(
 ): T {
   if (!isRecord(value)) return value;
 
-  const projected: Record<string, unknown> =
-    value instanceof Error ? value : copyRecord(value);
-  const failedCall = failedCallFromTrace(
-    projected,
-    fallbackRepoId,
+  const projectedBySource = new WeakMap<
+    Readonly<Record<string, unknown>>,
+    Record<string, unknown>
+  >();
+  const pendingFrames: Array<{
+    projected: Record<string, unknown>;
+    inheritedFailedCall: RecoveryActionCall | undefined;
+  }> = [];
+
+  // Materialize each reachable record once so deep envelopes and cycles never
+  // consume the JavaScript call stack. Error objects stay identity-preserving.
+  const enqueueProjection = (
+    candidate: unknown,
+    failedCall: RecoveryActionCall | undefined,
+  ): unknown => {
+    if (!isRecord(candidate)) return candidate;
+
+    const existing = projectedBySource.get(candidate);
+    if (existing) return existing;
+    // Omit excess branches instead of doing unbounded recovery work.
+    if (pendingFrames.length >= MAX_RECOVERY_PROJECTION_RECORDS) {
+      return undefined;
+    }
+
+    const projected: Record<string, unknown> =
+      candidate instanceof Error ? candidate : copyRecord(candidate);
+    projectedBySource.set(candidate, projected);
+    pendingFrames.push({
+      projected,
+      inheritedFailedCall: failedCall,
+    });
+    return projected;
+  };
+
+  const projectedRoot = enqueueProjection(
+    value,
     inheritedFailedCall,
-  );
+  ) as Record<string, unknown>;
 
-  if (
-    Object.hasOwn(projected, "message") &&
-    typeof projected.message === "string"
+  for (
+    let nextFrame = 0;
+    nextFrame < pendingFrames.length;
+    nextFrame += 1
   ) {
-    projected.message = rewriteRecoveryText(projected.message);
-  }
-
-  for (const field of RECOVERY_TEXT_FIELDS) {
-    if (
-      Object.hasOwn(projected, field) &&
-      typeof projected[field] === "string"
-    ) {
-      projected[field] = rewriteRecoveryText(projected[field]);
-    }
-  }
-  for (const field of RECOVERY_TEXT_ARRAY_FIELDS) {
-    if (
-      Object.hasOwn(projected, field) &&
-      Array.isArray(projected[field])
-    ) {
-      projected[field] = projected[field].map((item) =>
-        typeof item === "string" ? rewriteRecoveryText(item) : item,
-      );
-    }
-  }
-
-  if (
-    Object.hasOwn(projected, "fallbackTools") &&
-    Array.isArray(projected.fallbackTools)
-  ) {
-    projected.fallbackTools = [
-      ...new Set(projected.fallbackTools.map(projectFallbackTool)),
-    ];
-  }
-
-  if (
-    Object.hasOwn(projected, "nextAction") &&
-    projected.nextAction !== undefined
-  ) {
-    const nextAction = projectNextAction(
-      projected.nextAction,
+    const frame = pendingFrames[nextFrame];
+    if (!frame) continue;
+    const projected = frame.projected;
+    const failedCall = failedCallFromTrace(
+      projected,
       fallbackRepoId,
-      failedCall,
+      frame.inheritedFailedCall,
     );
-    if (nextAction === undefined) {
-      delete projected.nextAction;
-    } else {
-      projected.nextAction = nextAction;
-    }
-  }
 
-  if (
-    Object.hasOwn(projected, "nextBestAction") &&
-    projected.nextBestAction !== undefined &&
-    !isPolicyNextBestAction(projected.nextBestAction)
-  ) {
-    const nextBestAction = projectNextAction(
-      projected.nextBestAction,
-      fallbackRepoId,
-      failedCall,
-    );
-    if (nextBestAction === undefined) {
-      delete projected.nextBestAction;
-    } else {
-      projected.nextBestAction = nextBestAction;
+    if (
+      Object.hasOwn(projected, "message") &&
+      typeof projected.message === "string"
+    ) {
+      projected.message = rewriteRecoveryText(projected.message);
     }
-  }
-
-  if (
-    Object.hasOwn(projected, "nextCalls") &&
-    Array.isArray(projected.nextCalls)
-  ) {
-    const nextCalls = projected.nextCalls
-      .map((nextCall) =>
-        projectNextAction(nextCall, fallbackRepoId, failedCall, true),
-      )
-      .filter((nextCall) => nextCall !== undefined);
-    if (nextCalls.length === 0) {
-      delete projected.nextCalls;
-    } else {
-      projected.nextCalls = nextCalls;
+    for (const field of RECOVERY_TEXT_FIELDS) {
+      if (
+        Object.hasOwn(projected, field) &&
+        typeof projected[field] === "string"
+      ) {
+        projected[field] = rewriteRecoveryText(projected[field]);
+      }
     }
-  }
+    for (const field of RECOVERY_TEXT_ARRAY_FIELDS) {
+      if (
+        Object.hasOwn(projected, field) &&
+        Array.isArray(projected[field])
+      ) {
+        projected[field] = projected[field].map((item) =>
+          typeof item === "string" ? rewriteRecoveryText(item) : item,
+        );
+      }
+    }
 
-  if (
-    Object.hasOwn(projected, "results") &&
-    Array.isArray(projected.results)
-  ) {
-    projected.results = projected.results.map((result) =>
-      projectRecoveryValue(result, fallbackRepoId, failedCall),
-    );
-  }
-  for (const field of ["result", "failureTrace"] as const) {
-    if (Object.hasOwn(projected, field) && projected[field] !== undefined) {
-      projected[field] = projectRecoveryValue(
-        projected[field],
+    if (
+      Object.hasOwn(projected, "fallbackTools") &&
+      Array.isArray(projected.fallbackTools)
+    ) {
+      projected.fallbackTools = [
+        ...new Set(projected.fallbackTools.map(projectFallbackTool)),
+      ];
+    }
+
+    if (
+      Object.hasOwn(projected, "nextAction") &&
+      projected.nextAction !== undefined
+    ) {
+      const nextAction = projectNextAction(
+        projected.nextAction,
         fallbackRepoId,
         failedCall,
       );
+      if (nextAction === undefined) {
+        delete projected.nextAction;
+      } else {
+        projected.nextAction = nextAction;
+      }
+    }
+
+    if (
+      Object.hasOwn(projected, "nextBestAction") &&
+      projected.nextBestAction !== undefined &&
+      !isPolicyNextBestAction(projected.nextBestAction)
+    ) {
+      const nextBestAction = projectNextAction(
+        projected.nextBestAction,
+        fallbackRepoId,
+        failedCall,
+      );
+      if (nextBestAction === undefined) {
+        delete projected.nextBestAction;
+      } else {
+        projected.nextBestAction = nextBestAction;
+      }
+    }
+
+    if (
+      Object.hasOwn(projected, "nextCalls") &&
+      Array.isArray(projected.nextCalls)
+    ) {
+      const nextCalls = projected.nextCalls
+        .map((nextCall) =>
+          projectNextAction(nextCall, fallbackRepoId, failedCall, true),
+        )
+        .filter((nextCall) => nextCall !== undefined);
+      if (nextCalls.length === 0) {
+        delete projected.nextCalls;
+      } else {
+        projected.nextCalls = nextCalls;
+      }
+    }
+
+    if (
+      Object.hasOwn(projected, "results") &&
+      Array.isArray(projected.results)
+    ) {
+      projected.results = projected.results.map((result) =>
+        enqueueProjection(result, failedCall),
+      );
+    }
+    for (const field of ["result", "failureTrace"] as const) {
+      if (Object.hasOwn(projected, field) && projected[field] !== undefined) {
+        projected[field] = enqueueProjection(projected[field], failedCall);
+      }
+    }
+    if (
+      Object.hasOwn(projected, "details") &&
+      isRecord(projected.details)
+    ) {
+      projected.details = enqueueProjection(projected.details, failedCall);
+    }
+    if (
+      Object.hasOwn(projected, "data") &&
+      Array.isArray(projected.data)
+    ) {
+      projected.data = projected.data.map((item) =>
+        enqueueProjection(item, failedCall),
+      );
+    } else if (
+      Object.hasOwn(projected, "data") &&
+      isRecord(projected.data)
+    ) {
+      projected.data = enqueueProjection(projected.data, failedCall);
+    }
+    if (
+      Object.hasOwn(projected, "error") &&
+      typeof projected.error === "string"
+    ) {
+      projected.error = rewriteRecoveryText(projected.error);
+    } else if (
+      Object.hasOwn(projected, "error") &&
+      projected.error !== undefined
+    ) {
+      projected.error = enqueueProjection(projected.error, failedCall);
     }
   }
-  if (
-    Object.hasOwn(projected, "details") &&
-    isRecord(projected.details)
-  ) {
-    projected.details = projectRecoveryValue(
-      projected.details,
-      fallbackRepoId,
-      failedCall,
-    );
-  }
-  if (
-    Object.hasOwn(projected, "data") &&
-    Array.isArray(projected.data)
-  ) {
-    projected.data = projected.data.map((item) =>
-      projectRecoveryValue(item, fallbackRepoId, failedCall),
-    );
-  } else if (
-    Object.hasOwn(projected, "data") &&
-    isRecord(projected.data)
-  ) {
-    projected.data = projectRecoveryValue(
-      projected.data,
-      fallbackRepoId,
-      failedCall,
-    );
-  }
-  if (
-    Object.hasOwn(projected, "error") &&
-    typeof projected.error === "string"
-  ) {
-    projected.error = rewriteRecoveryText(projected.error);
-  } else if (
-    Object.hasOwn(projected, "error") &&
-    projected.error !== undefined
-  ) {
-    projected.error = projectRecoveryValue(
-      projected.error,
-      fallbackRepoId,
-      failedCall,
-    );
-  }
 
-  return projected as T;
+  return projectedRoot as T;
 }
 
 /**

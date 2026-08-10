@@ -13,6 +13,8 @@ import type {
 } from "./types.js";
 
 const MAX_RECOVERY_BYTES = 32 * 1024;
+const MAX_RECOVERY_DEPTH = 256;
+const MAX_RECOVERY_NODES = 10_000;
 export const RECOVERY_DEFAULT_MAX_BYTES = 8192;
 const RECOVERY_METADATA_FIELDS = new Set([
   "action",
@@ -51,12 +53,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function containsCyclicReference(root: unknown): boolean {
+function recoveryStructureProblem(root: unknown): string | undefined {
   const visiting = new WeakSet<object>();
-  const visited = new WeakSet<object>();
-  const stack: Array<{ value: unknown; exiting: boolean }> = [
-    { value: root, exiting: false },
+  const stack: Array<{ value: unknown; exiting: boolean; depth: number }> = [
+    { value: root, exiting: false, depth: 0 },
   ];
+  let visitedNodes = 0;
 
   while (stack.length > 0) {
     const frame = stack.pop();
@@ -67,25 +69,33 @@ function containsCyclicReference(root: unknown): boolean {
     }
     if (frame.exiting) {
       visiting.delete(value);
-      visited.add(value);
       continue;
+    }
+    if (frame.depth > MAX_RECOVERY_DEPTH) {
+      return "exceeds the maximum nesting depth";
     }
     if (visiting.has(value)) {
-      return true;
+      return "contains a cyclic reference";
     }
-    if (visited.has(value)) {
-      continue;
+
+    visitedNodes += 1;
+    if (visitedNodes > MAX_RECOVERY_NODES) {
+      return "exceeds the maximum structural complexity";
     }
 
     visiting.add(value);
-    stack.push({ value, exiting: true });
+    stack.push({ value, exiting: true, depth: frame.depth });
     const children = Object.values(value);
     for (let index = children.length - 1; index >= 0; index -= 1) {
-      stack.push({ value: children[index], exiting: false });
+      stack.push({
+        value: children[index],
+        exiting: false,
+        depth: frame.depth + 1,
+      });
     }
   }
 
-  return false;
+  return undefined;
 }
 
 function ownString(
@@ -119,19 +129,80 @@ export function isPolicyNextBestAction(
   );
 }
 
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableValue);
+type StableContainer = unknown[] | Record<string, unknown>;
+
+function isStableContainer(value: unknown): value is StableContainer {
+  return Array.isArray(value) || isRecord(value);
+}
+
+function createStableContainer(value: StableContainer): StableContainer {
+  return Array.isArray(value) ? new Array<unknown>(value.length) : {};
+}
+
+function stableContainerKeys(value: StableContainer): string[] {
+  if (!Array.isArray(value)) return Object.keys(value).sort();
+
+  const keys: string[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (index in value) keys.push(String(index));
   }
-  if (!isRecord(value)) {
-    return value;
+  return keys;
+}
+
+function stableValue(value: unknown): unknown {
+  if (!isStableContainer(value)) return value;
+
+  const stableRoot = createStableContainer(value);
+  const stack: Array<{
+    source: StableContainer;
+    target: StableContainer;
+    keys: string[];
+    nextKey: number;
+  }> = [
+    {
+      source: value,
+      target: stableRoot,
+      keys: stableContainerKeys(value),
+      nextKey: 0,
+    },
+  ];
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (!frame) break;
+    if (frame.nextKey >= frame.keys.length) {
+      stack.pop();
+      continue;
+    }
+
+    const key = frame.keys[frame.nextKey];
+    frame.nextKey += 1;
+    if (key === undefined) continue;
+
+    const child = Array.isArray(frame.source)
+      ? frame.source[Number(key)]
+      : frame.source[key];
+    const stableChild = isStableContainer(child)
+      ? createStableContainer(child)
+      : child;
+
+    if (Array.isArray(frame.target)) {
+      frame.target[Number(key)] = stableChild;
+    } else {
+      defineOwn(frame.target, key, stableChild);
+    }
+
+    if (isStableContainer(child) && isStableContainer(stableChild)) {
+      stack.push({
+        source: child,
+        target: stableChild,
+        keys: stableContainerKeys(child),
+        nextKey: 0,
+      });
+    }
   }
 
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, stableValue(value[key])]),
-  );
+  return stableRoot;
 }
 
 function stableRecord(value: Readonly<Record<string, unknown>>): Record<string, unknown> {
@@ -377,13 +448,15 @@ export function buildValidatedRecoveryAction(
   candidate: unknown,
   context: RecoveryValidationContext,
 ): RecoveryBuildResult {
-  // Guard every recursive canonicalization path before generated data can
-  // replace the original safe error at the MCP delivery boundary.
-  if (containsCyclicReference(candidate)) {
-    return invalidRecovery("candidate contains a cyclic reference");
+  // Bound generated structures before canonicalization, schema parsing, or
+  // serialization can replace the original safe error at the delivery boundary.
+  const candidateProblem = recoveryStructureProblem(candidate);
+  if (candidateProblem) {
+    return invalidRecovery(`candidate ${candidateProblem}`);
   }
-  if (containsCyclicReference(context.failedCall)) {
-    return invalidRecovery("failed call contains a cyclic reference");
+  const failedCallProblem = recoveryStructureProblem(context.failedCall);
+  if (failedCallProblem) {
+    return invalidRecovery(`failed call ${failedCallProblem}`);
   }
 
   const extracted = extractCandidate(candidate);

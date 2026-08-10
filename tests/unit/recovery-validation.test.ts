@@ -819,6 +819,138 @@ describe("generated recovery validation", () => {
     }
   });
 
+  it("omits malformed and deeply nested recoveries while preserving typed delivery errors", async () => {
+    const server = new MCPServer();
+    registerTools(server, {
+      actionAvailability: { memoryTools: false, infoTool: true },
+    });
+
+    let thrownError = new PolicyDenialError("uninitialized recovery denial");
+    server.registerTool(
+      "sdl.repo.status",
+      "Throw a structurally invalid recovery-bearing test error.",
+      z.object({}),
+      async () => {
+        throw thrownError;
+      },
+    );
+
+    const inheritedArgs = Object.create({
+      args: {},
+    }) as Record<string, unknown>;
+    inheritedArgs.action = "sdl.info";
+
+    let deepJsonValue: Record<string, unknown> = {
+      detail: "deep-recovery",
+    };
+    for (let depth = 0; depth < 12_000; depth += 1) {
+      deepJsonValue = { value: deepJsonValue };
+    }
+
+    let deepEnvelope: Record<string, unknown> = {
+      fallbackRationale: "Use sdl.symbol.search.",
+    };
+    for (let depth = 0; depth < 12_000; depth += 1) {
+      deepEnvelope = { error: deepEnvelope };
+    }
+
+    const cases: Array<{
+      label: string;
+      error: PolicyDenialError;
+    }> = [
+      {
+        label: "null entry",
+        error: Object.assign(new PolicyDenialError("null entry denial"), {
+          nextCalls: [null],
+        }),
+      },
+      {
+        label: "missing args",
+        error: Object.assign(new PolicyDenialError("missing args denial"), {
+          nextCalls: [{ action: "sdl.info" }],
+        }),
+      },
+      {
+        label: "null args",
+        error: Object.assign(new PolicyDenialError("null args denial"), {
+          nextCalls: [{ action: "sdl.info", args: null }],
+        }),
+      },
+      {
+        label: "inherited args",
+        error: Object.assign(new PolicyDenialError("inherited args denial"), {
+          nextCalls: [inheritedArgs],
+        }),
+      },
+      {
+        label: "deep args",
+        error: Object.assign(new PolicyDenialError("deep args denial"), {
+          nextCalls: [
+            {
+              action: "sdl.file.write",
+              args: {
+                repoId: "repo",
+                filePath: "fixture.json",
+                jsonPath: "payload",
+                jsonValue: deepJsonValue,
+                createBackup: false,
+              },
+            },
+          ],
+        }),
+      },
+      {
+        label: "deep envelope",
+        error: Object.assign(new PolicyDenialError("deep envelope denial"), {
+          error: deepEnvelope,
+        }),
+      },
+    ];
+
+    const client = new Client({
+      name: "structurally-invalid-recovery-test",
+      version: "1.0.0",
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      for (const testCase of cases) {
+        thrownError = testCase.error;
+        const response = (await client.callTool({
+          name: "sdl.repo.status",
+          arguments: {},
+        })) as {
+          isError?: boolean;
+          structuredContent?: {
+            error?: {
+              code?: string;
+              message?: string;
+              nextCalls?: RecoveryCall[];
+            };
+          };
+        };
+        const detail = response.structuredContent?.error;
+
+        assert.equal(response.isError, true, testCase.label);
+        assert.equal(detail?.code, "POLICY_ERROR", testCase.label);
+        assert.equal(
+          detail?.message,
+          `${testCase.label} denial`,
+          testCase.label,
+        );
+        assert.equal(detail?.nextCalls, undefined, testCase.label);
+      }
+    } finally {
+      await client.close();
+      await server.stop();
+    }
+  });
+
   it("delivers only recoveries executable by the server's fixed workflow surface", async () => {
     const previousConfig = process.env.SDL_CONFIG;
     const previousConfigPath = process.env.SDL_CONFIG_PATH;
