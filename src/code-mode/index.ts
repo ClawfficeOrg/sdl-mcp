@@ -15,8 +15,13 @@ import {
   assertWorkflowProjectionBindings,
 } from "../mcp/response-projection/registry.js";
 import {
+  ProjectionRequestOptionShape,
+  withProjectionRequestOptions,
+  withProjectionRequestOptionsJsonSchema,
+} from "../mcp/response-projection/request-options.js";
+import {
   FileGatewayOutputSchema,
-  FileGatewayRequestSchema,
+  FileGatewayRequestSchema as FileGatewayDomainRequestSchema,
   handleFileGateway,
 } from "../mcp/tools/file-gateway.js";
 import type { MCPServer, ToolContext } from "../server.js";
@@ -27,7 +32,6 @@ import {
   buildCatalog,
   getProjectionCatalogActions,
   rankCatalog,
-  META_ACTION_SEARCH_SCHEMA,
   type ActionCatalogEntry,
   type SchemaSummaryField,
 } from "./action-catalog.js";
@@ -44,7 +48,7 @@ import {
   buildRetrieveWireSchema,
   handleRetrieve,
   RetrieveOutputSchema,
-  RetrieveRequestSchema,
+  RetrieveRequestSchema as RetrieveDomainRequestSchema,
 } from "./retrieve.js";
 import { executeWorkflow } from "./workflow-executor.js";
 import {
@@ -59,6 +63,13 @@ import {
   WorkflowRequestSchema,
   WorkflowTraceOptionsSchema,
 } from "./types.js";
+
+const RetrieveRequestSchema = withProjectionRequestOptions(
+  RetrieveDomainRequestSchema,
+);
+const FileGatewayRequestSchema = withProjectionRequestOptions(
+  FileGatewayDomainRequestSchema,
+);
 
 const TRANSFORM_HINT =
   '\n\n> **Tip:** Data transforms (dataPick, dataMap, dataFilter, dataSort, dataTemplate) are available as sdl.workflow steps. Use sdl.manual({ actions: ["dataPick", "dataMap", "dataFilter", "dataSort", "dataTemplate"] }) for schemas.';
@@ -92,7 +103,7 @@ function buildFullSchemaNextAction(actions: readonly string[]): object | undefin
   };
 }
 
-export const ActionSearchRequestSchema = z.object({
+const ActionSearchDomainRequestSchema = z.object({
   query: z.string().min(1),
   limit: z
     .number()
@@ -107,18 +118,31 @@ export const ActionSearchRequestSchema = z.object({
   /** When true, return only counts and categories instead of full action details */
   summaryOnly: z.boolean().default(false),
   excludeDisabled: z.boolean().default(false),
-  detail: z.enum(["compact", "full"]).optional().default("compact"),
+  detail: ProjectionRequestOptionShape.detail.default("compact"),
   maxTokens: z.number().int().min(500).max(32000).default(4000),
 });
 
-export const ManualRequestSchema = z.object({
+export const ActionSearchRequestSchema = withProjectionRequestOptions(
+  ActionSearchDomainRequestSchema,
+);
+const WorkflowActionSearchRequestSchema = withProjectionRequestOptions(
+  ActionSearchDomainRequestSchema.partial().safeExtend({
+    query: ActionSearchDomainRequestSchema.shape.query,
+  }),
+);
+
+const ManualDomainRequestSchema = z.object({
   query: z.string().min(1).optional(),
   actions: z.array(z.string().min(1)).optional(),
   format: z.enum(["typescript", "markdown", "json"]).default("typescript"),
   includeSchemas: z.boolean().default(false),
   includeExamples: z.boolean().default(false),
-  detail: z.enum(["compact", "full"]).optional().default("compact"),
+  detail: ProjectionRequestOptionShape.detail.default("compact"),
 });
+
+export const ManualRequestSchema = withProjectionRequestOptions(
+  ManualDomainRequestSchema,
+);
 
 export function handleActionSearch(
   rawArgs: unknown,
@@ -147,7 +171,7 @@ export function handleActionSearch(
     infoVisible: services.actionAvailability?.infoTool !== false,
     includeSchemas: effectiveIncludeSchemas,
     includeExamples: effectiveIncludeExamples,
-    detail: args.detail,
+    detail: args.detail === "compact" ? "compact" : "full",
   });
 
   let allRanked = rankCatalog(catalog, trimmed);
@@ -284,7 +308,7 @@ export function handleManual(
     infoVisible: services.actionAvailability?.infoTool !== false,
     includeSchemas,
     includeExamples,
-    detail: args.detail,
+    detail: args.detail === "compact" ? "compact" : "full",
   });
   let catalog = fullCatalog.filter((entry) => !entry.disabled);
   let unknownActions: string[] = [];
@@ -419,7 +443,7 @@ export function registerActionSearchTool(
     ACTION_SEARCH_DESCRIPTION,
     ActionSearchRequestSchema,
     async (rawArgs: unknown) => handleActionSearch(rawArgs, services),
-    {
+    withProjectionRequestOptionsJsonSchema({
       type: "object",
       properties: {
         query: { type: "string", minLength: 1 },
@@ -435,16 +459,10 @@ export function registerActionSearchTool(
           type: "boolean",
           description: "Hide disabled actions from results",
         },
-        detail: {
-          type: "string",
-          enum: ["compact", "full"],
-          default: "compact",
-          description: "Schema detail: compact is shallow; full includes nested fields",
-        },
       },
       required: ["query"],
       additionalProperties: false,
-    },
+    }, ActionSearchRequestSchema),
     undefined,
     ACTION_SEARCH_OUTPUT_SCHEMA,
   );
@@ -481,7 +499,7 @@ export function registerCodeModeTools(
   const workflowActionMap: ActionMap = {
     ...actionMap,
     "action.search": {
-      schema: META_ACTION_SEARCH_SCHEMA,
+      schema: WorkflowActionSearchRequestSchema,
       handler: async (args: unknown) => handleActionSearch(args, services),
     },
   };
@@ -491,7 +509,7 @@ export function registerCodeModeTools(
     MANUAL_DESCRIPTION,
     ManualRequestSchema,
     async (rawArgs: unknown) => handleManual(rawArgs, services),
-    {
+    withProjectionRequestOptionsJsonSchema({
       type: "object",
       properties: {
         query: { type: "string" },
@@ -499,15 +517,9 @@ export function registerCodeModeTools(
         format: { type: "string", enum: ["typescript", "markdown", "json"] },
         includeSchemas: { type: "boolean" },
         includeExamples: { type: "boolean" },
-        detail: {
-          type: "string",
-          enum: ["compact", "full"],
-          default: "compact",
-          description: "Schema detail: compact is shallow; full includes nested fields",
-        },
       },
       additionalProperties: false,
-    },
+    }, ManualRequestSchema),
     undefined,
     MANUAL_OUTPUT_SCHEMA,
   );
@@ -522,7 +534,10 @@ export function registerCodeModeTools(
         () => handleRetrieve(rawArgs, actionMap, context),
         rawArgs,
       ),
-    buildRetrieveWireSchema(actionMap),
+    withProjectionRequestOptionsJsonSchema(
+      buildRetrieveWireSchema(actionMap),
+      RetrieveRequestSchema,
+    ),
     undefined,
     RetrieveOutputSchema,
   );
@@ -556,8 +571,13 @@ export function registerCodeModeTools(
             config,
             context,
             traceOpts,
-            (fn, result, args) =>
-              projectWorkflowChildResultForModel(fn, result, rawObject, args),
+            (fn, result, args, projectionOptions) =>
+              projectWorkflowChildResultForModel(
+                fn,
+                result,
+                { ...rawObject, ...projectionOptions },
+                { ...args, ...projectionOptions },
+              ),
           ),
         rawArgs,
       );
@@ -588,7 +608,7 @@ export function registerCodeModeTools(
         () => handleFileGateway(rawArgs, context),
         rawArgs,
       ),
-    {
+    withProjectionRequestOptionsJsonSchema({
       type: "object",
       properties: {
         op: {
@@ -659,11 +679,10 @@ export function registerCodeModeTools(
         sliceContext: { type: "object" },
         cursor: { type: "number" },
         ifNoneMatch: { type: "string" },
-        includeDiagnostics: { type: "boolean" },
       },
       required: ["op", "repoId"],
       additionalProperties: false,
-    },
+    }, FileGatewayRequestSchema),
     undefined,
     FileGatewayOutputSchema,
   );

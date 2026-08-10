@@ -198,6 +198,31 @@ describe("code-mode action catalog", () => {
       assert.ok(withSchema.length > 0, "at least some descriptors should have schemas");
     });
 
+    it("advertises projection options on every gateway schema summary", () => {
+      invalidateCatalog();
+      const gateways = buildCatalog({ includeSchemas: true, detail: "full" })
+        .filter((descriptor) => descriptor.kind === "gateway");
+
+      for (const gateway of gateways) {
+        const detail = gateway.schemaSummary?.fields.find(
+          (field) => field.name === "detail",
+        );
+        const includeDiagnostics = gateway.schemaSummary?.fields.find(
+          (field) => field.name === "includeDiagnostics",
+        );
+        assert.deepStrictEqual(
+          detail?.enumValues,
+          ["compact", "standard", "full"],
+          gateway.action + " detail",
+        );
+        assert.strictEqual(
+          includeDiagnostics?.type,
+          "boolean",
+          gateway.action + " includeDiagnostics",
+        );
+      }
+    });
+
     it("documents the corrected tool friction points in catalog metadata", () => {
       invalidateCatalog();
       const catalog = buildCatalog({ includeSchemas: true });

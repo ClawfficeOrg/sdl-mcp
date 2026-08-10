@@ -1,4 +1,11 @@
 import { WorkflowRequestSchema, type WorkflowBudget } from "./types.js";
+import {
+  resolveProjectionRequestOptions,
+} from "../mcp/request-normalization.js";
+import { getProjectionProfile } from "../mcp/response-projection/registry.js";
+import type {
+  EffectiveProjectionRequestOptions,
+} from "../mcp/response-projection/types.js";
 import { getActiveFnNameMap, getActiveActionToFn } from "./manual-generator.js";
 import { isInternalTransform } from "./transforms.js";
 
@@ -9,6 +16,8 @@ export interface ParsedWorkflowStep {
   /** Whether this step is an internal transform (not routed through gateway) */
   internal: boolean;
   maxResponseTokens?: number;
+  /** Effective child projection settings; envelope fields never enter args. */
+  projectionOptions: EffectiveProjectionRequestOptions;
   /**
    * When true, the executor must skip this step and emit an `error`-status
    * result for it. Set by the parser when non-stop onError modes let us
@@ -123,6 +132,7 @@ export function parseWorkflowRequest(
     onlyFinalResult,
     dryRun,
     includeDiagnostics,
+    detail,
   } = parsed.data;
   const etagCache = readLegacyEtagCache(raw);
   const errors: string[] = [];
@@ -195,6 +205,12 @@ export function parseWorkflowRequest(
           args: step.args,
           internal: false,
           maxResponseTokens: step.maxResponseTokens,
+          projectionOptions: resolveProjectionRequestOptions({
+            child: step,
+            workflow: { detail, includeDiagnostics },
+            direct: step.args,
+            profileDefault: "compact",
+          }),
           skip: true,
           skipReason: message,
         });
@@ -211,14 +227,23 @@ export function parseWorkflowRequest(
       }
     }
 
+    const action = isTransform
+      ? step.fn
+      : metaAction ?? fnNameMap[resolvedFn];
     parsedSteps.push({
       fn: resolvedFn,
-      action: isTransform
-        ? step.fn
-        : metaAction ?? fnNameMap[resolvedFn],
+      action,
       args: step.args,
       internal: isTransform,
       maxResponseTokens: step.maxResponseTokens,
+      projectionOptions: resolveProjectionRequestOptions({
+        child: step,
+        workflow: { detail, includeDiagnostics },
+        direct: step.args,
+        profileDefault: isTransform
+          ? "compact"
+          : getProjectionProfile(action).defaultDetail,
+      }),
     });
   }
 

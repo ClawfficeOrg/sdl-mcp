@@ -1,5 +1,11 @@
 import { logger } from "../util/logger.js";
 import { ValidationError } from "./errors.js";
+import type {
+  DetailLevel,
+  EffectiveProjectionRequestOptions,
+  ProjectionDetailLevel,
+  ProjectionRequestOptions,
+} from "./response-projection/types.js";
 import { shortIdRegistry, ShortIdRegistry } from "./short-id-registry.js";
 
 const ID_ARRAY_FIELDS = new Set(["symbolIds", "entrySymbols", "focusSymbols"]);
@@ -25,6 +31,58 @@ const FIELD_ALIASES: Record<string, string> = {
   relative_cwd: "relativeCwd",
   identifiers: "identifiersToFind",
 };
+
+export interface ProjectionOptionPrecedence {
+  readonly child?: unknown;
+  readonly workflow?: unknown;
+  readonly direct?: unknown;
+  readonly profileDefault?: DetailLevel;
+}
+
+function isProjectionDetailLevel(
+  value: unknown,
+): value is ProjectionDetailLevel {
+  return value === "compact" || value === "standard" || value === "full";
+}
+
+/** Read only the public response-projection fields from a request-like value. */
+export function extractProjectionRequestOptions(
+  value: unknown,
+): ProjectionRequestOptions {
+  if (!isRecord(value)) return {};
+  return {
+    ...(isProjectionDetailLevel(value.detail) ? { detail: value.detail } : {}),
+    ...(typeof value.includeDiagnostics === "boolean"
+      ? { includeDiagnostics: value.includeDiagnostics }
+      : {}),
+  };
+}
+
+/** Resolve each option independently using the documented workflow precedence. */
+export function resolveProjectionRequestOptions(
+  layers: ProjectionOptionPrecedence,
+): EffectiveProjectionRequestOptions {
+  const child = extractProjectionRequestOptions(layers.child);
+  const workflow = extractProjectionRequestOptions(layers.workflow);
+  const direct = extractProjectionRequestOptions(layers.direct);
+  const profileDefault =
+    layers.profileDefault === "summary"
+      ? "compact"
+      : layers.profileDefault ?? "compact";
+
+  return {
+    detail:
+      child.detail
+      ?? workflow.detail
+      ?? direct.detail
+      ?? profileDefault,
+    includeDiagnostics:
+      child.includeDiagnostics
+      ?? workflow.includeDiagnostics
+      ?? direct.includeDiagnostics
+      ?? false,
+  };
+}
 
 function toCamelCase(key: string): string {
   if (!key.includes("_")) {

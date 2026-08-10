@@ -61,6 +61,56 @@ function responseArtifact(toolName: string) {
 }
 
 describe("MCP output schemas", () => {
+  it("uses the public compact, standard, and full detail contract", () => {
+    const cases: Array<{
+      schemaName: string;
+      base: Record<string, unknown>;
+      standardOutput?: "compact";
+    }> = [
+      {
+        schemaName: "RepoRegisterRequestSchema",
+        base: { repoId: "repo", rootPath: "C:/repo" },
+      },
+      {
+        schemaName: "RepoStatusRequestSchema",
+        base: { repoId: "repo" },
+      },
+      {
+        schemaName: "PRRiskAnalysisRequestSchema",
+        base: { repoId: "repo", fromVersion: "v1", toVersion: "v2" },
+      },
+      {
+        schemaName: "UsageStatsRequestSchema",
+        base: {},
+      },
+      {
+        schemaName: "SemanticEnrichmentStatusRequestSchema",
+        base: { repoId: "repo" },
+        standardOutput: "compact",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const schema = requireSchema(testCase.schemaName);
+      for (const detail of ["compact", "standard", "full"]) {
+        const parsed = schema.parse({
+          ...testCase.base,
+          detail,
+        }) as Record<string, unknown>;
+        assert.equal(
+          parsed.detail,
+          detail === "standard" ? testCase.standardOutput ?? detail : detail,
+          testCase.schemaName,
+        );
+      }
+      assert.throws(
+        () => schema.parse({ ...testCase.base, detail: "minimal" }),
+        undefined,
+        testCase.schemaName,
+      );
+    }
+  });
+
   it("parses the canonical v2 context payload and standard wrappers", () => {
     const schema = requireSchema("AgentContextResponseSchema");
     const payload = {

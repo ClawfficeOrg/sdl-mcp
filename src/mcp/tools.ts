@@ -49,6 +49,10 @@ import {
   MAX_SYMBOL_ID_LENGTH,
 } from "../config/constants.js";
 import { LanguageSchema } from "../config/types.js";
+import {
+  ProjectionRequestOptionShape,
+  withProjectionRequestOptions,
+} from "./response-projection/request-options.js";
 
 const RangeSchema = z.object({
   startLine: z.number().int().min(0),
@@ -612,7 +616,7 @@ export const InfoResponseSchema = z.object({
 
 export type InfoResponse = z.infer<typeof InfoResponseSchema>;
 
-export const RepoRegisterRequestSchema = z.object({
+export const RepoRegisterRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   rootPath: z.string().min(1),
   ignore: z.array(z.string()).optional(),
@@ -637,12 +641,10 @@ export const RepoRegisterRequestSchema = z.object({
     .describe(
       "Required to apply config changes to an already registered repo. Exact re-registers remain no-ops.",
     ),
-  detail: z
-    .enum(["compact", "full"])
-    .optional()
+  detail: ProjectionRequestOptionShape.detail
     .default("compact")
     .describe("Use full to include dry-run current/proposed config snapshots."),
-});
+}));
 
 export const RepoRegisterResponseSchema = z.object({
   ok: z.boolean(),
@@ -666,11 +668,11 @@ export const RepoRegisterResponseSchema = z.object({
   proposedConfig: z.record(z.string(), z.unknown()).optional(),
 });
 
-export const RepoUnregisterRequestSchema = z.object({
+export const RepoUnregisterRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   confirmRepoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   discardDrafts: z.boolean().optional().default(false),
-});
+}));
 
 export const RepoUnregisterResponseSchema = z.object({
   ok: z.literal(true),
@@ -678,16 +680,13 @@ export const RepoUnregisterResponseSchema = z.object({
   removed: z.literal(true),
 });
 
-export const RepoStatusRequestSchema = z.object({
+export const RepoStatusRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   surfaceMemories: z.boolean().optional().default(false),
   /** Detail controls stable breadth; includeTelemetry opts into operational fields. */
-  detail: z
-    .enum(["minimal", "standard", "full"])
-    .optional()
-    .default("minimal"),
+  detail: ProjectionRequestOptionShape.detail.default("compact"),
   includeTelemetry: z.boolean().optional().default(false),
-});
+}));
 
 const RepoRootAvailabilitySchema = z.object({
   status: z.enum(["available", "missing", "unreadable"]),
@@ -894,18 +893,18 @@ export const RepoStatusResponseSchema = z.union([
   RepoStatusCompactResponseSchema,
 ]);
 
-export const IndexRefreshRequestSchema = z.object({
+export const IndexRefreshRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   mode: z.enum(["full", "incremental"]),
   reason: z.string().optional(),
-  includeDiagnostics: z.boolean().optional(),
+  includeDiagnostics: ProjectionRequestOptionShape.includeDiagnostics,
   async: z
     .boolean()
     .optional()
     .describe(
       "If true, return immediately with operationId and run indexing in background",
     ),
-});
+}));
 
 export const IndexRefreshResponseSchema = z.object({
   ok: z.boolean(),
@@ -937,7 +936,7 @@ const BufferCursorSchema = z.object({
   col: z.number().int().min(0),
 });
 
-export const BufferPushRequestSchema = z.object({
+export const BufferPushRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   eventType: z.enum(["open", "change", "save", "close", "checkpoint"]),
   filePath: z
@@ -959,7 +958,7 @@ export const BufferPushRequestSchema = z.object({
   timestamp: z.string(),
   cursor: BufferCursorSchema.optional(),
   selections: z.array(BufferSelectionSchema).optional(),
-});
+}));
 
 export const BufferPushResponseSchema = z.object({
   accepted: z.boolean(),
@@ -970,10 +969,10 @@ export const BufferPushResponseSchema = z.object({
   warnings: z.array(z.string()),
 });
 
-export const BufferCheckpointRequestSchema = z.object({
+export const BufferCheckpointRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   reason: z.string().optional(),
-});
+}));
 
 export const BufferCheckpointResponseSchema = z.object({
   repoId: z.string().min(1),
@@ -991,9 +990,9 @@ export const BufferCheckpointResponseSchema = z.object({
   message: z.string().optional(),
 });
 
-export const BufferStatusRequestSchema = z.object({
+export const BufferStatusRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
-});
+}));
 
 export const BufferStatusResponseSchema = z.object({
   repoId: z.string().min(1),
@@ -1055,7 +1054,7 @@ const SymbolSearchNextBestActionSchema = z.object({
   rationale: z.string().min(1),
 });
 
-export const SymbolSearchRequestSchema = z
+export const SymbolSearchRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     /** Search query string. Use `pattern` as an alias for this field. */
@@ -1084,7 +1083,7 @@ export const SymbolSearchRequestSchema = z
   })
   .refine((data) => data.query || data.pattern, {
     message: "Either 'query' or 'pattern' must be provided",
-  });
+  }));
 
 export const RetrievalEvidenceItemSchema = z.object({
   symbolId: z.string(),
@@ -1393,11 +1392,11 @@ const SymbolEditApplyNowRequestSchema = z.object({
   ),
 });
 
-export const SymbolEditRequestSchema = z.discriminatedUnion("mode", [
+export const SymbolEditRequestSchema = withProjectionRequestOptions(z.discriminatedUnion("mode", [
   SymbolEditPreviewRequestSchema,
   SymbolEditApplyRequestSchema,
   SymbolEditApplyNowRequestSchema,
-]);
+]));
 
 export type SymbolEditOperation = z.infer<typeof SymbolEditOperationSchema>;
 export type SymbolEditRequest = z.infer<typeof SymbolEditRequestSchema>;
@@ -1503,7 +1502,7 @@ export type SymbolEditResponse =
  * Unified symbol card request schema - supports both single and batch retrieval.
  * Provide exactly one of: symbolId, symbolIds, symbolRef, or symbolRefs.
  */
-export const SymbolGetCardRequestSchema = z
+export const SymbolGetCardRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     // Single symbol lookup
@@ -1555,7 +1554,7 @@ export const SymbolGetCardRequestSchema = z
         path: ["symbolId"],
       });
     }
-  });
+  }));
 
 const SessionContentRefSchema = z.object({
   key: z.string(),
@@ -1652,7 +1651,7 @@ export const SymbolGetCardResponseSchema = z.union([
   NotModifiedResponseSchema,
 ]);
 
-export const SliceBuildRequestSchema = z.object({
+export const SliceBuildRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   taskText: z
     .string()
@@ -1706,7 +1705,7 @@ export const SliceBuildRequestSchema = z.object({
    * helper and are rarely decision-relevant.
    */
   includeProcesses: z.boolean().optional(),
-});
+}));
 
 const SliceLeaseSchema = z.object({
   expiresAt: z.string(),
@@ -1720,13 +1719,13 @@ const SliceEtagSchema = z.object({
   sliceHash: z.string(),
 });
 
-export const SliceRefreshRequestSchema = z.object({
+export const SliceRefreshRequestSchema = withProjectionRequestOptions(z.object({
   sliceHandle: z.string().min(1).max(256),
   knownVersion: z
     .string()
     .optional()
     .describe("Known version. Defaults to the slice handle's maxVersion."),
-});
+}));
 
 const DeltaPackWithGovernanceSchema = DeltaPackSchema.extend({
   trimmedSet: z
@@ -1898,7 +1897,7 @@ export const SliceBuildResponseSchema = z.union([
   SliceErrorResponseSchema,
 ]);
 
-export const DeltaGetRequestSchema = z.object({
+export const DeltaGetRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   fromVersion: z
     .string()
@@ -1937,7 +1936,7 @@ export const DeltaGetRequestSchema = z.object({
    * the governor loop latency.
    */
   skipBlastRadius: z.boolean().optional(),
-});
+}));
 
 const AmplifierSummaryItemSchema = z.object({
   symbolId: z.string(),
@@ -1952,7 +1951,7 @@ export const DeltaGetResponseSchema = z.object({
   blastRadiusTruncated: z.boolean().optional(),
 });
 
-export const SliceSpilloverGetRequestSchema = z
+export const SliceSpilloverGetRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     spilloverHandle: z.string().min(1).max(256).optional(),
@@ -1969,7 +1968,7 @@ export const SliceSpilloverGetRequestSchema = z
   }))
   .refine((d) => d.spilloverHandle != null || d.sliceHandle != null, {
     message: "Either spilloverHandle or sliceHandle is required",
-  });
+  }));
 
 const StrictSpilloverSymbolCardSchema = SymbolCardSchema.strict();
 const ProjectedSpilloverSymbolCardSchema = SymbolCardSchema.extend({
@@ -2029,7 +2028,7 @@ export const CodeNeedWindowRequestObjectSchema = z.object({
       "Maximum diff lines when deltaMode=auto returns changed content.",
     ),
 });
-export const CodeNeedWindowRequestSchema = CodeNeedWindowRequestObjectSchema
+export const CodeNeedWindowRequestSchema = withProjectionRequestOptions(CodeNeedWindowRequestObjectSchema
   .superRefine((value, ctx) => {
     const targetCount =
       Number(value.symbolId !== undefined) +
@@ -2041,7 +2040,7 @@ export const CodeNeedWindowRequestSchema = CodeNeedWindowRequestObjectSchema
         path: targetCount === 0 ? ["symbolId"] : ["symbolRef"],
       });
     }
-  });
+  }));
 
 const CodeWindowResponseApprovedSchema = z.object({
   approved: z.literal(true),
@@ -2106,7 +2105,7 @@ export const CodeNeedWindowResponseSchema = z.union([
   ResponseArtifactReferenceSchema,
 ]);
 
-export const GetSkeletonRequestSchema = z
+export const GetSkeletonRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     symbolId: z.string().max(MAX_SYMBOL_ID_LENGTH).optional(),
@@ -2146,7 +2145,7 @@ export const GetSkeletonRequestSchema = z
     {
       message: "Either symbolId, symbolRef, or file must be provided",
     },
-  );
+  ));
 const GetSkeletonPayloadSchema = z.object({
   skeleton: z.string().optional(),
   ref: SessionContentRefSchema.optional(),
@@ -2180,7 +2179,7 @@ export const GetSkeletonResponseSchema = z.union([
   ConditionalNotModifiedResponseSchema,
 ]);
 
-export const GetHotPathRequestSchema = z
+export const GetHotPathRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     symbolId: z.string().min(1).max(MAX_SYMBOL_ID_LENGTH).optional(),
@@ -2209,7 +2208,7 @@ export const GetHotPathRequestSchema = z
         path: targetCount === 0 ? ["symbolId"] : ["symbolRef"],
       });
     }
-  });
+  }));
 
 const GetHotPathPayloadSchema = z.object({
   excerpt: z.string().optional(),
@@ -2269,9 +2268,9 @@ export const PolicyPatchSchema = z
   })
   .strict();
 
-export const PolicyGetRequestSchema = z.object({
+export const PolicyGetRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
-});
+}));
 
 export const PolicyGetResponseSchema = z.object({
   policy: PolicyConfigSchema,
@@ -2281,7 +2280,7 @@ export const PolicyGetResponseSchema = z.object({
 //   { repoId, policyPatch: { maxWindowLines: 200, ... } }   (canonical)
 //   { repoId, maxWindowLines: 200, ... }                    (flat aliases)
 // Flat keys are merged into policyPatch; explicit policyPatch wins on overlap.
-export const PolicySetRequestSchema = z
+export const PolicySetRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     policyPatch: PolicyPatchSchema.optional(),
@@ -2290,7 +2289,7 @@ export const PolicySetRequestSchema = z
   .transform(({ repoId, policyPatch, ...flat }) => {
     const mergedPatch = { ...flat, ...(policyPatch ?? {}) };
     return { repoId, policyPatch: mergedPatch };
-  });
+  }));
 
 export const PolicySetResponseSchema = z.object({
   ok: z.boolean(),
@@ -2387,7 +2386,7 @@ const TokenMetricsSchema = z.object({
   compressionRatio: z.number().min(0),
 });
 
-export const RepoOverviewRequestSchema = z.object({
+export const RepoOverviewRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   level: z.enum(["stats", "directories", "full"]),
   includeHotspots: z.boolean().optional(),
@@ -2395,7 +2394,7 @@ export const RepoOverviewRequestSchema = z.object({
   maxDirectories: z.number().int().min(1).max(200).optional(),
   maxExportsPerDirectory: z.number().int().min(1).max(50).optional(),
   ifNoneMatch: z.string().optional(),
-});
+}));
 
 const RepoOverviewPayloadSchema = z.object({
   repoId: z.string().min(1),
@@ -2619,7 +2618,7 @@ const PolicyDecisionSummarySchema = z.object({
   auditHash: z.string(),
 });
 
-export const PRRiskAnalysisRequestSchema = z.object({
+export const PRRiskAnalysisRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   fromVersion: z.string(),
   toVersion: z.string(),
@@ -2631,7 +2630,7 @@ export const PRRiskAnalysisRequestSchema = z.object({
     .describe(
       "Return changed-symbol counts and risk summary without blast-radius or metadata expansion.",
     ),
-  detail: z.enum(["compact", "full"]).optional().default("compact"),
+  detail: ProjectionRequestOptionShape.detail.default("compact"),
   limit: z
     .number()
     .int()
@@ -2650,7 +2649,7 @@ export const PRRiskAnalysisRequestSchema = z.object({
       maxNestedSymbols: z.number().int().min(0).max(200).optional(),
     })
     .optional(),
-});
+}));
 
 export const PRRiskAnalysisResponseSchema = z.object({
   summary: PRRiskSummarySchema,
@@ -2677,7 +2676,7 @@ const AgentContextBudgetSchema = z.strictObject({
     .describe("Maximum tokens for the complete context response"),
 });
 
-export const AgentContextRequestSchema = z.strictObject({
+export const AgentContextRequestSchema = withProjectionRequestOptions(z.strictObject({
   repoId: z
     .string()
     .min(1)
@@ -2714,7 +2713,7 @@ export const AgentContextRequestSchema = z.strictObject({
   refsMode: z.enum(["auto", "off"]).optional().default("auto"),
   /** Wire format for the response payload. */
   wireFormat: z.enum(["json", "packed", "auto"]).optional().default("auto"),
-});
+}));
 
 const ContextTaskTypeSchema = z.enum([
   "debug",
@@ -2875,7 +2874,7 @@ export type AgentContextResponse = z.infer<typeof AgentContextResponseSchema>;
 // Agent Feedback Schemas
 // ============================================================================
 
-export const AgentFeedbackRequestSchema = z.object({
+export const AgentFeedbackRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z
     .string()
     .min(1)
@@ -2912,7 +2911,7 @@ export const AgentFeedbackRequestSchema = z.object({
     .max(2000)
     .optional()
     .describe("Optional task description for context"),
-});
+}));
 
 export const AgentFeedbackResponseSchema = z.object({
   ok: z.boolean().describe("Whether the feedback was recorded successfully"),
@@ -2925,7 +2924,7 @@ export const AgentFeedbackResponseSchema = z.object({
     .describe("Total number of symbols recorded"),
 });
 
-export const AgentFeedbackQueryRequestSchema = z.object({
+export const AgentFeedbackQueryRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z
     .string()
     .min(1)
@@ -2946,7 +2945,7 @@ export const AgentFeedbackQueryRequestSchema = z.object({
     .string()
     .optional()
     .describe("Optional ISO timestamp to filter feedback from"),
-});
+}));
 
 export const AgentFeedbackQueryResponseSchema = z.object({
   repoId: z.string().describe("Repository identifier"),
@@ -3097,12 +3096,9 @@ const RuntimeExecuteRequestObjectSchema = z
           "'intent' returns only queryTerms-matched excerpts, no head/tail summary; " +
           "'digest' parses tsc/node:test/eslint/npm output into a structured failure digest",
       ),
-    includeDiagnostics: z
-      .boolean()
-      .optional()
-      .describe(
-        "Include phase timing diagnostics for performance investigation.",
-      ),
+    includeDiagnostics: ProjectionRequestOptionShape.includeDiagnostics.describe(
+      "Include phase timing diagnostics for performance investigation.",
+    ),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -3119,13 +3115,13 @@ const RuntimeExecuteRequestObjectSchema = z
 // Public schema accepts `command` as a friendly alias for `executable`.
 // Either field may be set; if both are present, `executable` wins.
 export const RuntimeExecuteRequestSchema =
-  RuntimeExecuteRequestObjectSchema.transform((val) => {
+  withProjectionRequestOptions(RuntimeExecuteRequestObjectSchema.transform((val) => {
     const aliased = val as typeof val & { command?: string };
     if (aliased.command && !aliased.executable) {
       return { ...val, executable: aliased.command };
     }
     return val;
-  });
+  }));
 
 const RuntimeDigestFailureSchema = z.object({
   name: z.string().optional().describe("Test name when known"),
@@ -3229,7 +3225,7 @@ export const RuntimeQueryOutputLineRangeSchema = z
     }
   });
 
-export const RuntimeQueryOutputRequestSchema = z
+export const RuntimeQueryOutputRequestSchema = withProjectionRequestOptions(z
   .object({
     repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
     view: z
@@ -3289,7 +3285,7 @@ export const RuntimeQueryOutputRequestSchema = z
         message: "stream must match cursor.stream when both are provided",
       });
     }
-  });
+  }));
 
 export const RuntimeQueryOutputResponseSchema = z.object({
   artifactHandle: z.string(),
@@ -3309,7 +3305,7 @@ export type RuntimeQueryOutputResponse = z.infer<
   typeof RuntimeQueryOutputResponseSchema
 >;
 
-export const ResponseGetRequestSchema = z.object({
+export const ResponseGetRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   handle: z
     .string()
@@ -3374,7 +3370,7 @@ export const ResponseGetRequestSchema = z.object({
     .max(1000)
     .optional()
     .describe("Maximum array items to return after jsonPath extraction"),
-});
+}));
 
 export const ResponseGetResponseSchema = z.object({
   handle: z.string(),
@@ -3410,7 +3406,7 @@ export type ResponseArtifactReference = z.infer<
 // Memory Schemas
 // ============================================================================
 
-export const MemoryStoreRequestSchema = z.object({
+export const MemoryStoreRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   type: MemoryTypeSchema,
   title: z.string().min(1).max(120),
@@ -3423,7 +3419,7 @@ export const MemoryStoreRequestSchema = z.object({
     .optional(),
   fileRelPaths: z.array(z.string().min(1).max(1024)).max(100).optional(),
   memoryId: z.string().min(1).max(MAX_SYMBOL_ID_LENGTH).optional(),
-});
+}));
 
 export const MemoryStoreResponseSchema = z.object({
   ok: z.boolean(),
@@ -3432,7 +3428,7 @@ export const MemoryStoreResponseSchema = z.object({
   deduplicated: z.boolean(),
 });
 
-export const MemoryQueryRequestSchema = z.object({
+export const MemoryQueryRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   query: z.string().max(1000).optional(),
   types: z.array(MemoryTypeSchema).optional(),
@@ -3445,7 +3441,7 @@ export const MemoryQueryRequestSchema = z.object({
   limit: z.number().int().min(1).max(100).optional(),
   offset: z.number().int().min(0).max(10000).optional(),
   sortBy: z.enum(["recency", "confidence"]).optional(),
-});
+}));
 
 export const MemoryQueryResponseSchema = z.object({
   repoId: z.string(),
@@ -3457,18 +3453,18 @@ export const MemoryQueryResponseSchema = z.object({
   nextOffset: z.number().int().min(0).nullable().optional(),
 });
 
-export const MemoryRemoveRequestSchema = z.object({
+export const MemoryRemoveRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   memoryId: z.string().min(1),
   deleteFile: z.boolean().optional(),
-});
+}));
 
 export const MemoryRemoveResponseSchema = z.object({
   ok: z.boolean(),
   memoryId: z.string(),
 });
 
-export const MemorySurfaceRequestSchema = z.object({
+export const MemorySurfaceRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   symbolIds: z
     .array(z.string().min(1).max(MAX_SYMBOL_ID_LENGTH))
@@ -3476,7 +3472,7 @@ export const MemorySurfaceRequestSchema = z.object({
     .optional(),
   taskType: MemoryTypeSchema.optional(),
   limit: z.number().int().min(1).max(50).optional(),
-});
+}));
 
 export const MemorySurfaceResponseSchema = z.object({
   repoId: z.string(),
@@ -3545,14 +3541,14 @@ const TopToolSavingsSchema = z.object({
   savingsPercent: z.number(),
 });
 
-export const UsageStatsRequestSchema = z.object({
+export const UsageStatsRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH).optional(),
   scope: z.enum(["session", "history", "lifetime", "both", "all"]).default("both"),
   since: z.string().optional(),
   limit: z.number().int().min(1).max(100).optional(),
   persist: z.boolean().optional(),
-  detail: z.enum(["compact", "full"]).optional().default("compact"),
-});
+  detail: ProjectionRequestOptionShape.detail.default("compact"),
+}));
 
 const PackedEncoderUsageSchema = z.object({
   count: z.number().int().nonnegative(),
@@ -3611,7 +3607,7 @@ export type UsageStatsResponse = z.infer<typeof UsageStatsResponseSchema>;
 // File Read Schemas
 // ============================================================================
 
-export const FileReadRequestSchema = z.object({
+export const FileReadRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   filePath: z
     .string()
@@ -3692,7 +3688,7 @@ export const FileReadRequestSchema = z.object({
     .describe(
       "Maximum diff lines when deltaMode=auto returns changed content.",
     ),
-});
+}));
 
 export type FileReadRequest = z.infer<typeof FileReadRequestSchema>;
 
@@ -3737,7 +3733,7 @@ const SemanticEnrichmentLanguageListSchema = z
     "Optional language IDs to refresh/status-check. Defaults to all tree-sitter-backed languages.",
   );
 
-export const SemanticEnrichmentRefreshRequestSchema = z.object({
+export const SemanticEnrichmentRefreshRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   dryRun: z.boolean().optional().default(false),
   force: z.boolean().optional().default(false),
@@ -3749,21 +3745,30 @@ export const SemanticEnrichmentRefreshRequestSchema = z.object({
       "Allow verified provider download only when semanticEnrichment.installPolicy is 'verified'. Package-manager installs are never executed.",
     ),
   languages: SemanticEnrichmentLanguageListSchema,
-});
+}));
 
 export type SemanticEnrichmentRefreshRequest = z.infer<
   typeof SemanticEnrichmentRefreshRequestSchema
 >;
 
-export const SemanticEnrichmentStatusRequestSchema = z.object({
-  repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
-  languages: SemanticEnrichmentLanguageListSchema,
-  detail: z.enum(["compact", "full"]).optional().default("compact"),
-  limit: z.number().int().min(0).max(100).optional().default(5),
-});
+const SemanticEnrichmentStatusPublicRequestSchema =
+  withProjectionRequestOptions(z.object({
+    repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
+    languages: SemanticEnrichmentLanguageListSchema,
+    detail: ProjectionRequestOptionShape.detail.default("compact"),
+    limit: z.number().int().min(0).max(100).optional().default(5),
+  }));
 
-export type SemanticEnrichmentStatusRequest = z.infer<
-  typeof SemanticEnrichmentStatusRequestSchema
+// The public/projection contract accepts standard, while the legacy status
+// service only distinguishes compact from full. Adapt at the handler boundary.
+export const SemanticEnrichmentStatusRequestSchema =
+  SemanticEnrichmentStatusPublicRequestSchema.transform((request) => ({
+    ...request,
+    detail: request.detail === "standard" ? "compact" : request.detail,
+  }));
+
+export type SemanticEnrichmentStatusRequest = z.input<
+  typeof SemanticEnrichmentStatusPublicRequestSchema
 >;
 
 const SemanticProviderTypeSchema = z.enum(["scip", "lsp"]);
@@ -3983,7 +3988,7 @@ export const FileWriteInsertAtSchema = z.object({
     .describe("Content to insert (max 512KB)"),
 });
 
-export const FileWriteRequestSchema = z.object({
+export const FileWriteRequestSchema = withProjectionRequestOptions(z.object({
   repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH),
   filePath: z
     .string()
@@ -4036,7 +4041,7 @@ export const FileWriteRequestSchema = z.object({
     .optional()
     .default(false)
     .describe("Create file if it doesn't exist"),
-});
+}));
 
 export type FileWriteRequest = z.infer<typeof FileWriteRequestSchema>;
 
@@ -4326,10 +4331,10 @@ const SearchEditApplyRequestSchema = z.object({
   ),
 });
 
-export const SearchEditRequestSchema = z.discriminatedUnion("mode", [
+export const SearchEditRequestSchema = withProjectionRequestOptions(z.discriminatedUnion("mode", [
   SearchEditPreviewRequestSchema,
   SearchEditApplyRequestSchema,
-]);
+]));
 
 export type SearchEditRequest = z.infer<typeof SearchEditRequestSchema>;
 

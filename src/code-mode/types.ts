@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  ProjectionRequestOptionShape,
+  withProjectionRequestOptions,
+} from "../mcp/response-projection/request-options.js";
+
 // --- Zod Schemas ---
 
 export const WorkflowStepSchema = z.object({
@@ -9,6 +14,8 @@ export const WorkflowStepSchema = z.object({
   args: z.record(z.string(), z.unknown()).default({}),
   /** Max tokens for this step's response. Truncates with continuation handle if exceeded. */
   maxResponseTokens: z.number().int().min(50).max(100_000).optional(),
+  /** Step-level projection fields never enter handler args. */
+  ...ProjectionRequestOptionShape,
 });
 
 export const WorkflowBudgetSchema = z.object({
@@ -35,7 +42,7 @@ export const WorkflowTraceOptionsSchema = z.object({
   maxPreviewTokens: z.number().int().min(10).max(2000).default(200),
 });
 
-export const WorkflowRequestSchema = z.object({
+export const WorkflowRequestSchema = withProjectionRequestOptions(z.object({
   /** Repository ID shared across all steps */
   repoId: z.string().min(1),
   /** Ordered list of function calls to execute */
@@ -53,12 +60,12 @@ export const WorkflowRequestSchema = z.object({
   /** When true, validate steps and $N references without executing. Returns validation result only. */
   dryRun: z.boolean().optional(),
   /** Include phase timing diagnostics for performance investigation. */
-  includeDiagnostics: z.boolean().optional(),
+  includeDiagnostics: ProjectionRequestOptionShape.includeDiagnostics,
   /** Include successful step timing/token telemetry in agent-visible responses. */
   includeTelemetry: z.boolean().optional().default(false),
   /** Response detail for agent-visible workflow projection. */
-  detail: z.enum(["compact", "standard", "full"]).optional().default("compact"),
-});
+  detail: ProjectionRequestOptionShape.detail,
+}));
 
 // --- TypeScript Types ---
 

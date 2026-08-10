@@ -4,6 +4,9 @@
  */
 export type DetailLevel = "summary" | "compact" | "standard" | "full";
 
+/** Public callers use three stable levels; summary remains projector-internal. */
+export type ProjectionDetailLevel = "compact" | "standard" | "full";
+
 export type OutputBudgetClass =
   | "summary"
   | "empty"
@@ -51,10 +54,15 @@ export interface ModelProjection<T = unknown> {
 }
 
 export interface ProjectionRequestOptions {
-  readonly detail?: DetailLevel;
+  readonly detail?: ProjectionDetailLevel;
   readonly includeDiagnostics?: boolean;
   readonly budgetClass?: OutputBudgetClass;
   readonly maxTokens?: number;
   readonly largeResponseStrategy?: LargeResponseStrategy;
   readonly recoveryPolicy?: RecoveryPolicy;
+}
+
+export interface EffectiveProjectionRequestOptions {
+  readonly detail: ProjectionDetailLevel;
+  readonly includeDiagnostics: boolean;
 }

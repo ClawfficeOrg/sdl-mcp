@@ -30,6 +30,9 @@ import {
 import type { ParsedWorkflowRequest } from "./workflow-parser.js";
 import { WorkflowBudgetTracker } from "./workflow-budget.js";
 import { tokenAccumulator } from "../mcp/token-accumulator.js";
+import type {
+  EffectiveProjectionRequestOptions,
+} from "../mcp/response-projection/types.js";
 import { getLadybugConn } from "../db/ladybug.js";
 import * as ladybugDb from "../db/ladybug-queries.js";
 import { z } from "zod";
@@ -289,6 +292,7 @@ export type WorkflowStepResultProjector = (
   fn: string,
   result: unknown,
   args: Record<string, unknown>,
+  projectionOptions: EffectiveProjectionRequestOptions,
 ) => unknown;
 
 export async function executeWorkflow(
@@ -785,7 +789,12 @@ export async function executeWorkflow(
           : undefined;
         priorResults.push(result);
         const modelResult = projectStepResult
-          ? projectStepResult(step.fn, result, resolvedArgs)
+          ? projectStepResult(
+              step.fn,
+              result,
+              resolvedArgs,
+              step.projectionOptions,
+            )
           : result;
         const stepResult: WorkflowStepResult = {
           stepIndex: i,
