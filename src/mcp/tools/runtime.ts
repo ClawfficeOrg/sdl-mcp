@@ -42,10 +42,16 @@ import {
   buildScrubbedEnv,
   resolveAndValidateCwd,
 } from "../../runtime/executor.js";
-import { writeArtifact } from "../../runtime/artifacts.js";
+import {
+  applyRedaction,
+  writeArtifact,
+} from "../../runtime/artifacts.js";
 import { buildOutputDigest } from "../../runtime/output-digest.js";
 import type { OutputExcerpt, ConcurrencyTracker } from "../../runtime/types.js";
-import { projectRuntimeOutputExcerpts } from "../runtime-output-projection.js";
+import {
+  projectRuntimeOutputExcerpts,
+  RUNTIME_INLINE_OUTPUT_BYTES,
+} from "../runtime-output-projection.js";
 import { logRuntimeExecution, logPolicyDecision } from "../telemetry.js";
 import { attachRawContext } from "../token-usage.js";
 import { hashContent } from "../../util/hashing.js";
@@ -356,7 +362,7 @@ export function generateIntentExcerpts(
   stderr: string,
   queryTerms: string[],
   contextLines = RUNTIME_KEYWORD_CONTEXT_LINES,
-  runtime?: string,
+  _runtime?: string,
 ): OutputExcerpt[] {
   const excerpts: OutputExcerpt[] = [];
   const lowerTerms = queryTerms.map((t) => t.toLowerCase());
@@ -391,7 +397,7 @@ export function generateIntentExcerpts(
   if (stderr) searchStream(stderr.split("\n"), "stderr");
   return projectRuntimeOutputExcerpts(
     excerpts.filter((excerpt) => excerpt.content.length > 0),
-    runtime,
+    _runtime,
   );
 }
 
@@ -516,26 +522,22 @@ function generateExcerpts(
 
   const projectedStdoutSummary =
     projectRuntimeOutputExcerpts(
-      [
-        {
-          lineStart: 1,
-          lineEnd: stdoutSummary.split("\n").length,
-          content: stdoutSummary,
-          source: "stdout",
-        },
-      ],
+      [{
+        lineStart: 1,
+        lineEnd: stdoutSummary.split("\n").length,
+        content: stdoutSummary,
+        source: "stdout",
+      }],
       runtime,
     )[0]?.content ?? "";
   const projectedStderrSummary =
     projectRuntimeOutputExcerpts(
-      [
-        {
-          lineStart: 1,
-          lineEnd: stderrSummary.split("\n").length,
-          content: stderrSummary,
-          source: "stderr",
-        },
-      ],
+      [{
+        lineStart: 1,
+        lineEnd: stderrSummary.split("\n").length,
+        content: stderrSummary,
+        source: "stderr",
+      }],
       runtime,
     )[0]?.content ?? "";
 
@@ -784,9 +786,19 @@ export async function handleRuntimeExecute(
       result: Awaited<ReturnType<typeof execute>>,
       phase: "compile" | "execute",
     ): Promise<string | null> => {
-      // Digest mode force-persists so runtime.queryOutput can always
-      // recover the full output behind the compact digest.
-      if (!request.persistOutput && request.outputMode !== "digest") {
+      // Digest mode and complete large captures force persistence. Incomplete
+      // captures stay explicitly unrecoverable because discarded bytes are gone.
+      const captureTruncated =
+        result.stdoutTruncated || result.stderrTruncated;
+      const requiresRecovery =
+        !captureTruncated &&
+        result.totalStdoutBytes + result.totalStderrBytes >
+          RUNTIME_INLINE_OUTPUT_BYTES;
+      if (
+        !request.persistOutput &&
+        request.outputMode !== "digest" &&
+        !requiresRecovery
+      ) {
         return null;
       }
 
@@ -839,7 +851,9 @@ export async function handleRuntimeExecute(
           redactionConfig: appConfig.redaction,
         });
         timer.record("runtime.persistArtifact", artifactStartedAt);
-        return artifactResult.artifactHandle;
+        return artifactResult.artifactDir
+          ? artifactResult.artifactHandle
+          : null;
       } catch (err) {
         logger.error("Failed to persist runtime artifact", {
           error: String(err),
@@ -874,8 +888,14 @@ export async function handleRuntimeExecute(
 
       if (compileResult.exitCode !== 0 || compileResult.status !== "success") {
         // Compile failed — return compiler output immediately
-        const compileStdout = compileResult.stdout.toString("utf-8");
-        const compileStderr = compileResult.stderr.toString("utf-8");
+        const compileStdout = applyRedaction(
+          compileResult.stdout.toString("utf-8"),
+          appConfig.redaction,
+        );
+        const compileStderr = applyRedaction(
+          compileResult.stderr.toString("utf-8"),
+          appConfig.redaction,
+        );
         const compileRawTokens = Math.ceil(
           (compileResult.totalStdoutBytes + compileResult.totalStderrBytes) / 4,
         );
@@ -1061,8 +1081,14 @@ export async function handleRuntimeExecute(
 
     // 10. Convert output to strings
     const decodeStartedAt = timer.start();
-    const stdoutStr = result.stdout.toString("utf-8");
-    const stderrStr = result.stderr.toString("utf-8");
+    const stdoutStr = applyRedaction(
+      result.stdout.toString("utf-8"),
+      appConfig.redaction,
+    );
+    const stderrStr = applyRedaction(
+      result.stderr.toString("utf-8"),
+      appConfig.redaction,
+    );
     runtimeHints = mergeRuntimeHints(
       runtimeHints,
       detectRuntimeHints(request, `${stderrStr}\n${stdoutStr}`),

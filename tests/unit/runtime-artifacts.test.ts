@@ -530,3 +530,108 @@ it("queries intact gzip output when optional manifest metadata is corrupt", asyn
   assert.strictEqual(result.runtime, undefined);
   assert.strictEqual(result.commandSummary, undefined);
 });
+it("rejects a single highly-compressible decompression bomb with a typed limit error", async () => {
+  const baseDir = makeTempDir();
+  const artifact = await writeArtifact({
+    repoId: "decompression-bomb-repo",
+    runtime: "node",
+    argsHash: "args",
+    exitCode: 0,
+    signal: null,
+    durationMs: 10,
+    stdout: Buffer.alloc(50 * 1024 * 1024 + 1, 0x61),
+    stderr: Buffer.alloc(0),
+    policyAuditHash: "audit",
+    artifactTtlHours: 1,
+    maxArtifactBytes: 2 * 1024 * 1024,
+    artifactBaseDir: baseDir,
+  });
+  assert.notStrictEqual(artifact.artifactDir, "");
+
+  await assert.rejects(
+    queryArtifactContent(
+      artifact.artifactHandle,
+      [],
+      {
+        baseDir,
+        stream: "stdout",
+        lineRange: { stream: "stdout", startLine: 1, endLine: 1 },
+      },
+    ),
+    (error: unknown) => {
+      assert.equal(
+        (error as NodeJS.ErrnoException).code,
+        "RUNTIME_ARTIFACT_DECOMPRESS_LIMIT",
+      );
+      return true;
+    },
+  );
+});
+
+it("enforces the decompression limit across both streams", async () => {
+  const baseDir = makeTempDir();
+  const artifact = await writeArtifact({
+    repoId: "combined-decompression-bomb-repo",
+    runtime: "node",
+    argsHash: "args",
+    exitCode: 0,
+    signal: null,
+    durationMs: 10,
+    stdout: Buffer.alloc(26 * 1024 * 1024, 0x61),
+    stderr: Buffer.alloc(26 * 1024 * 1024, 0x62),
+    policyAuditHash: "audit",
+    artifactTtlHours: 1,
+    maxArtifactBytes: 2 * 1024 * 1024,
+    artifactBaseDir: baseDir,
+  });
+  assert.notStrictEqual(artifact.artifactDir, "");
+
+  await assert.rejects(
+    queryArtifactContent(artifact.artifactHandle, [], {
+      baseDir,
+      stream: "both",
+    }),
+    (error: unknown) => {
+      assert.equal(
+        (error as NodeJS.ErrnoException).code,
+        "RUNTIME_ARTIFACT_DECOMPRESS_LIMIT",
+      );
+      return true;
+    },
+  );
+});
+
+it("removes an artifact directory after a member write fails", async () => {
+  const baseDir = makeTempDir();
+  const artifact = await writeArtifact({
+    repoId: "partial-write-repo",
+    runtime: "node",
+    argsHash: "args",
+    exitCode: 1,
+    signal: null,
+    durationMs: 10,
+    stdout: Buffer.from("stdout", "utf8"),
+    stderr: Buffer.from("stderr", "utf8"),
+    policyAuditHash: "audit",
+    artifactTtlHours: 1,
+    maxArtifactBytes: 1024 * 1024,
+    artifactBaseDir: baseDir,
+    writeFileImpl: async (
+      path: string,
+      data: string | Uint8Array,
+      encoding?: BufferEncoding,
+    ) => {
+      if (path.endsWith("stderr.gz")) {
+        throw new Error("injected artifact member write failure");
+      }
+      writeFileSync(path, data, encoding);
+    },
+  });
+
+  assert.strictEqual(artifact.artifactDir, "");
+  assert.strictEqual(
+    existsSync(join(baseDir, artifact.artifactHandle)),
+    false,
+    "failed writes must not leave an orphan artifact directory",
+  );
+});

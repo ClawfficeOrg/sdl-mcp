@@ -47,6 +47,38 @@ export const DEFAULT_RESPONSE_ARTIFACT_TTL_HOURS = 24;
 export const DEFAULT_RESPONSE_ARTIFACT_THRESHOLD_TOKENS = 8_000;
 export const DEFAULT_RESPONSE_EXCERPT_BYTES = 8 * 1024;
 export const MAX_RESPONSE_EXCERPT_BYTES = 65_536;
+
+/**
+ * Return the longest valid UTF-8 prefix within a byte budget.
+ * Runtime previews use this without mutating the stored artifact payload.
+ */
+export function boundResponseTextUtf8(
+  value: string,
+  maxBytes: number,
+): string {
+  if (maxBytes <= 0) return "";
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const midpoint = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(value.slice(0, midpoint), "utf8") <= maxBytes) {
+      low = midpoint;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  if (
+    low > 0 &&
+    low < value.length &&
+    /[\uD800-\uDBFF]/.test(value.charAt(low - 1))
+  ) {
+    low -= 1;
+  }
+  return value.slice(0, low);
+}
+
 export const DEFAULT_RESPONSE_MAX_ARTIFACT_BYTES =
   RUNTIME_DEFAULT_MAX_ARTIFACT_BYTES;
 export const DEFAULT_RESPONSE_MAX_ARTIFACTS_PER_REPO =

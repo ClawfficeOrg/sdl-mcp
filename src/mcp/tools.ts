@@ -3093,7 +3093,7 @@ const RuntimeExecuteRequestObjectSchema = z
       .enum(["minimal", "summary", "intent", "digest"])
       .default("minimal")
       .describe(
-        "Response verbosity: 'minimal' returns only status/exitCode/duration/artifactHandle (~50 tokens); " +
+        "Response verbosity: 'minimal' omits captured stream excerpts while retaining status and bounded recovery/handling metadata (~50 tokens); " +
           "'summary' returns head+tail output excerpts (legacy behavior); " +
           "'intent' returns only queryTerms-matched excerpts, no head/tail summary; " +
           "'digest' parses tsc/node:test/eslint/npm output into a structured failure digest",

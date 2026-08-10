@@ -637,3 +637,57 @@ describe("response artifact paging schemas", () => {
     assert.equal(terminal.range, undefined);
   });
 });
+
+describe("runtime recovery output schemas", () => {
+  it("accepts the public artifactHandle recovery and rejects a generic handle", () => {
+    const args = {
+      repoId: "repo-a",
+      artifactHandle: "runtime-artifact",
+      view: "model",
+      stream: "stderr",
+      queryTerms: ["error"],
+      maxExcerpts: 4,
+      contextLines: 2,
+    };
+    assert.deepEqual(toolSchemas.RuntimeQueryOutputRequestSchema.parse(args), args);
+    assert.equal(
+      toolSchemas.RuntimeQueryOutputRequestSchema.safeParse({
+        ...args,
+        artifactHandle: undefined,
+        handle: "runtime-artifact",
+      }).success,
+      false,
+    );
+  });
+
+  it("defaults runtime outputMode to minimal and documents projected visibility", () => {
+    const parsed = toolSchemas.RuntimeExecuteRequestSchema.parse({
+      repoId: "repo-a",
+      runtime: "node",
+      code: "console.log('fixture')",
+    });
+    assert.equal(parsed.outputMode, "minimal");
+    const description =
+      toolSchemas.RuntimeExecuteRequestSchema.in.in.shape.outputMode.description ?? "";
+    assert.match(description, /omits captured stream excerpts/);
+    assert.doesNotMatch(description, /exitCode|duration|artifactHandle/);
+  });
+
+  it("keeps canonical runtime responses schema-valid before model projection", () => {
+    toolSchemas.RuntimeExecuteResponseSchema.parse({
+      status: "failure",
+      exitCode: 2,
+      signal: null,
+      durationMs: 15,
+      stdoutSummary: "",
+      stderrSummary: "failed",
+      artifactHandle: "runtime-artifact",
+      truncation: {
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        totalStdoutBytes: 0,
+        totalStderrBytes: 6,
+      },
+    });
+  });
+});

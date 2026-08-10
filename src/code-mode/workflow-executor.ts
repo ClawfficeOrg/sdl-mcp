@@ -57,12 +57,7 @@ function applyStepTruncation(
   projectStepResult?: WorkflowStepResultProjector,
   resolvedArgs?: Record<string, unknown>,
 ): void {
-  const maxResponseTokens = step.maxResponseTokens ?? defaultMaxResponseTokens;
-  if (
-    maxResponseTokens == null
-    || stepResult.status !== "ok"
-    || stepResult.result == null
-  ) {
+  if (stepResult.status !== "ok" || stepResult.result == null) {
     return;
   }
 
@@ -72,10 +67,7 @@ function applyStepTruncation(
       detail: "compact",
       includeDiagnostics: false,
     };
-
-  // Projection is used only for the continuation artifact; the canonical
-  // result remains unchanged for subsequent $N references.
-  const projectedContinuationResult = projectStepResult && resolvedArgs
+  const projectedResult = projectStepResult && resolvedArgs
     ? projectStepResult(
         step.fn,
         stepResult.result,
@@ -83,8 +75,16 @@ function applyStepTruncation(
         projectionOptions,
       )
     : stepResult.result;
+
+  // Deliver one public projection for every workflow child while priorResults
+  // retains the canonical handler value for later $N references.
+  stepResult.result = projectedResult;
+
+  const maxResponseTokens = step.maxResponseTokens ?? defaultMaxResponseTokens;
+  if (maxResponseTokens == null) return;
+
   const continuationResult = sanitizeWorkflowStepValue(
-    projectedContinuationResult,
+    projectedResult,
     projectionOptions.includeDiagnostics,
     resolvedArgs?.includeTelemetry === true,
   );

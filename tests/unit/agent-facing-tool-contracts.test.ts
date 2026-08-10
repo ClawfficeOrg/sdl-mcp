@@ -28,6 +28,10 @@ import {
   errorToMcpResponse,
 } from "../../dist/mcp/errors.js";
 import { buildValidatedRecoveryAction } from "../../dist/mcp/response-projection/recovery.js";
+import {
+  extractRuntimeObservability,
+  projectRuntimeValue,
+} from "../../dist/mcp/response-projection/projectors/runtime.js";
 
 describe("agent-facing SDL tool contracts", () => {
   it("policy.set patches preserve only user-supplied policy keys", () => {
@@ -506,5 +510,73 @@ describe("agent-facing SDL tool contracts", () => {
     });
     assert.equal(invalid.nextAction, undefined);
     assert.equal(invalid.invalidRecoveryCount, 1);
+  });
+});
+
+describe("runtime agent-facing projection", () => {
+  it("keeps observability typed while emitting one actionable large-output recovery", () => {
+    const canonical = {
+      status: "failure",
+      exitCode: 2,
+      signal: "SIGTERM",
+      durationMs: 44,
+      stdoutSummary: "preview",
+      stderrSummary: "",
+      artifactHandle: "runtime-artifact",
+      truncation: {
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        totalStdoutBytes: 9_000,
+        totalStderrBytes: 0,
+      },
+    };
+    const projected = projectRuntimeValue(
+      {
+        canonicalResult: canonical,
+        action: "runtime.execute",
+        profile: {
+          projector: "generic",
+          observabilityProfile: "standard",
+          defaultDetail: "standard",
+          budgetClass: "standard",
+          largeResponseStrategy: "artifact",
+          recoveryPolicy: "on-truncation",
+        },
+        options: { detail: "compact", includeDiagnostics: false },
+        context: {
+          toolName: "runtime.execute",
+          requestArgs: { repoId: "repo-a", outputMode: "summary" },
+        },
+      },
+      () => {
+        throw new Error("runtime projector must own display selection");
+      },
+    ) as Record<string, unknown>;
+
+    assert.deepEqual(extractRuntimeObservability(canonical), {
+      exitCode: 2,
+      signal: "SIGTERM",
+      totalStdoutBytes: 9_000,
+      totalStderrBytes: 0,
+      durationMs: 44,
+    });
+    assert.deepEqual(Object.keys(projected), [
+      "status",
+      "preview",
+      "artifactHandle",
+      "nextAction",
+    ]);
+    assert.deepEqual(projected.nextAction, {
+      action: "runtime.queryOutput",
+      args: {
+        repoId: "repo-a",
+        artifactHandle: "runtime-artifact",
+        view: "model",
+        queryTerms: ["error", "failed", "exception"],
+        stream: "stdout",
+        maxExcerpts: 10,
+        contextLines: 3,
+      },
+    });
   });
 });

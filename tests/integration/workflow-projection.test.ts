@@ -134,8 +134,8 @@ describe("workflow projection", () => {
 
     assert.equal(received, "2026-08-10T00:00:00.000Z");
     assert.equal(
-      (result.results[0].result as Record<string, unknown>).lastIndexedAt,
-      "2026-08-10T00:00:00.000Z",
+      "lastIndexedAt" in (result.results[0].result as Record<string, unknown>),
+      false,
     );
     assert.equal(
       "lastIndexedAt" in (steps[0].result as Record<string, unknown>),
@@ -615,7 +615,20 @@ describe("workflow projection", () => {
     const executorHandle = executed.results[0].truncatedResponse
       ?.continuationHandle;
     assert.ok(executorHandle);
-    assert.equal(executed.results[0].result, rawResult);
+    assert.notEqual(executed.results[0].result, rawResult);
+    assert.deepEqual(
+      executed.results[0].result,
+      projectWorkflowChildResultForModel(
+        "symbolGetCard",
+        rawResult,
+        { repoId: "repo", detail: "full", includeDiagnostics: true },
+        {
+          includeProcesses: true,
+          detail: "full",
+          includeDiagnostics: true,
+        },
+      ),
+    );
 
     const projected = projectWorkflow(executed, {
       repoId: "repo",

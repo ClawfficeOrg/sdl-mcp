@@ -29,6 +29,12 @@ async function maybeSweepExpired(baseDir?: string | null): Promise<void> {
   });
 }
 
+type ArtifactWriteFile = (
+  path: string,
+  data: string | Uint8Array,
+  encoding?: BufferEncoding,
+) => Promise<void>;
+
 interface WriteArtifactOptions {
   repoId: string;
   runtime: string;
@@ -48,6 +54,8 @@ interface WriteArtifactOptions {
   maxArtifactBytes: number;
   artifactBaseDir?: string | null;
   redactionConfig?: RedactionConfig;
+  /** Test hook used to fault-inject individual artifact member writes. */
+  writeFileImpl?: ArtifactWriteFile;
 }
 
 interface RedactionPattern {
@@ -179,37 +187,53 @@ export async function writeArtifact(
     ).toISOString(),
   };
 
-  if (totalOutputBytes > opts.maxArtifactBytes) {
-    logger.warn(
-      "Runtime artifact size exceeds maxArtifactBytes; skipping write",
-      {
-        artifactId,
-        repoId: opts.repoId,
-        totalOutputBytes,
-        maxArtifactBytes: opts.maxArtifactBytes,
-      },
-    );
-    return {
-      artifactHandle: artifactId,
-      artifactDir: "",
-      manifest,
-    };
-  }
+  const manifestJson = JSON.stringify(manifest, null, 2);
 
   try {
     const stdoutGzip = await gzipAsync(Buffer.from(redactedStdout, "utf-8"));
     const stderrGzip = await gzipAsync(Buffer.from(redactedStderr, "utf-8"));
+    const persistedArtifactBytes =
+      stdoutGzip.length +
+      stderrGzip.length +
+      Buffer.byteLength(manifestJson, "utf-8");
 
+    if (persistedArtifactBytes > opts.maxArtifactBytes) {
+      logger.warn(
+        "Runtime artifact size exceeds maxArtifactBytes; skipping write",
+        {
+          artifactId,
+          repoId: opts.repoId,
+          totalOutputBytes,
+          persistedArtifactBytes,
+          maxArtifactBytes: opts.maxArtifactBytes,
+        },
+      );
+      return {
+        artifactHandle: artifactId,
+        artifactDir: "",
+        manifest,
+      };
+    }
+
+    const writeArtifactFile: ArtifactWriteFile =
+      opts.writeFileImpl ??
+      (async (path, data, encoding) => {
+        await writeFile(path, data, encoding);
+      });
     await mkdir(artifactDir, { recursive: true });
-    await Promise.all([
-      writeFile(join(artifactDir, "stdout.gz"), stdoutGzip),
-      writeFile(join(artifactDir, "stderr.gz"), stderrGzip),
-      writeFile(
+    const writeResults = await Promise.allSettled([
+      writeArtifactFile(join(artifactDir, "stdout.gz"), stdoutGzip),
+      writeArtifactFile(join(artifactDir, "stderr.gz"), stderrGzip),
+      writeArtifactFile(
         join(artifactDir, "manifest.json"),
-        JSON.stringify(manifest, null, 2),
+        manifestJson,
         "utf-8",
       ),
     ]);
+    const failedWrite = writeResults.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failedWrite) throw failedWrite.reason;
 
     return {
       artifactHandle: artifactId,
@@ -217,6 +241,16 @@ export async function writeArtifact(
       manifest,
     };
   } catch (error) {
+    try {
+      await rm(artifactDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      logger.warn("Failed to clean up partial runtime artifact", {
+        artifactId,
+        repoId: opts.repoId,
+        artifactDir,
+        error: cleanupError,
+      });
+    }
     logger.error("Failed to persist runtime artifact", {
       artifactId,
       repoId: opts.repoId,
@@ -358,6 +392,42 @@ import { gunzip } from "zlib";
 const MAX_ARTIFACT_DECOMPRESS_SIZE = 50 * 1024 * 1024; // 50 MB
 const gunzipAsync = promisify(gunzip);
 
+function artifactDecompressLimitError(): Error & { code: string } {
+  return Object.assign(
+    new Error(
+      `Decompressed artifact exceeds size limit (${MAX_ARTIFACT_DECOMPRESS_SIZE} bytes)`,
+    ),
+    { code: "RUNTIME_ARTIFACT_DECOMPRESS_LIMIT" },
+  );
+}
+
+/** Bound zlib output before allocation, then enforce the shared stream budget. */
+async function gunzipArtifactStream(
+  compressed: Buffer,
+  maxOutputLength: number,
+): Promise<Buffer> {
+  try {
+    const decompressed = await gunzipAsync(compressed, {
+      maxOutputLength: Math.max(1, maxOutputLength),
+    });
+    if (decompressed.length > maxOutputLength) {
+      throw artifactDecompressLimitError();
+    }
+    return decompressed;
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code ===
+      "RUNTIME_ARTIFACT_DECOMPRESS_LIMIT"
+    ) {
+      throw error;
+    }
+    if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") {
+      throw artifactDecompressLimitError();
+    }
+    throw error;
+  }
+}
+
 /**
  * Read and decompress artifact content by handle.
  */
@@ -390,12 +460,10 @@ export async function readArtifactContent(
   if (stream === "stdout" || stream === "both") {
     try {
       const compressed = await readFile(join(artifactDir, "stdout.gz"));
-      const decompressed = await gunzipAsync(compressed);
-      if (decompressed.length > MAX_ARTIFACT_DECOMPRESS_SIZE) {
-        throw new Error(
-          `Decompressed artifact exceeds size limit (${decompressed.length} bytes)`,
-        );
-      }
+      const decompressed = await gunzipArtifactStream(
+        compressed,
+        MAX_ARTIFACT_DECOMPRESS_SIZE - totalBytes,
+      );
       stdout = decompressed.toString("utf-8");
       totalBytes += decompressed.length;
     } catch (err) {
@@ -406,12 +474,10 @@ export async function readArtifactContent(
   if (stream === "stderr" || stream === "both") {
     try {
       const compressed = await readFile(join(artifactDir, "stderr.gz"));
-      const decompressed = await gunzipAsync(compressed);
-      if (decompressed.length > MAX_ARTIFACT_DECOMPRESS_SIZE) {
-        throw new Error(
-          `Decompressed artifact exceeds size limit (${decompressed.length} bytes)`,
-        );
-      }
+      const decompressed = await gunzipArtifactStream(
+        compressed,
+        MAX_ARTIFACT_DECOMPRESS_SIZE - totalBytes,
+      );
       stderr = decompressed.toString("utf-8");
       totalBytes += decompressed.length;
     } catch (err) {
@@ -546,10 +612,7 @@ export async function queryArtifactContent(
       excerpts.push({
         lineStart: start,
         lineEnd: end,
-        content: lines
-          .slice(start - 1, end)
-          .map(truncLine)
-          .join("\n"),
+        content: lines.slice(start - 1, end).join("\n"),
         source: options.lineRange.stream,
       });
     }

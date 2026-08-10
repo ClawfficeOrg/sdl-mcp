@@ -829,15 +829,8 @@ export const AGENT_OUTPUT_CASES = [
         totalStderrBytes: 0,
       },
     }),
-    expectedCompactKeys: [
-      "status",
-      "exitCode",
-      "stdoutSummary",
-      "stderrSummary",
-      "artifactHandle",
-      "nextAction",
-    ],
-    requiredActionabilityKeys: ["artifactHandle", "nextAction"],
+    expectedCompactKeys: ["status"],
+    requiredActionabilityKeys: ["status"],
     executionMode: "synthetic-handler-free",
   }),
   compactCase({
