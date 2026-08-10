@@ -51,6 +51,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function containsCyclicReference(root: unknown): boolean {
+  const visiting = new WeakSet<object>();
+  const visited = new WeakSet<object>();
+  const stack: Array<{ value: unknown; exiting: boolean }> = [
+    { value: root, exiting: false },
+  ];
+
+  while (stack.length > 0) {
+    const frame = stack.pop();
+    if (!frame) break;
+    const value = frame.value;
+    if (!Array.isArray(value) && !isRecord(value)) {
+      continue;
+    }
+    if (frame.exiting) {
+      visiting.delete(value);
+      visited.add(value);
+      continue;
+    }
+    if (visiting.has(value)) {
+      return true;
+    }
+    if (visited.has(value)) {
+      continue;
+    }
+
+    visiting.add(value);
+    stack.push({ value, exiting: true });
+    const children = Object.values(value);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push({ value: children[index], exiting: false });
+    }
+  }
+
+  return false;
+}
+
 function ownString(
   value: Readonly<Record<string, unknown>>,
   key: string,
@@ -340,6 +377,15 @@ export function buildValidatedRecoveryAction(
   candidate: unknown,
   context: RecoveryValidationContext,
 ): RecoveryBuildResult {
+  // Guard every recursive canonicalization path before generated data can
+  // replace the original safe error at the MCP delivery boundary.
+  if (containsCyclicReference(candidate)) {
+    return invalidRecovery("candidate contains a cyclic reference");
+  }
+  if (containsCyclicReference(context.failedCall)) {
+    return invalidRecovery("failed call contains a cyclic reference");
+  }
+
   const extracted = extractCandidate(candidate);
   if (!extracted) {
     return invalidRecovery("candidate does not name an action");

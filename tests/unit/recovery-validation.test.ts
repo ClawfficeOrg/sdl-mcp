@@ -749,6 +749,76 @@ describe("generated recovery validation", () => {
     }
   });
 
+  it("omits a cyclic recovery while delivering the original typed safe error", async () => {
+    const server = new MCPServer();
+    registerTools(server, {
+      actionAvailability: { memoryTools: false, infoTool: true },
+    });
+    server.registerTool(
+      "sdl.repo.status",
+      "Throw a cyclic recovery-bearing test error.",
+      z.object({}),
+      async () => {
+        const jsonValue: Record<string, unknown> = {
+          detail: "cyclic-recovery",
+        };
+        jsonValue.self = jsonValue;
+        throw Object.assign(new PolicyDenialError("cycle-safe denial"), {
+          nextCalls: [
+            {
+              action: "sdl.file.write",
+              args: {
+                repoId: "repo",
+                filePath: "fixture.json",
+                jsonPath: "payload",
+                jsonValue,
+                createBackup: false,
+              },
+            },
+          ],
+        });
+      },
+    );
+
+    const client = new Client({
+      name: "cyclic-recovery-test",
+      version: "1.0.0",
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      const response = (await client.callTool({
+        name: "sdl.repo.status",
+        arguments: {},
+      })) as {
+        isError?: boolean;
+        structuredContent?: {
+          error?: {
+            code?: string;
+            message?: string;
+            nextCalls?: RecoveryCall[];
+          };
+        };
+      };
+      const detail = response.structuredContent?.error;
+
+      assert.equal(response.isError, true);
+      assert.equal(detail?.code, "POLICY_ERROR");
+      assert.equal(detail?.message, "cycle-safe denial");
+      assert.equal(detail?.nextCalls, undefined);
+      assert.equal("invalidRecoveryCount" in (detail ?? {}), false);
+      assert.equal(testingControls().getMetrics().invalidRecoveryCount, 1);
+    } finally {
+      await client.close();
+      await server.stop();
+    }
+  });
+
   it("delivers only recoveries executable by the server's fixed workflow surface", async () => {
     const previousConfig = process.env.SDL_CONFIG;
     const previousConfigPath = process.env.SDL_CONFIG_PATH;
