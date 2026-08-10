@@ -378,7 +378,7 @@ export const AGENT_OUTPUT_CASES = [
   }),
   compactCase({
     action: "repo.status",
-    publicRequest: { repoId: REPO_ID, detail: "minimal" },
+    publicRequest: { repoId: REPO_ID, detail: "compact" },
     canonicalResultFactory: () => ({
       repoId: REPO_ID,
       rootAvailability: { status: "available" },
