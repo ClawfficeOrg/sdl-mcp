@@ -223,13 +223,15 @@ function filterAdvertisedFallbackTools(
   advertisedTools: readonly string[],
 ): string[] | undefined {
   const activeTools = new Set(advertisedTools);
-  const filtered = fallbackTools.filter(
-    (tool): tool is string =>
-      typeof tool === "string" &&
-      (activeTools.has(tool) ||
-        (!tool.startsWith("sdl.") && activeTools.has(`sdl.${tool}`))),
-  );
-  return filtered.length > 0 ? [...new Set(filtered)] : undefined;
+  const canonicalTools = fallbackTools.flatMap((tool) => {
+    if (typeof tool !== "string") return [];
+    const canonical = tool.startsWith("sdl.") ? tool : `sdl.${tool}`;
+    if (activeTools.has(canonical)) return [canonical];
+    return activeTools.has(tool) ? [tool] : [];
+  });
+  return canonicalTools.length > 0
+    ? [...new Set(canonicalTools)]
+    : undefined;
 }
 
 function validateGeneratedRecoveryCalls(
@@ -240,11 +242,13 @@ function validateGeneratedRecoveryCalls(
     args: Record<string, unknown>;
   }>,
   advertisedTools: readonly string[],
+  activeWorkflowFunctions?: readonly string[],
 ): Array<{ action: string; args: Record<string, unknown> }> | undefined {
   const validCalls: Array<{
     action: string;
     args: Record<string, unknown>;
   }> = [];
+  const seenCalls = new Set<string>();
 
   for (const nextCall of nextCalls) {
     const repoId =
@@ -274,13 +278,21 @@ function validateGeneratedRecoveryCalls(
     const validated = buildValidatedRecoveryAction(nextCall, {
       ...(repoId ? { repoId } : {}),
       advertisedTools,
+      ...(activeWorkflowFunctions
+        ? { activeWorkflowFunctions }
+        : {}),
       ...(continuation ? { continuation } : {}),
     });
     if (validated.nextAction) {
-      validCalls.push({
+      const validCall = {
         action: validated.nextAction.action,
         args: { ...validated.nextAction.args },
-      });
+      };
+      const signature = JSON.stringify(validCall);
+      if (!seenCalls.has(signature)) {
+        seenCalls.add(signature);
+        validCalls.push(validCall);
+      }
     }
   }
 
@@ -290,6 +302,7 @@ function validateGeneratedRecoveryCalls(
 export function errorToMcpResponse(
   error: unknown,
   advertisedTools: readonly string[] = FLAT_RECOVERY_TOOL_NAMES,
+  activeWorkflowFunctions?: readonly string[],
 ): Record<string, unknown> {
   if (error instanceof Error) {
     // Only expose the raw message for known domain errors; sanitize unexpected errors.
@@ -358,6 +371,7 @@ export function errorToMcpResponse(
       const validatedNextCalls = validateGeneratedRecoveryCalls(
         classifiedError.nextCalls,
         advertisedTools,
+        activeWorkflowFunctions,
       );
       if (validatedNextCalls) {
         detail.nextCalls = validatedNextCalls;

@@ -713,6 +713,7 @@ export class MCPServer {
     ResponseProjectionBoundaryOverrides;
   private _gatewayMode = false;
   private postDispatchHooks: PostDispatchHook[] = [];
+  private activeWorkflowFunctions: Set<string> = new Set();
 
   constructor(options: MCPServerOptions = {}) {
     this.toolNameFormat = options.toolNameFormat ?? "canonical";
@@ -756,6 +757,11 @@ export class MCPServer {
 
   registerPostDispatchHook(hook: PostDispatchHook): void {
     this.postDispatchHooks.push(hook);
+  }
+
+  /** Freeze the workflow functions recoveries may advertise for this registration. */
+  setActiveWorkflowFunctions(functionNames: readonly string[]): void {
+    this.activeWorkflowFunctions = new Set(functionNames);
   }
 
   private setupHandlers(): void {
@@ -1208,9 +1214,11 @@ export class MCPServer {
             process.stderr.write(
               `[sdl-mcp] Tool ${toolName} error: ${error}\n`,
             );
-            const errorResponse = errorToMcpResponse(error, [
-              ...this.tools.keys(),
-            ]);
+            const errorResponse = errorToMcpResponse(
+              error,
+              [...this.tools.keys()],
+              [...this.activeWorkflowFunctions],
+            );
             const responseForLog = includeDiagnostics
               ? attachTimingDiagnostics(errorResponse, timer.snapshot())
               : errorResponse;
@@ -1249,9 +1257,11 @@ export class MCPServer {
           process.stderr.write(
             `[sdl-mcp] CallTool outer error: ${outerError}\n`,
           );
-          const outerErrorResponse = errorToMcpResponse(outerError, [
-            ...this.tools.keys(),
-          ]);
+          const outerErrorResponse = errorToMcpResponse(
+            outerError,
+            [...this.tools.keys()],
+            [...this.activeWorkflowFunctions],
+          );
           return {
             ...buildToolResponseEnvelope(
               outerErrorResponse,
@@ -1344,6 +1354,7 @@ export class MCPServer {
    */
   clearTools(): void {
     this.tools.clear();
+    this.activeWorkflowFunctions.clear();
   }
 
   /**

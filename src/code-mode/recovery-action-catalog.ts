@@ -1,7 +1,5 @@
 import { z } from "zod";
 
-import { loadConfig } from "../config/loadConfig.js";
-import { anyRepoHasMemoryTools } from "../config/memory-config.js";
 import {
   AgentContextRequestSchema,
   AgentFeedbackQueryRequestSchema,
@@ -207,13 +205,6 @@ const RECOVERY_ACTION_DEFINITION_BY_ACTION: Readonly<
   ),
 );
 
-const MEMORY_RECOVERY_FN_NAMES = new Set([
-  "memoryStore",
-  "memoryQuery",
-  "memoryRemove",
-  "memorySurface",
-]);
-
 /** Resolve canonical, flat-tool, and workflow-fn names without load-order state. */
 export function resolveRecoveryActionDefinition(
   actionOrToolName: string,
@@ -229,7 +220,7 @@ export function resolveRecoveryActionDefinition(
     : undefined;
 }
 
-/** Return only function names present in the active workflow dispatch maps. */
+/** Resolve the registry's canonical workflow function without runtime config. */
 export function resolveRecoveryWorkflowFunction(
   actionOrToolName: string,
 ): string | undefined {
@@ -237,12 +228,7 @@ export function resolveRecoveryWorkflowFunction(
   if (!definition?.fn) return undefined;
 
   if (definition.kind === "gateway") {
-    // Match the workflow executor's current availability rather than the
-    // release-static projection inventory used to describe result shapes.
-    const active =
-      !MEMORY_RECOVERY_FN_NAMES.has(definition.fn) ||
-      anyRepoHasMemoryTools(loadConfig());
-    return active && RECOVERY_FN_NAME_MAP[definition.fn] === definition.action
+    return RECOVERY_FN_NAME_MAP[definition.fn] === definition.action
       ? definition.fn
       : undefined;
   }

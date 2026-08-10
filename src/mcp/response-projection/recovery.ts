@@ -302,6 +302,35 @@ function boundedResult(nextAction: RecoveryActionCall): RecoveryBuildResult {
   return { nextAction, invalidRecoveryCount: 0 };
 }
 
+function normalizeWorkflowArgsForActiveSurface(
+  action: string,
+  args: Record<string, unknown>,
+  context: RecoveryValidationContext,
+): Record<string, unknown> | undefined {
+  if (
+    action !== "workflow" ||
+    context.activeWorkflowFunctions === undefined
+  ) {
+    return args;
+  }
+
+  const activeFunctions = new Set(context.activeWorkflowFunctions);
+  if (!Array.isArray(args.steps)) return undefined;
+
+  const steps: Record<string, unknown>[] = [];
+  for (const step of args.steps) {
+    if (!isRecord(step)) return undefined;
+    const requestedFn = ownString(step, "fn");
+    if (!requestedFn) return undefined;
+    const resolvedFn =
+      resolveRecoveryWorkflowFunction(requestedFn) ?? requestedFn;
+    if (!activeFunctions.has(resolvedFn)) return undefined;
+    steps.push({ ...step, fn: resolvedFn });
+  }
+
+  return { ...args, steps };
+}
+
 /**
  * Materialize and validate a generated recovery before it crosses a public
  * response boundary. Invalid recovery is diagnostic-only and never replaces
@@ -332,9 +361,21 @@ export function buildValidatedRecoveryAction(
     return invalidRecovery("candidate args fail the target input schema", definition.action);
   }
 
+  const activeArgs = normalizeWorkflowArgsForActiveSurface(
+    definition.action,
+    parsed.data,
+    context,
+  );
+  if (!activeArgs) {
+    return invalidRecovery(
+      "workflow recovery references a function outside this server's active surface",
+      definition.action,
+    );
+  }
+
   const logicalCandidate: RecoveryActionCall = {
     action: definition.action,
-    args: parsed.data,
+    args: activeArgs,
   };
   if (context.failedCall) {
     const failedSignature = logicalCallSignature(
@@ -365,7 +406,7 @@ export function buildValidatedRecoveryAction(
   if (definition.toolName && advertisedTools.has(definition.toolName)) {
     const nextAction: RecoveryActionCall = {
       action: definition.toolName,
-      args: stableRecord(parsed.data),
+      args: stableRecord(activeArgs),
     };
     if (
       nextAction.action === "sdl.workflow" &&
@@ -387,15 +428,19 @@ export function buildValidatedRecoveryAction(
   }
 
   const fn = resolveRecoveryWorkflowFunction(definition.action);
-  if (!fn) {
+  if (
+    !fn ||
+    (context.activeWorkflowFunctions !== undefined &&
+      !context.activeWorkflowFunctions.includes(fn))
+  ) {
     return invalidRecovery(
-      "target action is not active in the workflow function map",
+      "target action is not active in this server's workflow function map",
       definition.action,
     );
   }
   const repoId =
-    typeof parsed.data.repoId === "string"
-      ? parsed.data.repoId
+    typeof activeArgs.repoId === "string"
+      ? activeArgs.repoId
       : contextRepoId(context);
   if (!repoId) {
     return invalidRecovery(
@@ -404,7 +449,7 @@ export function buildValidatedRecoveryAction(
     );
   }
 
-  const { repoId: _repoId, ...childArgs } = parsed.data;
+  const { repoId: _repoId, ...childArgs } = activeArgs;
   const workflowDefinition = resolveRecoveryActionDefinition("workflow");
   if (!workflowDefinition) {
     return invalidRecovery("workflow action is unavailable", definition.action);

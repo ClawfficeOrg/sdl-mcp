@@ -503,6 +503,17 @@ export function registerCodeModeTools(
       handler: async (args: unknown) => handleActionSearch(args, services),
     },
   };
+  const activeGatewayFunctions = Object.entries(
+    getActiveFnNameMap(services.actionAvailability?.memoryTools),
+  )
+    .filter(([, action]) => Object.hasOwn(workflowActionMap, action))
+    .map(([fn]) => fn);
+  // Recovery validation uses the same fixed functions and dispatch map as this server.
+  server.setActiveWorkflowFunctions?.([
+    ...activeGatewayFunctions,
+    ...INTERNAL_TRANSFORM_NAMES,
+    "actionSearch",
+  ]);
 
   server.registerTool(
     "sdl.manual",

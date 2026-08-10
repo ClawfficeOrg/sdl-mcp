@@ -71,6 +71,8 @@ export interface RecoveryContinuationContext {
 export interface RecoveryValidationContext {
   readonly repoId?: string;
   readonly advertisedTools: readonly string[];
+  /** Canonical names accepted by this server's fixed workflow dispatch map. */
+  readonly activeWorkflowFunctions?: readonly string[];
   readonly failedCall?: RecoveryActionCall;
   readonly continuation?: RecoveryContinuationContext;
 }
