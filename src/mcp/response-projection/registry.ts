@@ -291,6 +291,41 @@ function canonicalActionName(actionOrToolName: string): string {
     : actionOrToolName;
 }
 
+const WORKFLOW_ONLY_RECOVERY_ACTIONS = new Set<string>([
+  "dataPick",
+  "dataMap",
+  "dataFilter",
+  "dataSort",
+  "dataTemplate",
+  "workflowContinuationGet",
+]);
+
+/** Flat MCP tools that may be returned directly as recovery calls. */
+export const FLAT_RECOVERY_TOOL_NAMES = Object.freeze(
+  PROJECTION_PROFILE_ACTIONS
+    .filter((action) => !WORKFLOW_ONLY_RECOVERY_ACTIONS.has(action))
+    .map((action) => `sdl.${action}`),
+);
+
+/** Static gateway-only surface advertised by the exclusive Code Mode server. */
+export const EXCLUSIVE_CODE_MODE_RECOVERY_TOOL_NAMES = Object.freeze([
+  "sdl.action.search",
+  "sdl.info",
+  "sdl.manual",
+  "sdl.retrieve",
+  "sdl.workflow",
+  "sdl.context",
+  "sdl.file",
+] as const);
+
+export function getRecoverySurfaceToolNames(
+  exclusive: boolean,
+): readonly string[] {
+  return exclusive
+    ? EXCLUSIVE_CODE_MODE_RECOVERY_TOOL_NAMES
+    : FLAT_RECOVERY_TOOL_NAMES;
+}
+
 export function getProjectionProfile(
   actionOrToolName: string,
 ): Readonly<ProjectionProfile> {

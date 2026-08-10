@@ -46,6 +46,42 @@ export interface ProjectionStats {
   readonly truncated: boolean;
   readonly responseHandled: boolean;
   readonly recoveryEmitted: boolean;
+  /** Internal-only count; omitted from model-facing payloads. */
+  readonly invalidRecoveryCount?: number;
+}
+
+/** A fully materialized public recovery call. */
+export interface RecoveryActionCall {
+  readonly action: string;
+  readonly args: Readonly<Record<string, unknown>>;
+}
+
+/** Bounded continuation state that may be copied into a generated recovery. */
+export interface RecoveryContinuationContext {
+  readonly handle?: string;
+  readonly view?: "model" | "raw";
+  readonly cursor?: {
+    readonly stream: "stdout" | "stderr";
+    readonly afterLine: number;
+  };
+  readonly maxBytes?: number;
+}
+
+/** Public surface and failed-call evidence available to recovery validation. */
+export interface RecoveryValidationContext {
+  readonly repoId?: string;
+  readonly advertisedTools: readonly string[];
+  readonly failedCall?: RecoveryActionCall;
+  readonly continuation?: RecoveryContinuationContext;
+}
+
+export interface RecoveryBuildResult {
+  readonly nextAction?: RecoveryActionCall;
+  readonly invalidRecoveryCount: number;
+}
+
+export interface RecoveryValidationMetrics {
+  readonly invalidRecoveryCount: number;
 }
 
 export interface ModelProjection<T = unknown> {

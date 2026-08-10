@@ -1,4 +1,9 @@
 import type { NextBestAction, RequiredFieldsForNext } from "./types.js";
+import {
+  buildValidatedRecoveryAction,
+  RECOVERY_DEFAULT_MAX_BYTES,
+} from "./response-projection/recovery.js";
+import { FLAT_RECOVERY_TOOL_NAMES } from "./response-projection/registry.js";
 
 // Re-export domain error types for backward compatibility
 export {
@@ -153,6 +158,61 @@ function fallbackRationaleForNextAction(nextBestAction?: NextBestAction): string
   }
 }
 
+function validateGeneratedRecoveryCalls(
+  nextCalls: Array<{
+    action?: string;
+    tool?: string;
+    id?: string;
+    args: Record<string, unknown>;
+  }>,
+): Array<{ action: string; args: Record<string, unknown> }> | undefined {
+  const validCalls: Array<{
+    action: string;
+    args: Record<string, unknown>;
+  }> = [];
+
+  for (const nextCall of nextCalls) {
+    const repoId =
+      typeof nextCall.args.repoId === "string"
+        ? nextCall.args.repoId
+        : undefined;
+    const actionName =
+      typeof nextCall.action === "string"
+        ? nextCall.action
+        : typeof nextCall.tool === "string"
+          ? nextCall.tool
+          : nextCall.id;
+    const canonicalAction = actionName?.startsWith("sdl.")
+      ? actionName.slice("sdl.".length)
+      : actionName;
+    const continuation =
+      canonicalAction === "response.get"
+        ? {
+            ...(typeof nextCall.args.handle === "string"
+              ? { handle: nextCall.args.handle }
+              : {}),
+            maxBytes:
+              typeof nextCall.args.maxBytes === "number"
+                ? nextCall.args.maxBytes
+                : RECOVERY_DEFAULT_MAX_BYTES,
+          }
+        : undefined;
+    const validated = buildValidatedRecoveryAction(nextCall, {
+      ...(repoId ? { repoId } : {}),
+      advertisedTools: FLAT_RECOVERY_TOOL_NAMES,
+      ...(continuation ? { continuation } : {}),
+    });
+    if (validated.nextAction) {
+      validCalls.push({
+        action: validated.nextAction.action,
+        args: { ...validated.nextAction.args },
+      });
+    }
+  }
+
+  return validCalls.length > 0 ? validCalls : undefined;
+}
+
 export function errorToMcpResponse(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
     // Only expose the raw message for known domain errors; sanitize unexpected errors.
@@ -185,7 +245,12 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
       retryable?: boolean;
       suggestedRetryDelayMs?: number;
       fallbackTools?: string[];
-      nextCalls?: Array<{ action: string; args: Record<string, unknown> }>;
+      nextCalls?: Array<{
+        action?: string;
+        tool?: string;
+        id?: string;
+        args: Record<string, unknown>;
+      }>;
       fallbackRationale?: string;
       candidates?: Array<Record<string, unknown>>;
     };
@@ -201,7 +266,12 @@ export function errorToMcpResponse(error: unknown): Record<string, unknown> {
       detail.fallbackTools = fallbackToolsForNextAction(detail.nextBestAction);
     }
     if (Array.isArray(classifiedError.nextCalls)) {
-      detail.nextCalls = classifiedError.nextCalls;
+      const validatedNextCalls = validateGeneratedRecoveryCalls(
+        classifiedError.nextCalls,
+      );
+      if (validatedNextCalls) {
+        detail.nextCalls = validatedNextCalls;
+      }
     }
     if (classifiedError.fallbackRationale) {
       detail.fallbackRationale = classifiedError.fallbackRationale;

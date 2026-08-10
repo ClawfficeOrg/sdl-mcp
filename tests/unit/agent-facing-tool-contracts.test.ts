@@ -18,6 +18,13 @@ import {
 import { compactPRRiskResponse } from "../../dist/mcp/tools/prRisk.js";
 import { compactBufferStatusForAgent } from "../../dist/mcp/tools/buffer.js";
 import { _policyToolTesting } from "../../dist/mcp/tools/policy.js";
+import {
+  projectExclusiveCodeModeRecovery,
+} from "../../dist/code-mode/action-reference-projection.js";
+import {
+  ValidationError,
+  errorToMcpResponse,
+} from "../../dist/mcp/errors.js";
 
 describe("agent-facing SDL tool contracts", () => {
   it("policy.set patches preserve only user-supplied policy keys", () => {
@@ -309,5 +316,47 @@ describe("agent-facing SDL tool contracts", () => {
       ),
       false,
     );
+  });
+
+  it("omits incomplete runtime recovery without changing the safe result", () => {
+    const projected = projectExclusiveCodeModeRecovery(
+      {
+        status: "failure",
+        artifactHandle: "runtime-artifact",
+        stderrSummary: "safe summary",
+        nextAction: {
+          kind: "queryOutput",
+          action: "runtime.queryOutput",
+          message: "Inspect persisted output.",
+          queryTerms: ["error"],
+        },
+      },
+      "repo-a",
+    ) as Record<string, unknown>;
+
+    assert.equal("nextAction" in projected, false);
+    assert.equal(projected.artifactHandle, "runtime-artifact");
+    assert.equal(projected.stderrSummary, "safe summary");
+  });
+
+  it("omits invalid next calls while preserving safe error diagnostics", () => {
+    const error = Object.assign(new ValidationError("Safe validation failure."), {
+      classification: "invalid_input",
+      fallbackRationale: "Correct the request before retrying.",
+      nextCalls: [
+        {
+          action: "unknown.action",
+          args: { repoId: "repo-a" },
+        },
+      ],
+    });
+
+    const response = errorToMcpResponse(error);
+    const detail = response.error as Record<string, unknown>;
+
+    assert.equal(detail.message, "Safe validation failure.");
+    assert.equal(detail.classification, "invalid_input");
+    assert.equal(detail.fallbackRationale, "Correct the request before retrying.");
+    assert.equal("nextCalls" in detail, false);
   });
 });

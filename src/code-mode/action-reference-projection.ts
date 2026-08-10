@@ -1,3 +1,25 @@
+import {
+  resolveRecoveryActionDefinition,
+  resolveRecoveryWorkflowFunction,
+} from "./action-catalog.js";
+import {
+  buildValidatedRecoveryAction,
+  _recoveryValidationTesting,
+  RECOVERY_DEFAULT_MAX_BYTES,
+} from "../mcp/response-projection/recovery.js";
+import {
+  EXCLUSIVE_CODE_MODE_RECOVERY_TOOL_NAMES,
+} from "../mcp/response-projection/registry.js";
+import type {
+  RecoveryActionCall,
+  RecoveryContinuationContext,
+} from "../mcp/response-projection/types.js";
+
+export {
+  buildValidatedRecoveryAction,
+  _recoveryValidationTesting,
+};
+
 type GatewayReference =
   | { tool: "sdl.retrieve"; op: string }
   | { tool: "sdl.workflow"; fn: string };
@@ -12,11 +34,15 @@ const EXCLUSIVE_GATEWAY_REFERENCES: Readonly<Record<string, GatewayReference>> =
     "sdl.policy.set": { tool: "sdl.workflow", fn: "policySet" },
   });
 
+const EXCLUSIVE_RECOVERY_TOOL_SET = new Set<string>(
+  EXCLUSIVE_CODE_MODE_RECOVERY_TOOL_NAMES,
+);
+
 const RECOVERY_TEXT_FIELDS = ["fallbackRationale", "downgradeGuidance"] as const;
 const RECOVERY_TEXT_ARRAY_FIELDS = ["whyDenied", "warnings"] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function rewriteRecoveryText(text: string): string {
@@ -33,52 +59,153 @@ function rewriteRecoveryText(text: string): string {
   return rewritten;
 }
 
-function projectNextAction(value: unknown, fallbackRepoId?: string): unknown {
-  if (!isRecord(value)) return value;
+function candidateArgs(
+  value: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const args = isRecord(value.args) ? { ...value.args } : {};
+  for (const [key, candidateValue] of Object.entries(value)) {
+    if (
+      key === "action" ||
+      key === "tool" ||
+      key === "id" ||
+      key === "args" ||
+      key === "kind" ||
+      key === "message" ||
+      key === "rationale" ||
+      key === "description" ||
+      Object.hasOwn(args, key)
+    ) {
+      continue;
+    }
+    args[key] = candidateValue;
+  }
+  return args;
+}
+
+function continuationForCandidate(
+  value: unknown,
+  materializeResponseBound: boolean,
+): RecoveryContinuationContext | undefined {
+  if (!isRecord(value)) return undefined;
+  const actionName =
+    typeof value.action === "string"
+      ? value.action
+      : typeof value.tool === "string"
+        ? value.tool
+        : typeof value.id === "string"
+          ? value.id
+          : undefined;
+  if (!actionName) return undefined;
+
+  const definition = resolveRecoveryActionDefinition(actionName);
+  if (!definition || definition.action !== "response.get") {
+    return undefined;
+  }
+  const args = candidateArgs(value);
+  return {
+    ...(typeof args.handle === "string" ? { handle: args.handle } : {}),
+    ...(typeof args.maxBytes === "number"
+      ? { maxBytes: args.maxBytes }
+      : materializeResponseBound
+        ? { maxBytes: RECOVERY_DEFAULT_MAX_BYTES }
+        : {}),
+  };
+}
+
+function failedCallFromTrace(
+  value: Readonly<Record<string, unknown>>,
+  fallbackRepoId: string | undefined,
+  inherited: RecoveryActionCall | undefined,
+): RecoveryActionCall | undefined {
+  const failureLike =
+    value.status === "error" ||
+    value.status === "failure" ||
+    (typeof value.message === "string" &&
+      (value.kind === "gateway" || value.kind === "internal"));
+  if (!failureLike || typeof value.action !== "string") {
+    return inherited;
+  }
+
+  const traceArgs =
+    isRecord(value._resolvedArgs)
+      ? value._resolvedArgs
+      : isRecord(value.resolvedArgs)
+        ? value.resolvedArgs
+        : isRecord(value.args)
+          ? value.args
+          : {};
+  return {
+    action: value.action,
+    args: {
+      ...(fallbackRepoId ? { repoId: fallbackRepoId } : {}),
+      ...traceArgs,
+    },
+  };
+}
+
+function projectNextAction(
+  value: unknown,
+  fallbackRepoId: string | undefined,
+  failedCall: RecoveryActionCall | undefined,
+  materializeResponseBound = false,
+): unknown | undefined {
+  if (!isRecord(value)) return undefined;
 
   const referenceKey =
     typeof value.tool === "string"
       ? "tool"
       : typeof value.action === "string"
         ? "action"
-        : undefined;
-  if (!referenceKey) return value;
+        : typeof value.id === "string"
+          ? "id"
+          : undefined;
+  if (!referenceKey) return undefined;
 
-  const actionName = value[referenceKey] as string;
-  if (!Object.hasOwn(EXCLUSIVE_GATEWAY_REFERENCES, actionName)) return value;
-  const gateway = EXCLUSIVE_GATEWAY_REFERENCES[actionName];
-
-  const originalArgs = isRecord(value.args) ? value.args : {};
-  const { repoId: originalRepoId, ...actionArgs } = originalArgs;
-  const repoId =
-    typeof originalRepoId === "string" ? originalRepoId : fallbackRepoId;
-  const gatewayArgs =
-    gateway.tool === "sdl.retrieve"
-      ? { ...(repoId ? { repoId } : {}), op: gateway.op, args: actionArgs }
-      : {
-          ...(repoId ? { repoId } : {}),
-          steps: [{ fn: gateway.fn, args: actionArgs }],
-        };
+  const continuation = continuationForCandidate(
+    value,
+    materializeResponseBound,
+  );
+  const validated = buildValidatedRecoveryAction(value, {
+    ...(fallbackRepoId ? { repoId: fallbackRepoId } : {}),
+    advertisedTools: EXCLUSIVE_CODE_MODE_RECOVERY_TOOL_NAMES,
+    ...(failedCall ? { failedCall } : {}),
+    ...(continuation ? { continuation } : {}),
+  });
+  if (!validated.nextAction) return undefined;
 
   return {
     ...value,
-    [referenceKey]: gateway.tool,
-    args: gatewayArgs,
+    [referenceKey]: validated.nextAction.action,
+    args: validated.nextAction.args,
   };
 }
 
-/**
- * Rewrite only recovery-specific fields emitted through the exclusive Code Mode
- * surface. Flat handlers keep their native action names when they are callable.
- */
-export function projectExclusiveCodeModeRecovery<T>(
+function projectFallbackTool(tool: unknown): unknown {
+  if (typeof tool !== "string") return tool;
+  const publicName = tool.startsWith("sdl.") ? tool : `sdl.${tool}`;
+  if (EXCLUSIVE_RECOVERY_TOOL_SET.has(publicName)) {
+    return publicName;
+  }
+  if (Object.hasOwn(EXCLUSIVE_GATEWAY_REFERENCES, publicName)) {
+    return EXCLUSIVE_GATEWAY_REFERENCES[publicName].tool;
+  }
+  return resolveRecoveryWorkflowFunction(tool) ? "sdl.workflow" : tool;
+}
+
+function projectRecoveryValue<T>(
   value: T,
-  fallbackRepoId?: string,
+  fallbackRepoId: string | undefined,
+  inheritedFailedCall: RecoveryActionCall | undefined,
 ): T {
   if (!isRecord(value)) return value;
 
   const projected: Record<string, unknown> =
     value instanceof Error ? value : { ...value };
+  const failedCall = failedCallFromTrace(
+    projected,
+    fallbackRepoId,
+    inheritedFailedCall,
+  );
 
   if (typeof projected.message === "string") {
     projected.message = rewriteRecoveryText(projected.message);
@@ -99,61 +226,91 @@ export function projectExclusiveCodeModeRecovery<T>(
 
   if (Array.isArray(projected.fallbackTools)) {
     projected.fallbackTools = [
-      ...new Set(
-        projected.fallbackTools.map((tool) =>
-          typeof tool === "string"
-            ? (EXCLUSIVE_GATEWAY_REFERENCES[tool]?.tool ?? tool)
-            : tool,
-        ),
-      ),
+      ...new Set(projected.fallbackTools.map(projectFallbackTool)),
     ];
   }
-  if (projected.nextBestAction !== undefined) {
-    projected.nextBestAction = projectNextAction(
-      projected.nextBestAction,
+
+  for (const field of ["nextAction", "nextBestAction"] as const) {
+    if (projected[field] === undefined) continue;
+    const nextAction = projectNextAction(
+      projected[field],
       fallbackRepoId,
+      failedCall,
     );
-  }
-  if (Array.isArray(projected.nextCalls)) {
-    projected.nextCalls = projected.nextCalls.map((nextCall) =>
-      projectNextAction(nextCall, fallbackRepoId),
-    );
+    if (nextAction === undefined) {
+      delete projected[field];
+    } else {
+      projected[field] = nextAction;
+    }
   }
 
-  // Workflow envelopes nest action results and failures under stable fields.
+  if (Array.isArray(projected.nextCalls)) {
+    const nextCalls = projected.nextCalls
+      .map((nextCall) =>
+        projectNextAction(nextCall, fallbackRepoId, failedCall, true),
+      )
+      .filter((nextCall) => nextCall !== undefined);
+    if (nextCalls.length === 0) {
+      delete projected.nextCalls;
+    } else {
+      projected.nextCalls = nextCalls;
+    }
+  }
+
   if (Array.isArray(projected.results)) {
     projected.results = projected.results.map((result) =>
-      projectExclusiveCodeModeRecovery(result, fallbackRepoId),
+      projectRecoveryValue(result, fallbackRepoId, failedCall),
     );
   }
   for (const field of ["result", "failureTrace"] as const) {
     if (projected[field] !== undefined) {
-      projected[field] = projectExclusiveCodeModeRecovery(
+      projected[field] = projectRecoveryValue(
         projected[field],
         fallbackRepoId,
+        failedCall,
       );
     }
   }
+  if (isRecord(projected.details)) {
+    projected.details = projectRecoveryValue(
+      projected.details,
+      fallbackRepoId,
+      failedCall,
+    );
+  }
   if (Array.isArray(projected.data)) {
     projected.data = projected.data.map((item) =>
-      projectExclusiveCodeModeRecovery(item, fallbackRepoId),
+      projectRecoveryValue(item, fallbackRepoId, failedCall),
     );
   } else if (isRecord(projected.data)) {
-    projected.data = projectExclusiveCodeModeRecovery(
+    projected.data = projectRecoveryValue(
       projected.data,
       fallbackRepoId,
+      failedCall,
     );
   }
   if (typeof projected.error === "string") {
     projected.error = rewriteRecoveryText(projected.error);
   } else if (projected.error !== undefined) {
-    projected.error = projectExclusiveCodeModeRecovery(
+    projected.error = projectRecoveryValue(
       projected.error,
       fallbackRepoId,
+      failedCall,
     );
   }
 
   return projected as T;
+}
+
+/**
+ * Validate and rewrite recovery fields for the exclusive Code Mode surface.
+ * Invalid recovery fields are omitted without changing the surrounding result.
+ */
+export function projectExclusiveCodeModeRecovery<T>(
+  value: T,
+  fallbackRepoId?: string,
+): T {
+  return projectRecoveryValue(value, fallbackRepoId, undefined);
 }
 
 /** Apply exclusive-surface projection to both successful results and typed errors. */

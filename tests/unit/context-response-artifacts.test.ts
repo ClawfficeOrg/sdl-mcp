@@ -10,6 +10,9 @@ import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import { ContextEngineV2 } from "../../dist/context/engine.js";
 import type { ContextPayload } from "../../dist/context/types.js";
 import { createActionMap } from "../../dist/gateway/router.js";
+import {
+  projectExclusiveCodeModeRecovery,
+} from "../../dist/code-mode/action-reference-projection.js";
 import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
 import { handleAgentContext } from "../../dist/mcp/tools/context.js";
 import {
@@ -124,7 +127,7 @@ describe("sdl.context response artifacts", () => {
     assert.equal("truncation" in content, false);
   });
 
-  it("keeps invalid response.get recovery actionable through workflow projection", async () => {
+  it("materializes response.get recovery through workflow projection", async () => {
     _setResponseRepoExistsForTesting(async () => true);
     const baseDir = makeTempDir();
     const configPath = join(baseDir, "sdlmcp.config.json");
@@ -193,10 +196,13 @@ describe("sdl.context response artifacts", () => {
     assert.deepEqual(rawFailure.results[0].failureTrace?.details?.details, [
       "Available top-level keys: edges, evidence, nextActions, omitted, retrieval, status, taskType",
     ]);
-    const projectedFailure = projectToolResultForModelContent(
-      "sdl.workflow",
-      rawFailure as unknown as Record<string, unknown>,
-      {},
+    const projectedFailure = projectExclusiveCodeModeRecovery(
+      projectToolResultForModelContent(
+        "sdl.workflow",
+        rawFailure as unknown as Record<string, unknown>,
+        {},
+      ),
+      "repo-a",
     ) as { results: Array<{ failureTrace?: { details?: Record<string, unknown> } }> };
     const recovery = projectedFailure.results[0].failureTrace?.details;
     assert.deepEqual(recovery?.details, [
@@ -207,13 +213,24 @@ describe("sdl.context response artifacts", () => {
       "Retry response.get against the same artifact handle with an available JSON path.",
     );
     assert.deepEqual(recovery?.nextCalls, [{
-      action: "response.get",
+      action: "sdl.workflow",
       args: {
+        includeTelemetry: false,
+        onError: "continue",
         repoId: "repo-a",
-        handle,
-        jsonPath: "evidence",
-        offset: 0,
-        limit: 5,
+        steps: [{
+          args: {
+            full: false,
+            handle,
+            jsonPath: "evidence",
+            limit: 5,
+            maxBytes: 8192,
+            offset: 0,
+            offsetBytes: 0,
+            raw: false,
+          },
+          fn: "responseGet",
+        }],
       },
     }]);
 

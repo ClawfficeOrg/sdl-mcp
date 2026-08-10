@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { registerRecoveryCatalog } from "../mcp/response-projection/recovery.js";
+
 import { INTERNAL_TRANSFORM_NAMES, INTERNAL_TRANSFORMS } from "./transforms.js";
 import {
   AgentFeedbackQueryRequestSchema,
@@ -1582,6 +1584,46 @@ export const ACTION_DEFINITION_BY_ACTION: Readonly<
     ACTION_DEFINITIONS.map((definition) => [definition.action, definition]),
   ),
 );
+
+/** Resolve canonical, flat-tool, and workflow-fn names through the active catalog. */
+export function resolveRecoveryActionDefinition(
+  actionOrToolName: string,
+): ActionDefinition | undefined {
+  const unprefixed = actionOrToolName.startsWith("sdl.")
+    ? actionOrToolName.slice("sdl.".length)
+    : actionOrToolName;
+  const action = Object.hasOwn(FN_NAME_MAP, unprefixed)
+    ? FN_NAME_MAP[unprefixed]
+    : unprefixed;
+  return Object.hasOwn(ACTION_DEFINITION_BY_ACTION, action)
+    ? ACTION_DEFINITION_BY_ACTION[action]
+    : undefined;
+}
+
+/** Return only function names present in the active workflow dispatch maps. */
+export function resolveRecoveryWorkflowFunction(
+  actionOrToolName: string,
+): string | undefined {
+  const definition = resolveRecoveryActionDefinition(actionOrToolName);
+  if (!definition?.fn) return undefined;
+
+  if (definition.kind === "gateway") {
+    return FN_NAME_MAP[definition.fn] === definition.action
+      ? definition.fn
+      : undefined;
+  }
+  if (definition.kind === "internal") {
+    return Object.hasOwn(INTERNAL_TRANSFORMS, definition.fn)
+      ? definition.fn
+      : undefined;
+  }
+  return undefined;
+}
+
+registerRecoveryCatalog(Object.freeze({
+  resolveActionDefinition: resolveRecoveryActionDefinition,
+  resolveWorkflowFunction: resolveRecoveryWorkflowFunction,
+}));
 
 export function formatActionDiscoveryHints(action: string): string {
   const metadata = getActionMetadata(action);
