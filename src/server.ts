@@ -25,7 +25,6 @@ import {
 import {
   shouldAttachUsage,
   computeTokenUsage,
-  stripRawContext,
   type TokenUsageMetadata,
 } from "./mcp/token-usage.js";
 import { tokenAccumulator } from "./mcp/token-accumulator.js";
@@ -41,6 +40,7 @@ import type {
 import {
   extractReferencedSymbolIds,
   normalizeToolArguments,
+  resolveProjectionRequestOptions,
 } from "./mcp/request-normalization.js";
 import {
   buildToolPresentation,
@@ -49,9 +49,23 @@ import {
 } from "./mcp/tool-presentation.js";
 import { getPackageVersion } from "./util/package-info.js";
 import {
+  projectCompatibilityValue,
   projectResultForUsageAccounting,
-  projectToolResultForModelContent,
+  resolveCompatibilityProjectionProfile,
 } from "./mcp/context-response-projection.js";
+import { getProjectionProfile } from "./mcp/response-projection/registry.js";
+import {
+  ModelOutputBoundaryError,
+  projectModelResponse,
+} from "./mcp/response-projection/projectors/index.js";
+import type {
+  EffectiveProjectionRequestOptions,
+  ModelOutputBoundaryErrorCode,
+  ModelProjection,
+  ModelProjectionDependencies,
+  ProjectionProfile,
+  ProjectionStats,
+} from "./mcp/response-projection/types.js";
 import { logger } from "./util/logger.js";
 import {
   attachTimingDiagnostics,
@@ -177,6 +191,7 @@ interface ToolDefinition {
   wireSchema?: Record<string, unknown>;
   outputSchema?: z.ZodType;
   presentation: ToolPresentation;
+  projectionProfile: Readonly<ProjectionProfile>;
 }
 
 export function attachDisplayFooter(
@@ -218,11 +233,21 @@ interface ToolResponseContentBlock {
   text: string;
 }
 
-interface ToolResponseEnvelope extends Record<string, unknown> {
+export interface ToolResponseEnvelope extends Record<string, unknown> {
   content: ToolResponseContentBlock[];
   structuredContent?: Record<string, unknown>;
   isError?: true;
   _displayFooter?: string;
+  /** Non-enumerable internal stats; never serialized onto the MCP wire. */
+  projectionStats?: ProjectionStats;
+}
+
+export interface ResponseProjectionBoundaryOverrides
+  extends ModelProjectionDependencies {
+  readonly handleProjection?: (
+    projection: ModelProjection,
+    includeStructuredContent: boolean,
+  ) => ToolResponseEnvelope;
 }
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
@@ -232,6 +257,7 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 const STRUCTURED_CONTENT_INTERNAL_KEYS = new Set([
   "_packedPayload",
   "_packedStats",
+  "_rawContext",
   "_tokenUsage",
   "_displayFooter",
   "actionsTaken",
@@ -259,20 +285,67 @@ function asStructuredContent(
     };
   };
   const workflowSteps = Array.isArray(toolArgs.steps) ? toolArgs.steps : [];
+  const activeContainers = new Set<object>();
+  const sanitizedContainers = new WeakMap<
+    object,
+    Record<string, unknown> | unknown[]
+  >();
+  let visitedValues = 0;
+  const recordVisitedValue = (): void => {
+    visitedValues += 1;
+    if (visitedValues > 100_000) {
+      throw new Error("Structured content size limit exceeded");
+    }
+  };
+  const beginContainer = (
+    container: object,
+    depth: number,
+  ): Record<string, unknown> | unknown[] | undefined => {
+    if (depth > 128) {
+      throw new Error("Structured content depth limit exceeded");
+    }
+    recordVisitedValue();
+    if (activeContainers.has(container)) {
+      throw new Error("Cyclic structured content");
+    }
+    const cached = sanitizedContainers.get(container);
+    if (cached) {
+      return cached;
+    }
+    activeContainers.add(container);
+    return undefined;
+  };
 
   const sanitize = (
     item: unknown,
     activeOptions: ReturnType<typeof optionsFromArgs>,
     isRoot = false,
+    depth = 0,
   ): unknown => {
     if (Array.isArray(item)) {
-      return item.map((child) => sanitize(child, activeOptions));
+      const cached = beginContainer(item, depth);
+      if (cached) {
+        return cached;
+      }
+      const sanitizedArray: unknown[] = [];
+      sanitizedContainers.set(item, sanitizedArray);
+      for (const child of item) {
+        sanitizedArray.push(sanitize(child, activeOptions, false, depth + 1));
+      }
+      activeContainers.delete(item);
+      return sanitizedArray;
     }
     if (!isRecordValue(item)) {
+      recordVisitedValue();
       return item;
     }
 
+    const cached = beginContainer(item, depth);
+    if (cached) {
+      return cached;
+    }
     const sanitized: Record<string, unknown> = {};
+    sanitizedContainers.set(item, sanitized);
     for (const [key, itemValue] of Object.entries(item)) {
       if (STRUCTURED_CONTENT_INTERNAL_KEYS.has(key) || (isRoot && key === "path")) {
         continue;
@@ -286,8 +359,14 @@ function asStructuredContent(
       if (isRoot && key === "results" && Array.isArray(itemValue)) {
         sanitized.results = itemValue.map((step, index) => {
           if (!isRecordValue(step)) {
-            return sanitize(step, activeOptions);
+            return sanitize(step, activeOptions, false, depth + 1);
           }
+          const cachedStep = beginContainer(step, depth + 1);
+          if (cachedStep) {
+            return cachedStep;
+          }
+          const sanitizedStep: Record<string, unknown> = {};
+          sanitizedContainers.set(step, sanitizedStep);
           const sourceStepIndex = typeof step.stepIndex === "number"
             ? step.stepIndex
             : index;
@@ -297,19 +376,22 @@ function asStructuredContent(
               ? workflowStep.args
               : {};
           const childOptions = optionsFromArgs(childArgs);
-          const sanitizedStep: Record<string, unknown> = {};
           for (const [stepKey, stepValue] of Object.entries(step)) {
             sanitizedStep[stepKey] = sanitize(
               stepValue,
               stepKey === "result" ? childOptions : activeOptions,
+              false,
+              depth + 2,
             );
           }
+          activeContainers.delete(step);
           return sanitizedStep;
         });
         continue;
       }
-      sanitized[key] = sanitize(itemValue, activeOptions);
+      sanitized[key] = sanitize(itemValue, activeOptions, false, depth + 1);
     }
+    activeContainers.delete(item);
     return sanitized;
   };
 
@@ -388,126 +470,234 @@ function addSymbolIdsFromEvidence(value: unknown, ids: Set<string>): void {
   }
 }
 
-// MCP edit envelopes already retain machine-readable snippets in structured
-// content. Only their visible text uses summary mode; notifications and CLI
-// formatting call the formatter separately and keep its default full mode.
-function isEditToolCall(
-  toolName: string,
-  toolArgs: Record<string, unknown>,
-): boolean {
-  if (toolName === "sdl.file") {
-    return (
-      toolArgs.op === "write" ||
-      toolArgs.op === "searchEditPreview" ||
-      toolArgs.op === "searchEditApply" ||
-      (typeof toolArgs.op === "string" && toolArgs.op.startsWith("symbolEdit"))
-    );
-  }
-  return (
-    toolName === "sdl.file.write" ||
-    toolName === "sdl.search.edit" ||
-    toolName === "sdl.symbol.edit"
-  );
-}
-
 export function buildToolResponseContentBlocks(
   primaryPayload: unknown,
-  userDisplay: string | null,
+  _userDisplay: string | null,
   footerText: string,
   toolName = "",
   toolArgs: Record<string, unknown> = {},
 ): ToolResponseContentBlock[] {
-  const displayText =
-    userDisplay ??
-    formatToolCallForUser(toolName, toolArgs, primaryPayload, {
-      presentation: isEditToolCall(toolName, toolArgs) ? "summary" : "full",
-    });
-  const contentBlocks: ToolResponseContentBlock[] = [
-    {
-      type: "text",
-      text: displayText ?? `${toolName || "tool"} -> complete`,
-    },
-  ];
+  // Legacy display text cannot bypass the bounded, single-projection summary.
+  return buildToolResponseEnvelope(
+    primaryPayload,
+    null,
+    footerText,
+    toolName,
+    toolArgs,
+  ).content;
+}
 
-  if (footerText && shouldIncludeDisplayFooter(toolArgs)) {
-    contentBlocks.push({
-      type: "text",
-      text: footerText,
-    });
+const BOUNDARY_FAILURE_MESSAGES = Object.freeze({
+  MODEL_PROJECTION_FAILED: "Model response projection failed.",
+  MODEL_OUTPUT_MEASUREMENT_FAILED: "Model output measurement failed.",
+  RESPONSE_HANDLING_FAILED: "Model response handling failed.",
+} as const satisfies Readonly<Record<ModelOutputBoundaryErrorCode, string>>);
+
+const DELIVERED_RESPONSE_ERROR_CODE = "DELIVERED_RESPONSE_ERROR";
+
+const ERROR_PROJECTION_PROFILE = getProjectionProfile("info");
+const ERROR_PROJECTION_OPTIONS = resolveProjectionRequestOptions({
+  direct: {},
+  profileDefault: ERROR_PROJECTION_PROFILE.defaultDetail,
+});
+
+function buildBoundaryFailureEnvelope(
+  code: ModelOutputBoundaryErrorCode,
+  includeStructuredContent: boolean,
+): ToolResponseEnvelope {
+  const message = BOUNDARY_FAILURE_MESSAGES[code];
+  const content = [{ type: "text" as const, text: `${code}: ${message}` }];
+  if (!includeStructuredContent) {
+    return { content, isError: true };
   }
-  return contentBlocks;
+  return {
+    content,
+    structuredContent: {
+      status: "error",
+      error: { code, message },
+    },
+    isError: true,
+  };
+}
+
+function asBoundaryFailureCode(
+  value: unknown,
+): ModelOutputBoundaryErrorCode | undefined {
+  return value === "MODEL_PROJECTION_FAILED"
+    || value === "MODEL_OUTPUT_MEASUREMENT_FAILED"
+    || value === "RESPONSE_HANDLING_FAILED"
+    ? value
+    : undefined;
+}
+
+/** Audit the delivered outcome; boundary failures never expose canonical data. */
+export function responseForDeliveryAudit(
+  canonicalResult: Record<string, unknown>,
+  envelope: ToolResponseEnvelope,
+): Record<string, unknown> {
+  if (envelope.isError !== true) {
+    return canonicalResult;
+  }
+
+  const structuredError = isRecordValue(envelope.structuredContent?.error)
+    ? envelope.structuredContent.error
+    : undefined;
+  const boundaryCode = asBoundaryFailureCode(structuredError?.code);
+  if (boundaryCode) {
+    return {
+      status: "error",
+      error: { code: boundaryCode },
+    };
+  }
+
+  if (
+    isRecordValue(canonicalResult.error)
+    || canonicalResult.status === "error"
+    || canonicalResult.status === "failure"
+    || canonicalResult.status === "denied"
+  ) {
+    return canonicalResult;
+  }
+  return {
+    status: "error",
+    error: { code: DELIVERED_RESPONSE_ERROR_CODE },
+  };
+}
+
+function projectionIsError(value: unknown, toolName: string): boolean {
+  if (!isRecordValue(value)) {
+    return false;
+  }
+  return isRecordValue(value.error)
+    || value.status === "error"
+    || value.status === "failure"
+    || value.status === "denied"
+    || (
+      toolName === "sdl.workflow"
+      && Array.isArray(value.results)
+      && value.results.some(
+        (result) => isRecordValue(result) && result.status === "error",
+      )
+    );
+}
+
+function envelopeFromProjection(
+  projection: ModelProjection,
+  includeStructuredContent: boolean,
+  toolName: string,
+  visibleFooterText: string,
+): ToolResponseEnvelope {
+  const content = [{ type: "text" as const, text: projection.summary }];
+  const isError = projectionIsError(projection.value, toolName);
+  if (!includeStructuredContent) {
+    return {
+      content,
+      ...(isError ? { isError: true as const } : {}),
+      ...(visibleFooterText ? { _displayFooter: visibleFooterText } : {}),
+    };
+  }
+
+  const structuredContent = isRecordValue(projection.value)
+    ? projection.value
+    : { value: projection.value };
+  return {
+    content,
+    structuredContent,
+    ...(isError ? { isError: true as const } : {}),
+    ...(visibleFooterText ? { _displayFooter: visibleFooterText } : {}),
+  };
+}
+
+function attachProjectionStats(
+  envelope: ToolResponseEnvelope,
+  stats: ProjectionStats,
+): ToolResponseEnvelope {
+  Object.defineProperty(envelope, "projectionStats", {
+    value: stats,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return envelope;
 }
 
 export function buildToolResponseEnvelope(
   primaryPayload: unknown,
-  userDisplay: string | null,
+  _userDisplay: string | null,
   footerText: string,
   toolName = "",
   toolArgs: Record<string, unknown> = {},
-  structuredPayload: unknown = primaryPayload,
+  _structuredPayload: unknown = primaryPayload,
   // MCP clients validate structured content against outputSchema even for isError results.
   includeStructuredContent = true,
+  projectionProfile: Readonly<ProjectionProfile> =
+    resolveCompatibilityProjectionProfile(toolName),
+  projectionOptions: EffectiveProjectionRequestOptions =
+    resolveProjectionRequestOptions({
+      direct: toolArgs,
+      profileDefault: projectionProfile.defaultDetail,
+    }),
+  boundaryOverrides: ResponseProjectionBoundaryOverrides = {},
 ): ToolResponseEnvelope {
-  const modelPayload = projectToolResultForModelContent(
-    toolName,
-    primaryPayload,
-    toolArgs,
-  );
-  const safeUserDisplay =
-    (toolName === "usage.stats" || toolName === "sdl.usage.stats")
-      ? userDisplay
-      : null;
-  const content = buildToolResponseContentBlocks(
-    modelPayload,
-    safeUserDisplay,
-    footerText,
-    toolName,
-    toolArgs,
-  );
-  const sanitizedStructuredPayload = asStructuredContent(structuredPayload, toolArgs);
-  const structuredModelPayload = projectToolResultForModelContent(
-    toolName,
-    sanitizedStructuredPayload,
-    toolArgs,
-  );
-  const structuredContent = isRecordValue(structuredModelPayload)
-    ? structuredModelPayload
-    : { value: structuredModelPayload };
   const visibleFooterText = shouldIncludeDisplayFooter(toolArgs) ? footerText : "";
-  if (!includeStructuredContent) {
-    return visibleFooterText
-      ? { content, _displayFooter: visibleFooterText }
-      : { content };
+  let projection: ModelProjection;
+  try {
+    projection = projectModelResponse(
+      {
+        canonicalResult: primaryPayload,
+        action: toolName,
+        profile: projectionProfile,
+        options: projectionOptions,
+        context: {
+          toolName,
+          requestArgs: toolArgs,
+          footerText: visibleFooterText || undefined,
+          measurementSource: primaryPayload,
+        },
+      },
+      {
+        projectCompatibilityValue,
+        prepareCanonicalValue: (canonicalValue) =>
+          asStructuredContent(canonicalValue, toolArgs),
+        ...boundaryOverrides,
+      },
+    );
+  } catch (error) {
+    if (error instanceof ModelOutputBoundaryError) {
+      return buildBoundaryFailureEnvelope(
+        error.code,
+        includeStructuredContent,
+      );
+    }
+    throw error;
   }
 
-  const isError =
-    isRecordValue(primaryPayload)
-    && (
-      primaryPayload.status === "failure"
-      || primaryPayload.status === "denied"
-      || (
-        toolName === "sdl.workflow"
-        && Array.isArray(primaryPayload.results)
-        && primaryPayload.results.some(
-          (result) => isRecordValue(result) && result.status === "error",
-        )
-      )
+  try {
+    const envelope = boundaryOverrides.handleProjection
+      ? boundaryOverrides.handleProjection(projection, includeStructuredContent)
+      : envelopeFromProjection(
+          projection,
+          includeStructuredContent,
+          toolName,
+          visibleFooterText,
+        );
+    return attachProjectionStats(envelope, projection.stats);
+  } catch {
+    return buildBoundaryFailureEnvelope(
+      "RESPONSE_HANDLING_FAILED",
+      includeStructuredContent,
     );
-
-  return visibleFooterText
-    ? {
-        content,
-        structuredContent,
-        ...(isError ? { isError: true as const } : {}),
-        _displayFooter: visibleFooterText,
-      }
-    : { content, structuredContent, ...(isError ? { isError: true as const } : {}) };
+  }
 }
 
 export interface MCPServerOptions {
   /** OpenAI-compatible clients reject dots in tool names; keep canonical by default. */
   toolNameFormat?: ToolNameFormat;
   getStartupReadiness?: () => StartupReadinessSnapshot;
+  resolveProjectionProfile?: (
+    actionOrToolName: string,
+  ) => Readonly<ProjectionProfile> | undefined;
+  responseProjectionBoundaryOverrides?: ResponseProjectionBoundaryOverrides;
 }
 
 export class MCPServer {
@@ -516,6 +706,11 @@ export class MCPServer {
   private clientToolNameToCanonical: Map<string, string> = new Map();
   private readonly toolNameFormat: ToolNameFormat;
   private readonly getStartupReadiness: () => StartupReadinessSnapshot;
+  private readonly resolveProjectionProfile: (
+    actionOrToolName: string,
+  ) => Readonly<ProjectionProfile> | undefined;
+  private readonly responseProjectionBoundaryOverrides:
+    ResponseProjectionBoundaryOverrides;
   private _gatewayMode = false;
   private postDispatchHooks: PostDispatchHook[] = [];
 
@@ -523,6 +718,10 @@ export class MCPServer {
     this.toolNameFormat = options.toolNameFormat ?? "canonical";
     this.getStartupReadiness =
       options.getStartupReadiness ?? readyStartupReadinessSnapshot;
+    this.resolveProjectionProfile =
+      options.resolveProjectionProfile ?? getProjectionProfile;
+    this.responseProjectionBoundaryOverrides =
+      options.responseProjectionBoundaryOverrides ?? {};
     this.server = new Server(
       {
         name: "sdl-mcp",
@@ -638,6 +837,11 @@ export class MCPServer {
                 "",
                 toolName,
                 {},
+                notFoundResponse,
+                true,
+                ERROR_PROJECTION_PROFILE,
+                ERROR_PROJECTION_OPTIONS,
+                this.responseProjectionBoundaryOverrides,
               ),
               isError: true,
             };
@@ -651,6 +855,10 @@ export class MCPServer {
             toolContext.sessionId,
           );
           timer.record("server.normalize", normalizeStartedAt);
+          const projectionOptions = resolveProjectionRequestOptions({
+            direct: normalizedArgs,
+            profileDefault: tool.projectionProfile.defaultDetail,
+          });
           const startupReadiness = this.getStartupReadiness();
           const writeReady = startupReadiness.state === "ready";
           const includeDiagnostics = wantsTimingDiagnostics(normalizedArgs);
@@ -710,6 +918,10 @@ export class MCPServer {
                 toolName,
                 normalizedArgs as Record<string, unknown>,
                 responseForLog,
+                true,
+                tool.projectionProfile,
+                projectionOptions,
+                this.responseProjectionBoundaryOverrides,
               ),
               isError: true,
             };
@@ -784,30 +996,31 @@ export class MCPServer {
               : await runDispatch();
             timer.record("server.dispatch", dispatchStartedAt);
 
-            // Inject _tokenUsage and strip _rawContext before serialization
+            // Preserve the canonical handler value for workflow piping, hooks,
+            // audit, and usage. Only the model projection removes private fields.
             const responseProcessingStartedAt = timer.start();
-            let finalResult = result;
-            let structuredResult: unknown = finalResult;
+            const canonicalResult = result;
             let tokensUsedForObs: number | undefined;
             let tokensSavedForObs: number | undefined;
             let deliveredTokenCount: number | undefined;
             let userDisplay: string | null = null;
-            if (result && typeof result === "object") {
-              const r = result as Record<string, unknown>;
+            if (isRecordValue(canonicalResult)) {
               const usageAccountingResult = projectResultForUsageAccounting(
                 toolName,
-                r,
+                canonicalResult,
                 normalizedArgs as Record<string, unknown>,
               );
+              let usage = canonicalResult._tokenUsage as
+                | TokenUsageMetadata
+                | undefined;
               if (
-                shouldAttachUsage(toolName) &&
-                usageAccountingResult._rawContext
+                shouldAttachUsage(toolName)
+                && usageAccountingResult._rawContext
               ) {
-                r._tokenUsage = await computeTokenUsage(usageAccountingResult);
+                usage = await computeTokenUsage(usageAccountingResult);
               }
-              // Accumulate session-level token usage
-              if (r._tokenUsage) {
-                const usage = r._tokenUsage as TokenUsageMetadata;
+
+              if (usage) {
                 tokenAccumulator.recordUsage(
                   toolName,
                   usage.sdlTokens,
@@ -819,7 +1032,6 @@ export class MCPServer {
                   0,
                   usage.rawEquivalent - usage.sdlTokens,
                 );
-                // Send per-call savings notification to user (MCP logging)
                 void toolContext
                   .sendNotification({
                     method: "notifications/message",
@@ -836,27 +1048,27 @@ export class MCPServer {
                     /* non-critical */
                   });
               } else if (
-                shouldAttachUsage(toolName) &&
-                typeof r.totalTokens === "number" &&
-                r.totalTokens > 0
+                shouldAttachUsage(toolName)
+                && typeof canonicalResult.totalTokens === "number"
+                && canonicalResult.totalTokens > 0
               ) {
-                // Neutral accounting: count the call but model zero savings
                 tokenAccumulator.recordUsage(
                   toolName,
-                  r.totalTokens,
-                  r.totalTokens,
+                  canonicalResult.totalTokens,
+                  canonicalResult.totalTokens,
                 );
-                tokensUsedForObs = r.totalTokens;
-                deliveredTokenCount = r.totalTokens;
+                tokensUsedForObs = canonicalResult.totalTokens;
+                deliveredTokenCount = canonicalResult.totalTokens;
                 tokensSavedForObs = 0;
               }
 
               if (
-                toolContext.sessionId &&
-                deliveredTokenCount !== undefined &&
-                deliveredTokenCount > 0
+                toolContext.sessionId
+                && deliveredTokenCount !== undefined
+                && deliveredTokenCount > 0
               ) {
-                const deliveredSymbolIds = extractDeliveredSymbolIdsFromToolResult(r);
+                const deliveredSymbolIds =
+                  extractDeliveredSymbolIdsFromToolResult(canonicalResult);
                 if (deliveredSymbolIds.length > 0) {
                   wasteLedger.recordDelivered(
                     toolContext.sessionId,
@@ -867,11 +1079,10 @@ export class MCPServer {
                 }
               }
 
-              // Send human-readable tool call summary to user (MCP logging)
               userDisplay = formatToolCallForUser(
                 toolName,
                 normalizedArgs as Record<string, unknown>,
-                r,
+                canonicalResult,
               );
               if (userDisplay) {
                 void toolContext
@@ -888,117 +1099,97 @@ export class MCPServer {
                   });
               }
 
-              finalResult = stripRawContext(r);
-              structuredResult =
-                finalResult && typeof finalResult === "object" && !Array.isArray(finalResult)
-                  ? { ...(finalResult as Record<string, unknown>) }
-                  : finalResult;
-              // Also strip _tokenUsage (stripRawContext only handles _rawContext)
               if (
-                finalResult &&
-                typeof finalResult === "object" &&
-                "_tokenUsage" in finalResult
+                toolName === "sdl.usage.stats"
+                && typeof canonicalResult.formattedSummary === "string"
               ) {
-                delete (finalResult as Record<string, unknown>)._tokenUsage;
-              }
-            }
-
-            // Capture formatted summary for content block before it gets deleted
-            let capturedSummary: string | undefined;
-
-            // Send formatted summary as user notification for usage stats
-            if (
-              toolName === "sdl.usage.stats" &&
-              finalResult &&
-              typeof finalResult === "object" &&
-              "formattedSummary" in finalResult
-            ) {
-              const summary = (finalResult as Record<string, unknown>)
-                .formattedSummary;
-              if (typeof summary === "string") {
+                userDisplay = canonicalResult.formattedSummary;
                 void toolContext
                   .sendNotification({
                     method: "notifications/message",
                     params: {
                       level: "info",
                       logger: "sdl-mcp",
-                      data: summary,
+                      data: canonicalResult.formattedSummary,
                     },
                   })
                   .catch(() => {
                     /* non-critical */
                   });
-                userDisplay = summary;
-                capturedSummary = summary;
-                delete (finalResult as Record<string, unknown>)
-                  .formattedSummary;
               }
             }
 
             // Post-dispatch hooks may persist learned state, so skip them while degraded.
             if (writeReady) {
               for (const hook of this.postDispatchHooks) {
-              const hookAbortController = new AbortController();
-              const abortHook = (): void => {
-                hookAbortController.abort();
-              };
-              if (toolContext.signal.aborted) {
-                hookAbortController.abort();
-              } else {
-                toolContext.signal.addEventListener("abort", abortHook, {
-                  once: true,
-                });
-              }
-              const hookContext: ToolContext = {
-                ...toolContext,
-                signal: hookAbortController.signal,
-              };
-              let timeoutHandle: NodeJS.Timeout | null = null;
-              try {
-                const hookStartedAt = timer.start();
-                await Promise.race([
-                  hook(toolName, parsedArgs, finalResult, hookContext),
-                  new Promise((_, reject) =>
-                    (timeoutHandle = setTimeout(() => {
-                      hookAbortController.abort();
-                      reject(new Error("Post-dispatch hook timed out"));
-                    }, 5_000)).unref(),
-                  ),
-                ]);
-                timer.record("server.postDispatchHook", hookStartedAt);
-              } catch (err) {
-                process.stderr.write(
-                  `[sdl-mcp] Post-dispatch hook failed for tool ${toolName}: ${err instanceof Error ? err.message : String(err)}
-`,
-                );
-              } finally {
-                if (timeoutHandle) {
-                  clearTimeout(timeoutHandle);
+                const hookAbortController = new AbortController();
+                const abortHook = (): void => {
+                  hookAbortController.abort();
+                };
+                if (toolContext.signal.aborted) {
+                  hookAbortController.abort();
+                } else {
+                  toolContext.signal.addEventListener("abort", abortHook, {
+                    once: true,
+                  });
                 }
-                toolContext.signal.removeEventListener("abort", abortHook);
-              }
+                const hookContext: ToolContext = {
+                  ...toolContext,
+                  signal: hookAbortController.signal,
+                };
+                let timeoutHandle: NodeJS.Timeout | null = null;
+                try {
+                  const hookStartedAt = timer.start();
+                  await Promise.race([
+                    hook(toolName, parsedArgs, canonicalResult, hookContext),
+                    new Promise((_, reject) =>
+                      (timeoutHandle = setTimeout(() => {
+                        hookAbortController.abort();
+                        reject(new Error("Post-dispatch hook timed out"));
+                      }, 5_000)).unref(),
+                    ),
+                  ]);
+                  timer.record("server.postDispatchHook", hookStartedAt);
+                } catch (err) {
+                  process.stderr.write(
+                    `[sdl-mcp] Post-dispatch hook failed for tool ${toolName}: ${err instanceof Error ? err.message : String(err)}\n`,
+                  );
+                } finally {
+                  if (timeoutHandle) {
+                    clearTimeout(timeoutHandle);
+                  }
+                  toolContext.signal.removeEventListener("abort", abortHook);
+                }
               }
             }
             timer.record(
               "server.responseProcessing",
               responseProcessingStartedAt,
             );
-            if (includeDiagnostics) {
-              const diagnosticsSnapshot = timer.snapshot();
-              finalResult = attachTimingDiagnostics(
-                finalResult,
-                diagnosticsSnapshot,
-              );
-              structuredResult = attachTimingDiagnostics(
-                structuredResult,
-                diagnosticsSnapshot,
-              );
-            }
 
-            logToolCall({
+            const responseForProjection = includeDiagnostics
+              ? attachTimingDiagnostics(canonicalResult, timer.snapshot())
+              : canonicalResult;
+            const responseEnvelope = buildToolResponseEnvelope(
+              responseForProjection,
+              userDisplay,
+              "",
+              toolName,
+              normalizedArgs as Record<string, unknown>,
+              responseForProjection,
+              true,
+              tool.projectionProfile,
+              projectionOptions,
+              this.responseProjectionBoundaryOverrides,
+            );
+
+            const toolCallEvent = {
               tool: toolName,
               request: normalizedArgs as Record<string, unknown>,
-              response: finalResult as Record<string, unknown>,
+              response: responseForDeliveryAudit(
+                canonicalResult as Record<string, unknown>,
+                responseEnvelope,
+              ),
               durationMs: Date.now() - start,
               repoId,
               symbolId,
@@ -1006,25 +1197,13 @@ export class MCPServer {
               taskType: toolContext.taskType,
               tokensUsed: tokensUsedForObs,
               tokensSaved: tokensSavedForObs,
-              diagnostics: extractTimingDiagnostics(finalResult),
-            }, {
+              diagnostics: extractTimingDiagnostics(responseForProjection),
+              projection: responseEnvelope.projectionStats,
+            };
+            logToolCall(toolCallEvent, {
               persistAudit: writeReady,
             });
-            const footerLines: string[] = [];
-            if (capturedSummary) {
-              footerLines.push(capturedSummary);
-            }
-
-            const footerText = footerLines.join("\n\n");
-            const primaryPayload = attachDisplayFooter(finalResult, footerText);
-            return buildToolResponseEnvelope(
-              primaryPayload,
-              userDisplay,
-              footerText,
-              toolName,
-              normalizedArgs as Record<string, unknown>,
-              structuredResult,
-            );
+            return responseEnvelope;
           } catch (error) {
             process.stderr.write(
               `[sdl-mcp] Tool ${toolName} error: ${error}\n`,
@@ -1056,6 +1235,10 @@ export class MCPServer {
                 toolName,
                 normalizedArgs as Record<string, unknown>,
                 responseForLog,
+                true,
+                tool.projectionProfile,
+                projectionOptions,
+                this.responseProjectionBoundaryOverrides,
               ),
               isError: true,
             };
@@ -1074,6 +1257,9 @@ export class MCPServer {
               {},
               outerErrorResponse,
               false,
+              ERROR_PROJECTION_PROFILE,
+              ERROR_PROJECTION_OPTIONS,
+              this.responseProjectionBoundaryOverrides,
             ),
             isError: true,
           };
@@ -1091,6 +1277,11 @@ export class MCPServer {
     presentation?: Partial<ToolPresentation>,
     outputSchema?: z.ZodType,
   ): void {
+    const projectionProfile = this.resolveProjectionProfile(name);
+    if (!projectionProfile) {
+      const action = name.startsWith("sdl.") ? name.slice("sdl.".length) : name;
+      throw new Error(`Missing response projection profile: ${action}`);
+    }
     if (this.tools.has(name)) {
       logger.warn("Duplicate tool registration", { name });
     }
@@ -1103,6 +1294,7 @@ export class MCPServer {
       wireSchema,
       outputSchema,
       presentation: buildToolPresentation(name, presentation),
+      projectionProfile,
     });
   }
 

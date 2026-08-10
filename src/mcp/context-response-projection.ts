@@ -7,6 +7,15 @@ import {
   getResponseProjectionRule,
   getWorkflowChildAction,
 } from "./context-response-projection-registry.js";
+import { projectModelValue } from "./response-projection/projectors/index.js";
+import {
+  getProjectionProfile,
+  PROJECTION_PROFILE_REGISTRY,
+} from "./response-projection/registry.js";
+import type {
+  ModelProjectionInput,
+  ProjectionProfile,
+} from "./response-projection/types.js";
 
 export {
   ARTIFACT_HARD_MAX_BYTES,
@@ -30,12 +39,24 @@ export {
   measureProjectionValue,
   serializeProjectionValue,
 } from "./response-projection/measure.js";
+export {
+  projectModelResponse,
+  projectResponseForModel,
+} from "./response-projection/projectors/index.js";
+export { projectModelValue };
 export type {
   DetailLevel,
+  EffectiveProjectionRequestOptions,
   LargeResponseStrategy,
+  ModelOutputBoundaryErrorCode,
   ModelProjection,
+  ModelProjectionDependencies,
+  ModelProjectionInput,
+  ModelValueProjectionDelegate,
   ObservabilityProfileId,
   OutputBudgetClass,
+  ProjectionEnclosingContext,
+  ProjectionMeasurement,
   ProjectionProfile,
   ProjectionRequestOptions,
   ProjectionStats,
@@ -54,6 +75,18 @@ interface ModelContentProjectionOptions {
   includeProcesses: boolean;
   includeResolutionMetadata: boolean;
   fileOp?: string;
+}
+
+const LEGACY_COMPATIBILITY_PROFILE = getProjectionProfile("info");
+
+/** Resolve registered actions while retaining direct legacy helper compatibility. */
+export function resolveCompatibilityProjectionProfile(
+  toolName: string,
+): Readonly<ProjectionProfile> {
+  const action = toolName.startsWith("sdl.") ? toolName.slice(4) : toolName;
+  return Object.hasOwn(PROJECTION_PROFILE_REGISTRY, action)
+    ? getProjectionProfile(action)
+    : LEGACY_COMPATIBILITY_PROFILE;
 }
 
 const HIDDEN_ETAG_MODEL_FIELDS = new Set(["etag", "etagCache", "sliceEtag"]);
@@ -249,6 +282,38 @@ function modelOptionsFromArgs(
     includeResolutionMetadata: args.includeResolutionMetadata === true,
     fileOp: typeof args.op === "string" ? args.op : undefined,
   };
+}
+
+function buildCompatibilityProjectionInput(
+  toolName: string,
+  result: unknown,
+  args: Record<string, unknown>,
+): ModelProjectionInput {
+  const options = modelOptionsFromArgs(args);
+  return {
+    canonicalResult: result,
+    action: toolName,
+    profile: resolveCompatibilityProjectionProfile(toolName),
+    options: {
+      detail: options.detail,
+      includeDiagnostics: options.includeDiagnostics,
+    },
+    context: { toolName, requestArgs: args },
+  };
+}
+
+export function projectCompatibilityValue(
+  input: ModelProjectionInput,
+): unknown {
+  return projectLegacyToolResultForModelContent(
+    input.action,
+    input.canonicalResult,
+    {
+      ...input.context.requestArgs,
+      detail: input.options.detail,
+      includeDiagnostics: input.options.includeDiagnostics,
+    },
+  );
 }
 
 function isFullDetail(options: ModelContentProjectionOptions): boolean {
@@ -627,7 +692,7 @@ function projectWorkflowStepResultForModel(
   return projectGenericValueForModel(childToolName, result, childOptions);
 }
 
-export function projectWorkflowChildResultForModel(
+function projectLegacyWorkflowChildResultForModel(
   fn: string,
   result: unknown,
   workflowArgs: Record<string, unknown>,
@@ -640,6 +705,29 @@ export function projectWorkflowChildResultForModel(
     childArgs,
   );
 }
+
+export function projectWorkflowChildResultForModel(
+  fn: string,
+  result: unknown,
+  workflowArgs: Record<string, unknown>,
+  childArgs: Record<string, unknown>,
+): unknown {
+  const toolName = getWorkflowChildAction(fn);
+  return projectModelValue(
+    buildCompatibilityProjectionInput(
+      toolName,
+      result,
+      { ...workflowArgs, ...childArgs },
+    ),
+    (_input) => projectLegacyWorkflowChildResultForModel(
+      fn,
+      result,
+      workflowArgs,
+      childArgs,
+    ),
+  );
+}
+
 function projectWorkflowResultForModel(
   result: Record<string, unknown>,
   options: ModelContentProjectionOptions,
@@ -902,7 +990,7 @@ export function projectResultForUsageAccounting(
  * Internal diagnostics, sync details, and packing stats stay
  * available to logs/debug paths, but are not duplicated into model-visible text.
  */
-export function projectToolResultForModelContent(
+function projectLegacyToolResultForModelContent(
   toolName: string,
   result: unknown,
   args: Record<string, unknown> = {},
@@ -950,4 +1038,16 @@ export function projectToolResultForModelContent(
   }
 
   return projectGenericValueForModel(toolName, result, options);
+}
+
+/** Compatibility facade: public callers enter through the family dispatcher. */
+export function projectToolResultForModelContent(
+  toolName: string,
+  result: unknown,
+  args: Record<string, unknown> = {},
+): unknown {
+  return projectModelValue(
+    buildCompatibilityProjectionInput(toolName, result, args),
+    projectCompatibilityValue,
+  );
 }

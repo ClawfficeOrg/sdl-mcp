@@ -10,6 +10,7 @@ import {
 } from "../../dist/server.js";
 import { formatToolCallForUser } from "../../dist/mcp/tool-call-formatter.js";
 import { formatCliToolOutput } from "../../dist/cli/commands/tool-dispatch.js";
+import { estimateTokens } from "../../dist/util/tokenize.js";
 
 const REPRESENTATIVE_TOOL_NAMES = [
   "sdl.action.search",
@@ -112,6 +113,7 @@ describe("visible tool output", () => {
     assert.equal(envelope.structuredContent?.diagnostics, undefined);
     assert.equal(envelope.structuredContent?._packedStats, undefined);
     assert.equal(envelope.structuredContent?._displayFooter, undefined);
+    assert.ok(envelope.projectionStats);
   });
 
   it("shows display footers when telemetry is explicitly requested", () => {
@@ -124,9 +126,24 @@ describe("visible tool output", () => {
       { includeTelemetry: true },
     );
 
-    assert.equal(envelope.content[1]?.text, footer);
+    assert.ok((envelope.content[0]?.text ?? "").includes(footer));
+    assert.equal(envelope.content[1], undefined);
     assert.equal(envelope._displayFooter, footer);
     assert.equal(envelope.structuredContent?.etag, undefined);
+  });
+
+  it("bounds direct legacy content-block helper output through model projection", () => {
+    const blocks = buildToolResponseContentBlocks(
+      { status: "success", stdoutSummary: "complete" },
+      `#PACKED/v1\ncanonical-secret\n${"unbounded ".repeat(500)}`,
+      "",
+      "sdl.runtime.execute",
+      {},
+    );
+
+    assert.equal(blocks.length, 1);
+    assert.ok(estimateTokens(blocks[0]?.text ?? "") <= 120);
+    assert.doesNotMatch(blocks[0]?.text ?? "", /#PACKED\/|canonical-secret/);
   });
 
   it("formats sdl.context as an evidence summary without internal noise", () => {
@@ -441,7 +458,7 @@ describe("visible tool output", () => {
   it("projects actual server validation errors into structured content", async () => {
     const server = new MCPServer();
     server.registerTool(
-      "sdl.test.validation",
+      "sdl.info",
       "Validation test tool",
       z.object({ filePath: z.string() }),
       async () => ({ success: true }),
@@ -451,7 +468,7 @@ describe("visible tool output", () => {
     const result = await handler(
       {
         method: "tools/call",
-        params: { name: "sdl.test.validation", arguments: {} },
+        params: { name: "sdl.info", arguments: {} },
       },
       {
         _meta: {},
@@ -466,7 +483,7 @@ describe("visible tool output", () => {
     const details = error.details as Array<Record<string, unknown>>;
 
     assert.equal(result.isError, true);
-    assert.match(String(content[0]?.text), /^sdl.test.validation \[error\]/);
+    assert.match(String(content[0]?.text), /^sdl.info \[error\]/);
     assert.match(String(content[0]?.text), /Invalid tool arguments/);
     assert.doesNotMatch(String(content[0]?.text), /^\s*\{/);
     assert.equal(error.code, "VALIDATION_ERROR");

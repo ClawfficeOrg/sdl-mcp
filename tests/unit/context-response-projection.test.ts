@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  projectCompatibilityValue,
+  projectModelValue,
   projectResultForUsageAccounting,
   projectToolResultForModelContent,
   projectWorkflowChildResultForModel,
@@ -195,6 +197,50 @@ describe("context-response-projection", () => {
         },
       },
     ]);
+  });
+
+  it("keeps the compatibility facade aligned with dispatcher-owned projection", () => {
+    const canonical = {
+      status: "complete",
+      evidence: [{ symbolId: "sym:dispatcher", rung: "card" }],
+      diagnostics: { timings: { totalMs: 12 } },
+      etag: "hidden-etag",
+    };
+    const input = {
+      canonicalResult: canonical,
+      action: "sdl.context",
+      profile: {
+        projector: "generic",
+        observabilityProfile: "standard",
+        defaultDetail: "compact" as const,
+        budgetClass: "compact" as const,
+        largeResponseStrategy: "truncate" as const,
+        recoveryPolicy: "none" as const,
+      },
+      options: { detail: "compact" as const, includeDiagnostics: false },
+      context: { toolName: "sdl.context", requestArgs: {} },
+    };
+
+    assert.deepEqual(
+      projectToolResultForModelContent("sdl.context", canonical),
+      projectModelValue(input, projectCompatibilityValue),
+    );
+  });
+
+  it("is idempotent and does not mutate canonical input", () => {
+    const canonical = {
+      status: "complete",
+      taskType: "explain",
+      evidence: [{ symbolId: "sym:1", rung: "card" }],
+      diagnostics: { timings: { totalMs: 12 } },
+      _rawContext: { rawTokens: 128 },
+    };
+    const original = structuredClone(canonical);
+    const first = projectToolResultForModelContent("sdl.context", canonical);
+    const second = projectToolResultForModelContent("sdl.context", first);
+
+    assert.deepEqual(second, first);
+    assert.deepEqual(canonical, original);
   });
 
   it("keeps validation errors out of success-only projectors", () => {
