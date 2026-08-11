@@ -20,6 +20,7 @@ import {
   maybeCompressToolResponse,
   recordTokenSavings,
 } from "../response-compression.js";
+import { boundResponseTextUtf8 } from "../../runtime/response-artifacts.js";
 
 export const SDL_SOURCE_EXTENSIONS = new Set([
   ".ts",
@@ -52,7 +53,11 @@ export const SDL_SOURCE_EXTENSIONS = new Set([
 
 const MAX_FILE_SIZE_BYTES = 512 * 1024; // 512KB
 const BYTES_PER_TOKEN = 4;
+const FILE_READ_HARD_TOKEN_LIMIT = 8_000;
+const FILE_READ_HARD_BYTES = FILE_READ_HARD_TOKEN_LIMIT * BYTES_PER_TOKEN;
 const LARGE_UNTARGETED_READ_LINE_THRESHOLD = 120;
+const FILE_READ_PREVIEW_BYTES = 1024;
+const UTF8_BOUNDARY_LOOKAHEAD_BYTES = 3;
 const LARGE_UNTARGETED_READ_HINT =
   "Large untargeted read. Use search+searchContext, offset+limit, or maxTokens to fetch only what you need.";
 
@@ -62,6 +67,23 @@ export function computeFileReadLimit(
   needsFullFile: boolean,
 ): number {
   return needsFullFile ? fileSize : Math.min(fileSize, maxBytes);
+}
+
+/**
+ * Bound model-visible content by its UTF-8 bytes without splitting a code point.
+ * The original byte count is retained for existing truncation metadata.
+ */
+function clampFileReadContentUtf8(
+  content: string,
+  maxBytes: number,
+): { content: string; bytes: number; truncated: boolean } {
+  const bytes = Buffer.byteLength(content, "utf-8");
+  const truncated = bytes > maxBytes;
+  return {
+    content: truncated ? boundResponseTextUtf8(content, maxBytes) : content,
+    bytes,
+    truncated,
+  };
 }
 
 function assertFullFileSourceFitsExtractionLimit(fileSize: number, reason: string): void {
@@ -357,7 +379,7 @@ async function finalizeFileReadResponse(
     }
   }
 
-  return maybeCompressToolResponse({
+  const delivered = await maybeCompressToolResponse({
     repoId: request.repoId,
     toolName: "sdl.file.read",
     payload: enriched,
@@ -365,13 +387,43 @@ async function finalizeFileReadResponse(
     rawContext: { rawTokens },
     sessionId: context?.sessionId,
   });
+
+  // Expose only a bounded model preview; the shared artifact retains the full sanitized result.
+  if (
+    "responseMode" in delivered &&
+    delivered.responseMode === "handle" &&
+    !hasFileReadTargeting(request)
+  ) {
+    const content = boundResponseTextUtf8(
+      responseWithHint.content,
+      FILE_READ_PREVIEW_BYTES,
+    );
+    const previewBytes = Buffer.byteLength(content, "utf-8");
+    const previewTruncated =
+      responseWithHint.truncated ||
+      previewBytes < Buffer.byteLength(responseWithHint.content, "utf-8");
+    return {
+      ...delivered,
+      preview: {
+        filePath: responseWithHint.filePath,
+        content,
+        bytes: previewBytes,
+        totalLines: responseWithHint.totalLines,
+        returnedLines: content.split(/\r?\n/).length,
+        truncated: previewTruncated,
+        ...(previewTruncated ? { truncatedAt: previewBytes } : {}),
+      },
+    };
+  }
+
+  return delivered;
 }
 
 export async function handleFileRead(
   args: unknown,
   context?: ToolContext,
 ): Promise<FileReadResponse> {
-  const request = parseActionHandlerArgs(FileReadRequestSchema, args);
+  let request = parseActionHandlerArgs(FileReadRequestSchema, args);
   const conn = await getLadybugConn();
   const repo = await ladybugDb.getRepo(conn, request.repoId);
   if (!repo) {
@@ -415,6 +467,16 @@ export async function handleFileRead(
   );
   const fileStat = await stat(openPath);
 
+  // Classify untargeted reads from metadata before any file content enters the response path.
+  if (
+    request.responseMode === "auto" &&
+    request.deltaMode !== "auto" &&
+    !hasFileReadTargeting(request) &&
+    fileStat.size > FILE_READ_HARD_BYTES
+  ) {
+    request = { ...request, responseMode: "handle" };
+  }
+
   const needsFullFile = request.jsonPath !== undefined ||
     request.search !== undefined ||
     request.offset !== undefined ||
@@ -433,12 +495,28 @@ export async function handleFileRead(
 
   let rawContent: string;
   if (readLimit < fileStat.size) {
-    // Read limited bytes to avoid full allocation
+    // A UTF-8 code point can extend three bytes past the content budget.
+    // Read only that boundary lookahead, then clamp before deriving line metadata.
+    const bytesToRead = Math.min(
+      fileStat.size,
+      readLimit + UTF8_BOUNDARY_LOOKAHEAD_BYTES,
+    );
     const fh = await open(openPath, "r");
     try {
-      const buf = Buffer.alloc(readLimit);
-      await fh.read(buf, 0, readLimit, 0);
-      rawContent = buf.toString("utf-8");
+      const buf = Buffer.alloc(bytesToRead);
+      let bytesRead = 0;
+      while (bytesRead < bytesToRead) {
+        const result = await fh.read(
+          buf,
+          bytesRead,
+          bytesToRead - bytesRead,
+          bytesRead,
+        );
+        if (result.bytesRead === 0) break;
+        bytesRead += result.bytesRead;
+      }
+      const decoded = buf.subarray(0, bytesRead).toString("utf-8");
+      rawContent = clampFileReadContentUtf8(decoded, readLimit).content;
     } finally {
       await fh.close();
     }
@@ -513,13 +591,11 @@ export async function handleFileRead(
       typeof extracted === "string"
         ? extracted
         : JSON.stringify(extracted, null, 2);
-    const serializedBytes = Buffer.from(serialized, "utf-8");
-    const returnedBytes =
-      serializedBytes.length > maxBytes
-        ? serializedBytes.subarray(0, maxBytes)
-        : serializedBytes;
-    const content = returnedBytes.toString("utf-8");
-    const truncated = serializedBytes.length > maxBytes;
+    const {
+      content,
+      bytes: serializedBytes,
+      truncated,
+    } = clampFileReadContentUtf8(serialized, maxBytes);
 
     return finalizeFileReadResponse(
       request,
@@ -527,7 +603,7 @@ export async function handleFileRead(
       {
         filePath,
         content,
-        bytes: serializedBytes.length,
+        bytes: serializedBytes,
         totalLines,
         returnedLines: content.split("\n").length,
         truncated,
@@ -568,12 +644,13 @@ export async function handleFileRead(
     const finalContent = warnings.length > 0
       ? `// WARNING: ${warnings.join(" ")}\n${result.content}`
       : result.content;
-    const finalBytes = Buffer.byteLength(finalContent, "utf-8");
-    const searchContent = finalBytes > maxBytes
-      ? Buffer.from(finalContent, "utf-8").subarray(0, maxBytes).toString("utf-8")
-      : finalContent;
+    const {
+      content: searchContent,
+      bytes: finalBytes,
+      truncated: contentTruncated,
+    } = clampFileReadContentUtf8(finalContent, maxBytes);
     const searchTruncated =
-      result.matchesTruncated || result.linesTruncated || finalBytes > maxBytes;
+      result.matchesTruncated || result.linesTruncated || contentTruncated;
     return finalizeFileReadResponse(
       request,
       context,
@@ -584,7 +661,7 @@ export async function handleFileRead(
         totalLines,
         returnedLines: result.returnedLines,
         truncated: searchTruncated,
-        ...(finalBytes > maxBytes ? { truncatedAt: maxBytes } : {}),
+        ...(contentTruncated ? { truncatedAt: maxBytes } : {}),
         matchCount: result.matchCount,
       },
       totalBytes,
@@ -601,17 +678,20 @@ export async function handleFileRead(
     const numberedContent = sliced
       .map((l, i) => `${offset + i + 1}: ${l}`)
       .join("\n");
-    const slicedBytes = Buffer.byteLength(numberedContent, "utf-8");
+    const {
+      content: boundedContent,
+      bytes: slicedBytes,
+      truncated,
+    } = clampFileReadContentUtf8(numberedContent, maxBytes);
 
     // Apply maxBytes truncation
-    if (slicedBytes > maxBytes) {
-      const truncated = numberedContent.slice(0, maxBytes);
+    if (truncated) {
       return finalizeFileReadResponse(
         request,
         context,
         {
           filePath,
-          content: truncated,
+          content: boundedContent,
           bytes: slicedBytes,
           totalLines,
           returnedLines: sliced.length,

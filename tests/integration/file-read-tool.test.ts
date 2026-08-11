@@ -304,6 +304,24 @@ describe("sdl.file.read token usage metadata", () => {
     assert.equal(response.matchCount, 1);
   });
 
+  it("defaults file gateway reads to auto response handling", async () => {
+    const largePath = join(docsDir, "gateway-large.md");
+    writeFileSync(largePath, "gateway-preview\n" + "g".repeat(50_000), "utf-8");
+
+    const response = await handleFileGateway({
+      op: "read",
+      repoId,
+      filePath: "docs/gateway-large.md",
+    }) as Record<string, unknown>;
+
+    assert.equal(response.responseMode, "handle");
+    assert.equal(response.kind, "responseArtifact");
+    assert.match(
+      String((response.preview as Record<string, unknown>).content),
+      /gateway-preview/,
+    );
+  });
+
   it("returns a response artifact handle when responseMode is handle", async () => {
     const response = await handleFileRead({
       repoId,

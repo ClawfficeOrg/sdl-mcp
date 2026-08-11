@@ -260,7 +260,25 @@ describe("MCP output schemas", () => {
       truncated: false,
       hint: "Use targeting for large reads.",
     });
-    schema.parse(responseArtifact("sdl.file.read"));
+    const artifact = {
+      ...responseArtifact("sdl.file.read"),
+      preview: {
+        filePath: "README.md",
+        content: "# SDL-MCP",
+        bytes: 9,
+        totalLines: 10,
+        returnedLines: 1,
+        truncated: true,
+        truncatedAt: 9,
+      },
+    };
+    const parsedArtifact = schema.parse(artifact) as Record<string, unknown>;
+    assert.deepEqual(parsedArtifact.preview, artifact.preview);
+    const request = requireSchema("FileReadRequestSchema").parse({
+      repoId: "repo",
+      filePath: "README.md",
+    }) as Record<string, unknown>;
+    assert.equal(request.responseMode, "auto");
   });
 
   it("parses file-write results", () => {

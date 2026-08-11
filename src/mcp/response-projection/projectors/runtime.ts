@@ -8,6 +8,7 @@ import type {
 const NODE_TEST_DURATION_LINE =
   /^(\s*(?:[✔✖×] .+|(?:ok|not ok) \d+ - .+?))\s+\(\d+(?:\.\d+)?ms\)(\r?)$/;
 export const RUNTIME_INLINE_OUTPUT_BYTES = 4 * 1024;
+export const FILE_READ_PREVIEW_OUTPUT_BYTES = 1024;
 const RUNTIME_PREVIEW_OUTPUT_BYTES = 1024;
 export const RUNTIME_DIAGNOSTIC_FIELDS_BY_PROFILE = Object.freeze({
   "runtime.execute": Object.freeze(["durationMs"] as const),
@@ -330,11 +331,47 @@ function projectRuntimeExecute(input: ModelProjectionInput): unknown {
 }
 
 /** Project runtime responses while leaving compatibility actions intact. */
+export function projectFileReadValue(
+  input: ModelProjectionInput,
+  projectCompatibilityValue: ModelValueProjectionDelegate,
+): unknown {
+  const value = projectCompatibilityValue(input);
+  if (!isRecord(value) || !isRecord(value.preview)) return value;
+
+  const preview = value.preview;
+  if (typeof preview.content !== "string") return value;
+
+  const content = boundResponseTextUtf8(
+    preview.content,
+    FILE_READ_PREVIEW_OUTPUT_BYTES,
+  );
+  const bytes = Buffer.byteLength(content, "utf-8");
+  const truncated =
+    preview.truncated === true ||
+    bytes < Buffer.byteLength(preview.content, "utf-8");
+  const projectedPreview: Record<string, unknown> = {
+    ...preview,
+    content,
+    bytes,
+    returnedLines: content.split(/\r?\n/).length,
+    truncated,
+  };
+  if (truncated) projectedPreview.truncatedAt = bytes;
+  else delete projectedPreview.truncatedAt;
+
+  return {
+    ...value,
+    preview: projectedPreview,
+  };
+}
+
 export function projectRuntimeValue(
   input: ModelProjectionInput,
   projectCompatibilityValue: ModelValueProjectionDelegate,
 ): unknown {
-  return input.action === "runtime.execute"
-    ? projectRuntimeExecute(input)
-    : projectCompatibilityValue(input);
+  if (input.action === "runtime.execute") return projectRuntimeExecute(input);
+  if (input.action === "file.read" || input.action === "sdl.file.read") {
+    return projectFileReadValue(input, projectCompatibilityValue);
+  }
+  return projectCompatibilityValue(input);
 }

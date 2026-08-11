@@ -115,6 +115,13 @@ const ARTIFACT_PROFILE = profile(
   "on-truncation",
   "standard",
 );
+const FILE_READ_PROFILE = profile(
+  "runtime",
+  "standard",
+  "artifact",
+  "on-truncation",
+  "standard",
+);
 const MUTATING_ARTIFACT_PROFILE = profile(
   "generic",
   "standard",
@@ -171,7 +178,7 @@ const PROFILE_ENTRIES = [
   ["policy.get", SMALL_PROFILE],
   ["policy.set", MUTATION_PROFILE],
   ["usage.stats", USAGE_PROFILE],
-  ["file.read", ARTIFACT_PROFILE],
+  ["file.read", FILE_READ_PROFILE],
   ["file.write", MUTATION_PROFILE],
   ["search.edit", MUTATING_ARTIFACT_PROFILE],
   ["semantic.enrichment.refresh", MUTATION_PROFILE],

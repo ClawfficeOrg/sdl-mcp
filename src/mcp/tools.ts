@@ -3692,9 +3692,11 @@ export const FileReadRequestSchema = withProjectionRequestOptions(z.object({
     .describe(
       "For JSON/YAML files: dot-separated key path to extract (e.g. 'server.port' or 'dependencies').",
     ),
-  responseMode: ResponseModeSchema.describe(
-    "Large-response handling: inline preserves legacy output; auto/handle stores full responses behind response.get handles.",
-  ),
+  responseMode: ResponseModeSchema.removeDefault()
+    .default("auto")
+    .describe(
+      "Large-response handling: auto stores large responses behind response.get handles; handle always stores, and inline is accepted only below the global hard limit.",
+    ),
   deltaMode: SessionDeltaModeSchema.describe(
     "Same-session delta mode for repeated file windows. Default off preserves legacy output.",
   ),
@@ -3727,9 +3729,22 @@ export const FileReadInlineResponseSchema = z.object({
   diagnostics: ToolTimingDiagnosticsSchema.optional(),
 });
 
+export const FileReadArtifactResponseSchema =
+  ResponseArtifactReferenceSchema.extend({
+    preview: FileReadInlineResponseSchema.pick({
+      filePath: true,
+      content: true,
+      bytes: true,
+      totalLines: true,
+      returnedLines: true,
+      truncated: true,
+      truncatedAt: true,
+    }).optional(),
+  });
+
 export const FileReadResponseSchema = z.union([
   FileReadInlineResponseSchema,
-  ResponseArtifactReferenceSchema,
+  FileReadArtifactResponseSchema,
 ]);
 
 export type FileReadInlineResponse = WithRequiredFields<
@@ -3738,7 +3753,7 @@ export type FileReadInlineResponse = WithRequiredFields<
 >;
 export type FileReadResponse =
   | FileReadInlineResponse
-  | z.infer<typeof ResponseArtifactReferenceSchema>;
+  | z.infer<typeof FileReadArtifactResponseSchema>;
 
 // ============================================================================
 // Semantic Enrichment Schemas

@@ -291,6 +291,10 @@ export async function handleFileGateway(
 ): Promise<FileGatewayResponse> {
   const timer = new ToolPhaseTimer();
   const parseStartedAt = timer.start();
+  const hasExplicitResponseMode =
+    typeof args === "object" &&
+    args !== null &&
+    Object.hasOwn(args, "responseMode");
   const request = FileGatewayRequestSchema.parse(args);
   timer.record("file.validate", parseStartedAt);
 
@@ -310,7 +314,10 @@ export async function handleFileGateway(
       const { op: _op, ...rest } = request;
       const phaseStartedAt = timer.start();
       return finish(
-        await handleFileRead(rest, context),
+        await handleFileRead(
+          hasExplicitResponseMode ? rest : { ...rest, responseMode: "auto" },
+          context,
+        ),
         phaseStartedAt,
         "file.read",
       );
