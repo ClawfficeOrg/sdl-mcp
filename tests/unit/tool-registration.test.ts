@@ -11,6 +11,41 @@ import { getVersion } from "../../dist/cli/commands/version.js";
 import { WorkflowRequestSchema } from "../../dist/code-mode/types.js";
 import { buildCompactJsonSchema } from "../../dist/gateway/compact-schema.js";
 
+const TEST_PROJECTION_PROFILE = Object.freeze({
+  projector: "generic",
+  observabilityProfile: "standard",
+  defaultDetail: "compact",
+  budgetClass: "compact",
+  largeResponseStrategy: "truncate",
+  recoveryPolicy: "none",
+} as const);
+
+type ListToolsHandler = (
+  request: { method: "tools/list" },
+  extra: Record<string, unknown>,
+) => Promise<{ tools: Array<Record<string, unknown>> }>;
+
+type CallToolHandler = (
+  request: {
+    method: "tools/call";
+    params: { name: string; arguments?: Record<string, unknown> };
+  },
+  extra: {
+    _meta: Record<string, unknown>;
+    sendNotification: () => Promise<void>;
+    signal: AbortSignal;
+  },
+) => Promise<Record<string, unknown>>;
+
+function getRequestHandler<T>(server: MCPServer, method: string): T {
+  const sdkServer = server.getServer() as unknown as {
+    _requestHandlers: Map<string, T>;
+  };
+  const handler = sdkServer._requestHandlers.get(method);
+  assert.ok(handler, `${method} handler should be registered`);
+  return handler;
+}
+
 interface RegisteredToolCall {
   name: string;
   description?: string;
@@ -51,7 +86,10 @@ function makeFakeServer(): { names: string[]; tools: RegisteredToolCall[]; serve
 
 describe("MCP tool registration", () => {
   it("advertises flat union output schemas with an object root", async () => {
-    const mcpServer = new MCPServer();
+    const mcpServer = new MCPServer({
+      resolveProjectionProfile: (action) =>
+        action === "sdl.test.union-output" ? TEST_PROJECTION_PROFILE : undefined,
+    });
     mcpServer.registerTool(
       "sdl.test.union-output",
       "Union output",
@@ -98,7 +136,10 @@ describe("MCP tool registration", () => {
   });
 
   it("advertises generic errors without weakening a strict success schema", async () => {
-    const mcpServer = new MCPServer();
+    const mcpServer = new MCPServer({
+      resolveProjectionProfile: (action) =>
+        action === "sdl.test.strict-output" ? TEST_PROJECTION_PROFILE : undefined,
+    });
     const inputSchema = z.object({
       mode: z.enum(["success", "error", "invalid"]),
     });
@@ -164,6 +205,77 @@ describe("MCP tool registration", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it("validates composite results internally while advertising a bounded outer schema", async () => {
+    const mcpServer = new MCPServer();
+    const inputSchema = z.object({ invalid: z.boolean().default(false) });
+    const advertisedOutputSchema = z
+      .object({
+        error: z.unknown().optional(),
+        nextAction: z.unknown().optional(),
+        results: z.unknown().optional(),
+      })
+      .strict();
+    const internalOutputSchema = z
+      .object({
+        results: z.array(z.object({ name: z.string() }).strict()),
+      })
+      .strict();
+    mcpServer.registerTool(
+      "sdl.retrieve",
+      "Composite validation test",
+      inputSchema,
+      async (args) => {
+        const { invalid } = inputSchema.parse(args);
+        return {
+          results: [
+            invalid ? { name: "ok", sessionId: "private" } : { name: "ok" },
+          ],
+        };
+      },
+      undefined,
+      undefined,
+      advertisedOutputSchema,
+      internalOutputSchema,
+    );
+
+    const listed = await getRequestHandler<ListToolsHandler>(
+      mcpServer,
+      "tools/list",
+    )({ method: "tools/list" }, {});
+    const advertised = listed.tools.find(
+      (tool) => tool.name === "sdl.retrieve",
+    )?.outputSchema;
+    assert.ok(advertised);
+    assert.ok(Buffer.byteLength(JSON.stringify(advertised), "utf8") <= 512);
+
+    const callTool = getRequestHandler<CallToolHandler>(
+      mcpServer,
+      "tools/call",
+    );
+    const extra = {
+      _meta: {},
+      sendNotification: async (): Promise<void> => {},
+      signal: new AbortController().signal,
+    };
+    const valid = await callTool(
+      {
+        method: "tools/call",
+        params: { name: "sdl.retrieve", arguments: { invalid: false } },
+      },
+      extra,
+    );
+    assert.notEqual(valid.isError, true);
+
+    const invalid = await callTool(
+      {
+        method: "tools/call",
+        params: { name: "sdl.retrieve", arguments: { invalid: true } },
+      },
+      extra,
+    );
+    assert.equal(invalid.isError, true);
   });
 
   it("registers sdl.info with a human title", () => {
@@ -432,7 +544,11 @@ describe("MCP tool registration", () => {
         string,
         Record<string, unknown>
       >;
-      assert.deepStrictEqual(properties.detail?.enum, ["compact", "full"]);
+      assert.deepStrictEqual(properties.detail?.enum, [
+        "compact",
+        "standard",
+        "full",
+      ]);
       assert.strictEqual(properties.detail?.default, "compact");
     }
   });
@@ -503,6 +619,8 @@ describe("MCP tool registration", () => {
       "responseMode",
       "refsMode",
       "wireFormat",
+      "detail",
+      "includeDiagnostics",
     ]);
     assert.deepStrictEqual(context.wireSchema.required, [
       "repoId",

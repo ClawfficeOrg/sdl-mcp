@@ -99,7 +99,8 @@ function codeNeedWindow(p: { symbolId: string; reason: string; expectedLines: nu
 
 // === Repo ===
 function repoRegister(p: { rootPath: string }): { repoId: string }
-function repoStatus(p?: { detail?: "minimal" | "standard" | "full"; includeTelemetry?: boolean }): { status: object }
+/** compact */
+function repoStatus(p?: { detail?: "compact" | "standard" | "full"; includeTelemetry?: boolean }): { status: object }
 /** Permanent removal */
 function repoUnregister(p: { confirmRepoId: string; discardDrafts?: boolean }): { ok: true; repoId: string; removed: true }
 function repoOverview(p: { level?: "stats" | "directories" | "full"; ifNoneMatch?: string }): object

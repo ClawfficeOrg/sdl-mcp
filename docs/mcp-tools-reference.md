@@ -128,7 +128,7 @@ Get stable repository and graph status. Set `includeTelemetry: true` only when o
 | ----------------- | --------- | -------- | -------------------------------------------------------- |
 | `repoId`          | `string`  | Yes      | Repository identifier                                    |
 | `surfaceMemories` | `boolean` | No       | Include relevant development memories (default: `false`) |
-| `detail`          | `"minimal" \| "standard" \| "full"` | No | Response detail; defaults to `"minimal"` |
+| `detail`          | `"compact" \| "standard" \| "full"` | No | Response detail; defaults to `"compact"` |
 | `includeTelemetry` | `boolean` | No       | Include volatile operational telemetry (default: `false`) |
 
 **Response includes:**

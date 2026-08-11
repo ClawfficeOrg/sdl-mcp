@@ -58,6 +58,8 @@ export const PROJECTION_PROFILE_ACTIONS = [
 ] as const;
 
 export type ProjectionAction = (typeof PROJECTION_PROFILE_ACTIONS)[number];
+
+export const DEFAULT_PROJECTION_DETAIL = "compact" as const;
 export type ProjectionProfileEntry = readonly [
   ProjectionAction,
   Readonly<ProjectionProfile>,
@@ -73,7 +75,7 @@ function profile(
   return Object.freeze({
     projector,
     observabilityProfile,
-    defaultDetail: "compact",
+    defaultDetail: DEFAULT_PROJECTION_DETAIL,
     budgetClass,
     largeResponseStrategy,
     recoveryPolicy,
@@ -292,7 +294,7 @@ export const WORKFLOW_CHILD_ACTION_BINDINGS = Object.freeze({
   semanticEnrichmentStatus: "semantic.enrichment.status",
 } as const satisfies Readonly<Record<string, ProjectionAction>>);
 
-function canonicalActionName(actionOrToolName: string): string {
+export function canonicalActionName(actionOrToolName: string): string {
   return actionOrToolName.startsWith("sdl.")
     ? actionOrToolName.slice("sdl.".length)
     : actionOrToolName;

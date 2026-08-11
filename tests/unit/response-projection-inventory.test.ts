@@ -3,8 +3,9 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 
-import type { ZodType } from "zod";
+import { z, type ZodType } from "zod";
 
 import {
   ACTION_DEFINITION_BY_ACTION,
@@ -13,6 +14,7 @@ import {
 } from "../../dist/code-mode/action-catalog.js";
 import { getActiveFnNameMap } from "../../dist/code-mode/manual-generator.js";
 import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
+import { buildValidatedRecoveryAction } from "../../dist/mcp/response-projection/recovery.js";
 import {
   PROJECTION_PROFILE_ACTIONS,
   PROJECTION_PROFILE_REGISTRY,
@@ -49,6 +51,7 @@ const MUTATING_ACTIONS = new Set([
 interface PublicToolRegistration {
   readonly name: string;
   readonly outputSchema: ZodType | undefined;
+  readonly validationOutputSchema: ZodType | undefined;
 }
 
 function capturePublicToolRegistrations(
@@ -66,8 +69,9 @@ function capturePublicToolRegistrations(
       _wireSchema?: Record<string, unknown>,
       _presentation?: { title?: string },
       outputSchema?: ZodType,
+      validationOutputSchema?: ZodType,
     ): void {
-      registrations.push({ name, outputSchema });
+      registrations.push({ name, outputSchema, validationOutputSchema });
     },
   } as unknown as Parameters<typeof registerTools>[0];
 
@@ -78,6 +82,12 @@ function capturePublicToolRegistrations(
     codeModeConfig,
   );
   return registrations;
+}
+
+function exhaustiveOutputSchema(
+  registration: PublicToolRegistration,
+): ZodType | undefined {
+  return registration.validationOutputSchema ?? registration.outputSchema;
 }
 
 function capturePublicFlatToolNames(): readonly string[] {
@@ -108,6 +118,101 @@ function compactKeyRecord(
   assert.ok(candidate && typeof candidate === "object", action);
   assert.equal(Array.isArray(candidate), false, action);
   return candidate as Record<string, unknown>;
+}
+
+type ObjectPath = readonly (string | number)[];
+
+function collectObjectPaths(
+  value: unknown,
+  path: ObjectPath = [],
+): readonly ObjectPath[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      collectObjectPaths(item, [...path, index]),
+    );
+  }
+  if (value === null || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  return [
+    path,
+    ...Object.entries(record).flatMap(([key, child]) =>
+      collectObjectPaths(child, [...path, key]),
+    ),
+  ];
+}
+
+function injectObjectSentinel(value: unknown, path: ObjectPath): unknown {
+  if (path.length === 0) {
+    assert.ok(value !== null && typeof value === "object");
+    assert.equal(Array.isArray(value), false);
+    return { ...(value as Record<string, unknown>), __privateSentinel: true };
+  }
+  const [head, ...tail] = path;
+  if (Array.isArray(value)) {
+    assert.equal(typeof head, "number");
+    return value.map((item, index) =>
+      index === head ? injectObjectSentinel(item, tail) : item,
+    );
+  }
+  assert.ok(value !== null && typeof value === "object");
+  assert.equal(typeof head, "string");
+  const record = value as Record<string, unknown>;
+  return { ...record, [head]: injectObjectSentinel(record[head], tail) };
+}
+
+function outputSchemaStats(schema: ZodType): {
+  readonly genericErrorArms: number;
+  readonly nodes: number;
+} {
+  let genericErrorArms = 0;
+  let nodes = 0;
+  const visit = (current: ZodType): void => {
+    nodes++;
+    if (current instanceof z.ZodObject) {
+      if (Object.keys(current.shape).sort().join(",") === "error,nextAction") {
+        genericErrorArms++;
+      }
+      for (const child of Object.values(current.shape)) visit(child);
+      return;
+    }
+    if (
+      current instanceof z.ZodUnion
+      || current instanceof z.ZodDiscriminatedUnion
+    ) {
+      for (const child of current.options) visit(child as ZodType);
+      return;
+    }
+    if (current instanceof z.ZodArray) {
+      visit(current.element);
+      return;
+    }
+    if (
+      current instanceof z.ZodOptional
+      || current instanceof z.ZodNullable
+      || current instanceof z.ZodDefault
+    ) {
+      visit(current.unwrap());
+      return;
+    }
+    if (current instanceof z.ZodRecord) {
+      visit(current.def.keyType as ZodType);
+      visit(current.def.valueType as ZodType);
+      return;
+    }
+    if (current instanceof z.ZodPipe) {
+      visit(current.def.in as ZodType);
+      visit(current.def.out as ZodType);
+      return;
+    }
+    if (current instanceof z.ZodTuple) {
+      for (const child of current.def.items) visit(child as ZodType);
+      if (current.def.rest) visit(current.def.rest as ZodType);
+    }
+  };
+  visit(schema);
+  return { genericErrorArms, nodes };
 }
 
 function derivePublicActions(): readonly string[] {
@@ -160,6 +265,164 @@ describe("response projection inventory", () => {
     assert.deepEqual(WORKFLOW_CHILD_ACTION_BINDINGS, activeFnNameMap);
   });
 
+  it("wraps file, retrieve, and workflow in one bounded generic-error arm", () => {
+    const registrations = capturePublicToolRegistrations({
+      enabled: true,
+      exclusive: true,
+    });
+    const nodeBudgets = new Map([
+      ["sdl.file", 1_000],
+      ["sdl.retrieve", 1_500],
+      // Both accepted action.search fn spellings share one closed result branch (5,036 nodes).
+      ["sdl.workflow", 5_100],
+    ]);
+
+    for (const [name, maxNodes] of nodeBudgets) {
+      const registration = registrations.find((entry) => entry.name === name);
+      assert.ok(registration, name);
+      const schema = exhaustiveOutputSchema(registration);
+      assert.ok(schema, name);
+      const stats = outputSchemaStats(schema);
+      assert.equal(stats.genericErrorArms, 1, `${name}: ${JSON.stringify(stats)}`);
+      assert.ok(
+        stats.nodes <= maxNodes,
+        `${name}: ${JSON.stringify(stats)} exceeds ${maxNodes}`,
+      );
+    }
+  });
+
+  it("rejects sensitive fields inside action-search and manual entries", () => {
+    const registrations = capturePublicToolRegistrations({
+      enabled: true,
+      exclusive: true,
+    });
+    const entry = {
+      action: "symbol.search",
+      fn: "symbolSearch",
+      description: "Search symbols.",
+      tags: ["query"],
+      kind: "gateway",
+      prerequisites: [],
+      recommendedNextActions: [],
+      fallbacks: [],
+      requiredParams: ["query"],
+      schemaSummary: {
+        fields: [{ name: "query", type: "string", required: true }],
+      },
+      example: { query: "UserRepository" },
+    };
+    const fixtures = new Map<string, Record<string, unknown>>([
+      [
+        "sdl.action.search",
+        {
+          actions: [entry],
+          total: 1,
+          hasMore: false,
+          tokenEstimate: 10,
+          offset: 0,
+          limit: 1,
+        },
+      ],
+      ["sdl.manual", { actions: [entry], tokenEstimate: 10 }],
+    ]);
+
+    for (const [name, valid] of fixtures) {
+      const schema = registrations.find(
+        (registration) => registration.name === name,
+      )?.outputSchema;
+      assert.ok(schema, name);
+      assert.deepEqual(schema.parse(valid), valid, name);
+      for (const field of [
+        "sessionId",
+        "absolutePath",
+        "timestamp",
+        "privateField",
+      ]) {
+        const invalid = {
+          ...valid,
+          actions: [{ ...entry, [field]: "private" }],
+        };
+        assert.equal(
+          schema.safeParse(invalid).success,
+          false,
+          `${name} accepted actions[0].${field}`,
+        );
+        const invalidNested = {
+          ...valid,
+          actions: [
+            { ...entry, example: { ...entry.example, [field]: "private" } },
+          ],
+        };
+        assert.equal(
+          schema.safeParse(invalidNested).success,
+          false,
+          `${name} accepted actions[0].example.${field}`,
+        );
+      }
+    }
+  });
+
+  it("validates workflow success results against the bound child action schema", () => {
+    const workflowRegistration = capturePublicToolRegistrations({
+      enabled: true,
+      exclusive: true,
+    }).find(({ name }) => name === "sdl.workflow");
+    assert.ok(workflowRegistration);
+    const workflowOutputSchema = exhaustiveOutputSchema(workflowRegistration);
+    assert.ok(workflowOutputSchema);
+
+    const symbolSearch = AGENT_OUTPUT_CASES.find(
+      ({ action }) => action === "symbol.search",
+    );
+    const repoStatus = AGENT_OUTPUT_CASES.find(
+      ({ action }) => action === "repo.status",
+    );
+    assert.ok(symbolSearch);
+    assert.ok(repoStatus);
+
+    for (const detail of ["compact", "full"] as const) {
+      const request = {
+        ...symbolSearch.publicRequest,
+        detail,
+        includeDiagnostics: false,
+      };
+      const symbolResult = projectToolResultForModelContent(
+        symbolSearch.action,
+        symbolSearch.canonicalResultFactory(),
+        request,
+      );
+      const repoResult = projectToolResultForModelContent(
+        repoStatus.action,
+        repoStatus.canonicalResultFactory(),
+        { ...repoStatus.publicRequest, detail, includeDiagnostics: false },
+      );
+      const valid = {
+        results: [
+          {
+            fn: "symbolSearch",
+            ...(detail === "full" ? { stepIndex: 0, status: "ok" as const } : {}),
+            result: symbolResult,
+          },
+        ],
+      };
+      assert.deepEqual(
+        workflowOutputSchema.parse(valid),
+        valid,
+        `symbolSearch/${detail}`,
+      );
+
+      const mismatched = {
+        ...valid,
+        results: [{ ...valid.results[0], result: repoResult }],
+      };
+      assert.equal(
+        workflowOutputSchema.safeParse(mismatched).success,
+        false,
+        `symbolSearch/${detail}: accepted repo.status result`,
+      );
+    }
+  });
+
   it("accepts every fixture request through the active public schema", () => {
     const failures: string[] = [];
     for (const fixture of AGENT_OUTPUT_CASES) {
@@ -178,7 +441,7 @@ describe("response projection inventory", () => {
     assert.deepEqual(failures, []);
   });
 
-  it("accepts every canonical fixture result through its active output schema", () => {
+  it("accepts every projected compact/full fixture without stripping fields", () => {
     const flatRegistrations = capturePublicToolRegistrations();
     const codeModeRegistrations = capturePublicToolRegistrations({
       enabled: true,
@@ -202,11 +465,12 @@ describe("response projection inventory", () => {
       ...codeModeRegistrations,
     ]) {
       const action = canonicalFlatAction(registration.name);
-      if (!registration.outputSchema) {
+      const schema = exhaustiveOutputSchema(registration);
+      if (!schema) {
         failures.push(`${action}: missing output schema`);
         continue;
       }
-      outputSchemaByAction.set(action, registration.outputSchema);
+      outputSchemaByAction.set(action, schema);
     }
 
     assert.deepEqual(
@@ -219,11 +483,241 @@ describe("response projection inventory", () => {
         failures.push(`${fixture.action}: missing output schema`);
         continue;
       }
-      const parsed = outputSchema.safeParse(fixture.canonicalResultFactory());
-      if (!parsed.success) {
-        failures.push(
-          `${fixture.action}: ${JSON.stringify(parsed.error.issues)}`,
+      for (const detail of ["compact", "full"] as const) {
+        const projected = projectToolResultForModelContent(
+          fixture.action,
+          fixture.canonicalResultFactory(),
+          { ...fixture.publicRequest, detail, includeDiagnostics: false },
         );
+        const parsed = outputSchema.safeParse(projected);
+        if (!parsed.success) {
+          failures.push(
+            `${fixture.action}/${detail}: rejected ${JSON.stringify(parsed.error.issues)}`,
+          );
+        } else if (!isDeepStrictEqual(parsed.data, projected)) {
+          failures.push(`${fixture.action}/${detail}: stripped public fields`);
+        }
+      }
+    }
+    assert.deepEqual(failures, []);
+  });
+
+  it("rejects private success fields for every closed public action schema", () => {
+    const registrations = [
+      ...capturePublicToolRegistrations(),
+      ...capturePublicToolRegistrations({ enabled: true, exclusive: true }),
+    ];
+    const outputSchemaByAction = new Map<string, ZodType>(
+      Object.entries(INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION),
+    );
+    for (const registration of registrations) {
+      const schema = exhaustiveOutputSchema(registration);
+      if (schema) {
+        outputSchemaByAction.set(canonicalFlatAction(registration.name), schema);
+      }
+    }
+    const strippedActions = new Set<string>();
+    const retainedActions = new Set<string>();
+    const dataPickFailures: string[] = [];
+
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      const outputSchema = outputSchemaByAction.get(fixture.action);
+      assert.ok(outputSchema, `${fixture.action}: missing output schema`);
+      for (const detail of ["compact", "full"] as const) {
+        const projected = projectToolResultForModelContent(
+          fixture.action,
+          fixture.canonicalResultFactory(),
+          { ...fixture.publicRequest, detail, includeDiagnostics: false },
+        );
+        const withSentinel =
+          projected !== null && typeof projected === "object"
+            ? Array.isArray(projected)
+              ? Object.assign([...projected], { __privateSentinel: true })
+              : { ...projected, __privateSentinel: true }
+            : { value: projected, __privateSentinel: true };
+        const parsed = outputSchema.safeParse(withSentinel);
+
+        // dataPick intentionally transforms arbitrary records and is the sole
+        // public exception: its caller-owned keys must survive byte-for-byte.
+        if (fixture.action === "dataPick") {
+          if (!parsed.success || !isDeepStrictEqual(parsed.data, withSentinel)) {
+            dataPickFailures.push(`${fixture.action}/${detail}`);
+          }
+        } else if (parsed.success) {
+          if (isDeepStrictEqual(parsed.data, withSentinel)) {
+            retainedActions.add(fixture.action);
+          } else {
+            strippedActions.add(fixture.action);
+          }
+        }
+      }
+    }
+
+    assert.deepEqual(
+      {
+        stripped: [...strippedActions].sort(),
+        retained: [...retainedActions].sort(),
+        dataPickFailures,
+      },
+      { stripped: [], retained: [], dataPickFailures: [] },
+    );
+  });
+
+  it("rejects private fields at every projected success record path", () => {
+    const registrations = [
+      ...capturePublicToolRegistrations(),
+      ...capturePublicToolRegistrations({ enabled: true, exclusive: true }),
+    ];
+    const outputSchemaByAction = new Map<string, ZodType>(
+      Object.entries(INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION),
+    );
+    for (const registration of registrations) {
+      const schema = exhaustiveOutputSchema(registration);
+      if (schema) {
+        outputSchemaByAction.set(canonicalFlatAction(registration.name), schema);
+      }
+    }
+    const failures: string[] = [];
+
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      const outputSchema = outputSchemaByAction.get(fixture.action);
+      assert.ok(outputSchema, `${fixture.action}: missing output schema`);
+      for (const detail of ["compact", "full"] as const) {
+        const projected = projectToolResultForModelContent(
+          fixture.action,
+          fixture.canonicalResultFactory(),
+          { ...fixture.publicRequest, detail, includeDiagnostics: false },
+        );
+        for (const path of collectObjectPaths(projected)) {
+          const withSentinel = injectObjectSentinel(projected, path);
+          const parsed = outputSchema.safeParse(withSentinel);
+          const label = `${fixture.action}/${detail}/${JSON.stringify(path)}`;
+          if (fixture.action === "dataPick") {
+            if (!parsed.success || !isDeepStrictEqual(parsed.data, withSentinel)) {
+              failures.push(`${label}: dataPick did not preserve arbitrary record`);
+            }
+          } else if (parsed.success) {
+            failures.push(`${label}: accepted private record field`);
+          }
+        }
+      }
+    }
+
+    assert.deepEqual(failures, []);
+  });
+
+  it("rejects private fields on projected workflow step envelopes", () => {
+    const workflowRegistration = capturePublicToolRegistrations({
+      enabled: true,
+      exclusive: true,
+    }).find(({ name }) => name === "sdl.workflow");
+    assert.ok(workflowRegistration);
+    const workflowOutputSchema = exhaustiveOutputSchema(workflowRegistration);
+    assert.ok(workflowOutputSchema);
+    const fixture = AGENT_OUTPUT_CASES.find(
+      ({ action }) => action === "workflow",
+    );
+    assert.ok(fixture);
+
+    for (const detail of ["compact", "full"] as const) {
+      const projected = projectToolResultForModelContent(
+        fixture.action,
+        fixture.canonicalResultFactory(),
+        { ...fixture.publicRequest, detail, includeDiagnostics: false },
+      ) as { results: Array<Record<string, unknown>> };
+      const withNestedSentinel = {
+        ...projected,
+        results: projected.results.map((step, index) =>
+          index === 0 ? { ...step, __privateSentinel: true } : step,
+        ),
+      };
+
+      assert.equal(
+        workflowOutputSchema.safeParse(withNestedSentinel).success,
+        false,
+        detail,
+      );
+    }
+  });
+
+  it("accepts the projected generic error contract without stripping fields", () => {
+    const registrations = [
+      ...capturePublicToolRegistrations(),
+      ...capturePublicToolRegistrations({ enabled: true, exclusive: true }),
+    ];
+    const outputSchemaByAction = new Map<string, ZodType>(
+      Object.entries(INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION),
+    );
+    for (const registration of registrations) {
+      const schema = exhaustiveOutputSchema(registration);
+      if (schema) {
+        outputSchemaByAction.set(canonicalFlatAction(registration.name), schema);
+      }
+    }
+    const canonicalError = {
+      error: {
+        message: "fixture validation failed",
+        code: "VALIDATION_ERROR",
+        details: [{ path: "repoId", message: "Required" }],
+        classification: "invalid_input",
+        retryable: false,
+        fallbackTools: ["sdl.action.search"],
+        fallbackRationale: "Inspect the action schema and retry.",
+      },
+    };
+    const validatedRecovery = buildValidatedRecoveryAction(
+      { action: "symbol.search", args: { query: "projection fixture" } },
+      {
+        repoId: "projection-fixture",
+        advertisedTools: ["sdl.symbol.search"],
+        activeWorkflowFunctions: Object.keys(getActiveFnNameMap()),
+      },
+    ).nextAction;
+    assert.ok(validatedRecovery, "generic error fixture recovery must be valid");
+    const canonicalErrors = [
+      { name: "without-recovery", value: canonicalError },
+      {
+        name: "with-recovery",
+        value: { ...canonicalError, nextAction: validatedRecovery },
+      },
+    ] as const;
+    const failures: string[] = [];
+
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      const outputSchema = outputSchemaByAction.get(fixture.action);
+      if (!outputSchema) {
+        failures.push(`${fixture.action}: missing output schema`);
+        continue;
+      }
+      for (const errorCase of canonicalErrors) {
+        for (const detail of ["compact", "full"] as const) {
+          const projected = projectToolResultForModelContent(
+            fixture.action,
+            errorCase.value,
+            { ...fixture.publicRequest, detail, includeDiagnostics: false },
+          );
+          const parsed = outputSchema.safeParse(projected);
+          if (!parsed.success) {
+            failures.push(
+              `${fixture.action}/${detail}/${errorCase.name}: rejected ${JSON.stringify(parsed.error.issues)}`,
+            );
+          } else if (!isDeepStrictEqual(parsed.data, projected)) {
+            failures.push(
+              `${fixture.action}/${detail}/${errorCase.name}: stripped public fields`,
+            );
+          }
+        }
+      }
+      const arbitraryRecovery = {
+        ...canonicalError,
+        nextAction: { ...validatedRecovery, privateField: "not-public" },
+      };
+      const arbitraryParsed = outputSchema.safeParse(arbitraryRecovery);
+      if (
+        arbitraryParsed.success
+        && !isDeepStrictEqual(arbitraryParsed.data, arbitraryRecovery)
+      ) {
+        failures.push(`${fixture.action}: silently stripped recovery fields`);
       }
     }
     assert.deepEqual(failures, []);
@@ -279,7 +773,7 @@ describe("response projection inventory", () => {
     ]);
   });
 
-  it("has a compact determinism entry or diagnostic-only reason per fixture", () => {
+  it("has compact and full determinism entries or diagnostic-only reasons per fixture", () => {
     const fixtures = JSON.parse(
       readFileSync(
         join(process.cwd(), "tests/integration/determinism.fixtures.json"),
@@ -313,9 +807,19 @@ describe("response projection inventory", () => {
       coveredActions,
       AGENT_OUTPUT_CASES.map(({ action }) => action).sort(),
     );
-    assert.equal(new Set(determinismActions).size, determinismActions.length);
+    const determinismCaseKeys = projectionCases.map(
+      ({ action, detail, includeDiagnostics }) =>
+        `${action}:${detail}:${String(includeDiagnostics)}`,
+    );
+    assert.equal(
+      new Set(determinismCaseKeys).size,
+      determinismCaseKeys.length,
+    );
     for (const entry of projectionCases) {
-      assert.equal(entry.detail, "compact", entry.action);
+      assert.ok(
+        entry.detail === "compact" || entry.detail === "full",
+        entry.action,
+      );
       assert.equal(entry.includeDiagnostics, false, entry.action);
 
       const fixture = AGENT_OUTPUT_CASES.find(
@@ -345,26 +849,28 @@ describe("response projection inventory", () => {
         entry.action,
       );
 
-      const firstRecord = compactKeyRecord(
-        fixture.action,
-        fixture.compactResultKind,
-        first,
-      );
-      const secondRecord = compactKeyRecord(
-        fixture.action,
-        fixture.compactResultKind,
-        second,
-      );
-      assert.deepEqual(
-        Object.keys(firstRecord),
-        fixture.expectedCompactKeys,
-        entry.action,
-      );
-      assert.deepEqual(
-        Object.keys(secondRecord),
-        fixture.expectedCompactKeys,
-        entry.action,
-      );
+      if (entry.detail === "compact") {
+        const firstRecord = compactKeyRecord(
+          fixture.action,
+          fixture.compactResultKind,
+          first,
+        );
+        const secondRecord = compactKeyRecord(
+          fixture.action,
+          fixture.compactResultKind,
+          second,
+        );
+        assert.deepEqual(
+          Object.keys(firstRecord),
+          fixture.expectedCompactKeys,
+          entry.action,
+        );
+        assert.deepEqual(
+          Object.keys(secondRecord),
+          fixture.expectedCompactKeys,
+          entry.action,
+        );
+      }
     }
     for (const entry of diagnosticAllowlist) {
       const fixture = AGENT_OUTPUT_CASES.find(

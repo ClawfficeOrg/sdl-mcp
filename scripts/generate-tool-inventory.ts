@@ -17,13 +17,15 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
+
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = resolve(__dirname, "..");
-const ACTION_CATALOG_PATH = resolve(ROOT, "src", "code-mode", "action-catalog.ts");
+const TOOL_DESCRIPTORS_PATH = resolve(ROOT, "src", "mcp", "tools", "tool-descriptors.ts");
 const CODE_MODE_PATH = resolve(ROOT, "src", "code-mode", "index.ts");
 const GATEWAY_PATH = resolve(ROOT, "src", "gateway", "index.ts");
 const TOOLS_INDEX_PATH = resolve(ROOT, "src", "mcp", "tools", "index.ts");
@@ -39,17 +41,48 @@ const OUT_MD = resolve(OUT_DIR, "tool-inventory.md");
  * Extract all `name: "sdl.xxx"` values from the flat tool descriptors file.
  */
 function extractFlatToolNames(source: string): string[] {
-  const registry = source.match(
-    /const GATEWAY_ACTION_SCHEMAS[\s\S]*?= \[([\s\S]*?)\n\];/,
-  )?.[1];
-  if (!registry) throw new Error("Could not find GATEWAY_ACTION_SCHEMAS");
-  const re = /^\s*\["([^"]+)",/gm;
-  const names: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(registry)) !== null) {
-    names.push(`sdl.${m[1]}`);
+  const sourceFile = ts.createSourceFile(
+    "tool-descriptors.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let projections: ts.ArrayLiteralExpression | undefined;
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === "projections"
+      && node.initializer
+      && ts.isArrayLiteralExpression(node.initializer)
+    ) {
+      projections = node.initializer;
+      return;
+    }
+    ts.forEachChild(node, visit);
   }
-  return names;
+  visit(sourceFile);
+  if (!projections) {
+    throw new Error("Could not find the flat tool descriptor projections");
+  }
+
+  return projections.elements.map((element) => {
+    if (!ts.isObjectLiteralExpression(element)) {
+      throw new Error("Flat tool descriptor projection must be an object literal");
+    }
+    const action = element.properties.find(
+      (property): property is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(property)
+        && ts.isIdentifier(property.name)
+        && property.name.text === "action",
+    );
+    if (!action || !ts.isStringLiteralLike(action.initializer)) {
+      throw new Error("Flat tool descriptor projection is missing a literal action");
+    }
+    return `sdl.${action.initializer.text}`;
+  });
 }
 
 /**
@@ -76,15 +109,15 @@ function normalizeToolNames(names: string[]): string[] {
 
 function main(): void {
   // Read source files
-  let actionCatalogSource: string;
+  let toolDescriptorsSource: string;
   let codeModeSource: string;
   let gatewaySource: string;
   let toolsIndexSource: string;
 
   try {
-    actionCatalogSource = readFileSync(ACTION_CATALOG_PATH, "utf-8");
+    toolDescriptorsSource = readFileSync(TOOL_DESCRIPTORS_PATH, "utf-8");
   } catch {
-    console.error(`ERROR: Could not read ${ACTION_CATALOG_PATH}`);
+    console.error(`ERROR: Could not read ${TOOL_DESCRIPTORS_PATH}`);
     process.exit(1);
   }
   try {
@@ -107,7 +140,7 @@ function main(): void {
   }
 
   // --- Flat tools (from tool-descriptors.ts) ---
-  const flatToolNames = normalizeToolNames(extractFlatToolNames(actionCatalogSource));
+  const flatToolNames = normalizeToolNames(extractFlatToolNames(toolDescriptorsSource));
   const flatToolCount = flatToolNames.length;
 
   // --- Universal tools (shared across every mode) ---

@@ -202,6 +202,8 @@ interface ToolDefinition {
   handler: ToolHandler;
   wireSchema?: Record<string, unknown>;
   outputSchema?: z.ZodType;
+  /** Exhaustive projected-result validator kept separate from compact tools/list schemas. */
+  validationOutputSchema?: z.ZodType;
   presentation: ToolPresentation;
   projectionProfile: Readonly<ProjectionProfile>;
 }
@@ -1397,6 +1399,22 @@ export class MCPServer {
               toolContext.sessionId,
             );
 
+            if (tool.validationOutputSchema) {
+              const validation = tool.validationOutputSchema.safeParse(
+                responseEnvelope.structuredContent,
+              );
+              if (!validation.success) {
+                const issues = validation.error.issues
+                  .map((issue) =>
+                    `${issue.path.join(".") || "<root>"}: ${issue.message}`,
+                  )
+                  .join("; ");
+                throw new Error(
+                  `Structured content does not match internal output schema: ${issues}`,
+                );
+              }
+            }
+
             const toolCallEvent = {
               tool: toolName,
               request: normalizedArgs as Record<string, unknown>,
@@ -1498,6 +1516,7 @@ export class MCPServer {
     wireSchema?: Record<string, unknown>,
     presentation?: Partial<ToolPresentation>,
     outputSchema?: z.ZodType,
+    validationOutputSchema?: z.ZodType,
   ): void {
     const projectionProfile = this.resolveProjectionProfile(name);
     if (!projectionProfile) {
@@ -1515,6 +1534,7 @@ export class MCPServer {
       handler,
       wireSchema,
       outputSchema,
+      validationOutputSchema,
       presentation: buildToolPresentation(name, presentation),
       projectionProfile,
     });

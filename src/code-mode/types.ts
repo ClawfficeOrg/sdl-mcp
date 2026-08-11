@@ -152,15 +152,219 @@ export interface WorkflowTrace {
   };
 }
 
-// Step action schemas remain authoritative for each result payload.
+const WorkflowTruncatedResponseOutputSchema = z
+  .object({
+    originalTokens: z.number().nonnegative(),
+    keptTokens: z.number().nonnegative(),
+    continuationHandle: z.string(),
+  })
+  .strict();
+
+const WorkflowFailureTraceOutputSchema = z
+  .object({
+    stepIndex: z.number().int().nonnegative(),
+    fn: z.string(),
+    action: z.string().optional(),
+    kind: z.enum(["gateway", "internal"]).optional(),
+    status: z.enum(["ok", "error", "skipped", "budget_exceeded"]),
+    message: z.string(),
+    resolvedArgKeys: z.array(z.string()).optional(),
+    fallbackTools: z.array(z.string()).optional(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+const WorkflowErrorDetailOutputSchema = z
+  .object({
+    message: z.string(),
+    code: z.string().optional(),
+    details: z.array(z.string()).optional(),
+    nextBestAction: z
+      .enum([
+        "requestSkeleton",
+        "requestHotPath",
+        "requestRaw",
+        "refreshSlice",
+        "buildSlice",
+        "provideIdentifiersToFind",
+        "provideErrorCodeRefs",
+        "provideFrontierJustification",
+        "increaseBudget",
+        "narrowScope",
+        "retryWithSameInputs",
+      ])
+      .optional(),
+    requiredFieldsForNext: z.record(z.string(), z.unknown()).optional(),
+    classification: z.string().optional(),
+    retryable: z.boolean().optional(),
+    suggestedRetryDelayMs: z.number().nonnegative().optional(),
+    fallbackTools: z.array(z.string()).optional(),
+    nextCalls: z
+      .array(
+        z
+          .object({
+            action: z.string(),
+            args: z.record(z.string(), z.unknown()),
+          })
+          .strict(),
+      )
+      .optional(),
+    fallbackRationale: z.string().optional(),
+    candidates: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .strict();
+
+const WorkflowSuccessStepOutputSchema = z
+  .object({
+    fn: z.string(),
+    result: z.unknown().optional(),
+    stepIndex: z.number().int().nonnegative().optional(),
+    tokens: z.number().nonnegative().optional(),
+    durationMs: z.number().nonnegative().optional(),
+    status: z.literal("ok").optional(),
+    truncatedResponse: WorkflowTruncatedResponseOutputSchema.optional(),
+  })
+  .strict();
+
+const WorkflowFailureStepOutputSchema = z
+  .object({
+    stepIndex: z.number().int().nonnegative().optional(),
+    fn: z.string(),
+    status: z.enum(["error", "skipped", "budget_exceeded"]),
+    error: z
+      .union([z.string(), WorkflowErrorDetailOutputSchema])
+      .optional(),
+    fallbackTools: z.array(z.string()).optional(),
+    blockedByStep: z.number().int().nonnegative().optional(),
+    blockedByFn: z.string().optional(),
+    blockedByError: z.string().optional(),
+    failureTrace: WorkflowFailureTraceOutputSchema.optional(),
+    nextAction: z
+      .object({
+        action: z.string(),
+        args: z.record(z.string(), z.unknown()),
+      })
+      .strict()
+      .optional(),
+    result: z
+      .union([z.string(), WorkflowErrorDetailOutputSchema])
+      .optional(),
+  })
+  .strict();
+
+const WorkflowTraceOutputSchema = z
+  .object({
+    steps: z.array(
+      z
+        .object({
+          stepIndex: z.number().int().nonnegative(),
+          fn: z.string(),
+          action: z.string(),
+          kind: z.enum(["gateway", "internal"]),
+          status: z.string(),
+          durationMs: z.number().nonnegative(),
+          tokens: z.number().nonnegative(),
+          summary: z.string(),
+          schemaSummary: z.record(z.string(), z.unknown()).optional(),
+          example: z.record(z.string(), z.unknown()).optional(),
+          resolvedArgsPreview: z.string().optional(),
+          resultPreview: z.string().optional(),
+        })
+        .strict(),
+    ),
+    totals: z
+      .object({
+        durationMs: z.number().nonnegative(),
+        tokens: z.number().nonnegative(),
+        stepsExecuted: z.number().int().nonnegative(),
+        stepsAttempted: z.number().int().nonnegative().optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+// Child result payloads retain their action-specific schema; the workflow-owned
+// outer and per-step envelopes are closed independently of canonical priorResults.
 export const WorkflowOutputSchema = z
   .object({
-    results: z.array(z.unknown()).optional(),
+    results: z.array(
+      z.union([
+        WorkflowSuccessStepOutputSchema,
+        WorkflowFailureStepOutputSchema,
+      ]),
+    ),
+    intermediateResultsSuppressed: z.number().int().nonnegative().optional(),
+    durationMs: z.number().nonnegative().optional(),
+    totalTokens: z.number().nonnegative().optional(),
+    truncated: z.literal(true).optional(),
+    trace: WorkflowTraceOutputSchema.optional(),
+    diagnostics: z
+      .object({
+        timings: z
+          .object({
+            totalMs: z.number(),
+            phases: z.record(z.string(), z.number()),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
-  .passthrough()
-  .refine((value) => "results" in value, {
-    message: "Unrecognized sdl.workflow response shape",
+  .strict();
+
+/**
+ * Compose the public workflow envelope from the active fn-to-action bindings.
+ * Canonical workflow state remains unconstrained internally; only emitted step
+ * results are checked against their bound action's public success contract.
+ */
+export function buildWorkflowPublicOutputSchema(
+  successOutputSchemaByFn: Readonly<Record<string, z.ZodType>>,
+): z.ZodType {
+  const fnNamesBySchema = new Map<z.ZodType, string[]>();
+  for (const [fn, resultSchema] of Object.entries(successOutputSchemaByFn)) {
+    const aliases = fnNamesBySchema.get(resultSchema);
+    if (aliases) {
+      aliases.push(fn);
+    } else {
+      fnNamesBySchema.set(resultSchema, [fn]);
+    }
+  }
+  const successStepSchemas = [...fnNamesBySchema.entries()].map(
+    ([resultSchema, fnNames]) => {
+      const [firstFn, ...remainingFns] = fnNames;
+      if (firstFn === undefined) {
+        throw new Error("Workflow result schema requires at least one function");
+      }
+      const fnSchema =
+        remainingFns.length === 0
+          ? z.literal(firstFn)
+          : z.enum([firstFn, ...remainingFns]);
+      return WorkflowSuccessStepOutputSchema.safeExtend({
+        fn: fnSchema,
+        result: resultSchema.optional(),
+      });
+    },
+  );
+  const [firstSuccessStepSchema, ...remainingSuccessStepSchemas] =
+    successStepSchemas;
+  if (firstSuccessStepSchema === undefined) {
+    throw new Error("Workflow output schema requires at least one active function");
+  }
+  const nonEmptySuccessStepSchemas: [
+    (typeof successStepSchemas)[number],
+    ...(typeof successStepSchemas)[number][],
+  ] = [firstSuccessStepSchema, ...remainingSuccessStepSchemas];
+
+  const successStepSchema = z.discriminatedUnion(
+    "fn",
+    nonEmptySuccessStepSchemas,
+  );
+  return WorkflowOutputSchema.safeExtend({
+    results: z.array(
+      z.union([successStepSchema, WorkflowFailureStepOutputSchema]),
+    ),
   });
+}
 
 export interface WorkflowResponse {
   /** Step results; onlyFinalResult omits successful intermediate envelopes. */

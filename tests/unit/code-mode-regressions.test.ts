@@ -55,7 +55,7 @@ describe("code-mode regressions", () => {
     );
     assert.match(
       manual,
-      /function repoStatus\(p\?: \{ detail\?: "minimal" \| "standard" \| "full"; includeTelemetry\?: boolean \}\): \{ status: object \}/,
+      /function repoStatus\(p\?: \{ detail\?: "compact" \| "standard" \| "full"; includeTelemetry\?: boolean \}\): \{ status: object \}/,
     );
     assert.match(
       manual,

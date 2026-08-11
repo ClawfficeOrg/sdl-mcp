@@ -121,7 +121,7 @@ export const AGENT_OUTPUT_CASES = [
         rationale: "Retrieve task-shaped context.",
       },
     }),
-    expectedCompactKeys: ["results", "exactMatchFound", "nextBestAction"],
+    expectedCompactKeys: ["repoId", "results", "exactMatchFound", "nextBestAction"],
     requiredActionabilityKeys: ["results", "nextBestAction"],
     executionMode: "read-only",
   }),
@@ -196,8 +196,8 @@ export const AGENT_OUTPUT_CASES = [
       },
       relationshipNote: "One direct dependency.",
     }),
-    expectedCompactKeys: ["sliceHandle", "slice", "relationshipNote"],
-    requiredActionabilityKeys: ["sliceHandle", "slice"],
+    expectedCompactKeys: ["sliceHandle"],
+    requiredActionabilityKeys: ["sliceHandle"],
     executionMode: "read-only",
   }),
   compactCase({
@@ -306,12 +306,12 @@ export const AGENT_OUTPUT_CASES = [
     }),
     expectedCompactKeys: [
       "approved",
-      "status",
-      "contentKind",
       "symbolId",
       "file",
       "range",
       "code",
+      "status",
+      "contentKind",
     ],
     requiredActionabilityKeys: ["file", "code"],
     executionMode: "read-only",
@@ -327,7 +327,7 @@ export const AGENT_OUTPUT_CASES = [
       originalLines: 5,
       truncated: false,
     }),
-    expectedCompactKeys: ["skeleton", "file", "range"],
+    expectedCompactKeys: ["file", "range", "skeleton"],
     requiredActionabilityKeys: ["skeleton", "file"],
     executionMode: "read-only",
   }),
@@ -347,7 +347,7 @@ export const AGENT_OUTPUT_CASES = [
       matchedLineNumbers: [2],
       truncated: false,
     }),
-    expectedCompactKeys: ["excerpt", "file", "range", "matchedIdentifiers"],
+    expectedCompactKeys: ["file", "range", "excerpt", "matchedIdentifiers"],
     requiredActionabilityKeys: ["excerpt", "matchedIdentifiers"],
     executionMode: "read-only",
   }),
@@ -362,6 +362,7 @@ export const AGENT_OUTPUT_CASES = [
       wouldChange: true,
       requiresUpdateExisting: false,
       message: "Repository would be registered.",
+      configChanges: [{ field: "rootPath", before: null, after: "." }],
       proposedConfig: { rootPath: "." },
     }),
     expectedCompactKeys: [
@@ -371,9 +372,14 @@ export const AGENT_OUTPUT_CASES = [
       "wouldChange",
       "requiresUpdateExisting",
       "message",
+      "configChanges",
       "proposedConfig",
     ],
-    requiredActionabilityKeys: ["wouldChange", "proposedConfig"],
+    requiredActionabilityKeys: [
+      "wouldChange",
+      "configChanges",
+      "proposedConfig",
+    ],
     executionMode: "dry-run",
   }),
   compactCase({
@@ -495,6 +501,16 @@ export const AGENT_OUTPUT_CASES = [
       session: {
         sessionId: "usage-session-fixture",
         startedAt: "2026-08-09T00:00:00.000Z",
+        timestamp: "2026-08-09T00:00:01.000Z",
+        processId: 4242,
+        process: {
+          pid: 4242,
+          startedAt: "2026-08-09T00:00:00.000Z",
+          nested: {
+            sessionId: "nested-usage-session",
+            timestamp: "2026-08-09T00:00:02.000Z",
+          },
+        },
         totalSdlTokens: 120,
         totalRawEquivalent: 500,
         totalSavedTokens: 380,
@@ -512,7 +528,7 @@ export const AGENT_OUTPUT_CASES = [
       },
     }),
     expectedCompactKeys: ["aggregate", "topTools"],
-    requiredActionabilityKeys: ["aggregate", "topTools"],
+    requiredActionabilityKeys: [],
     executionMode: "read-only",
   }),
   compactCase({
@@ -690,7 +706,7 @@ export const AGENT_OUTPUT_CASES = [
       "latestRun",
       "warnings",
     ],
-    requiredActionabilityKeys: ["enabled", "selections", "latestRun"],
+    requiredActionabilityKeys: ["enabled", "selections"],
     executionMode: "read-only",
   }),
   compactCase({
@@ -1233,9 +1249,9 @@ export const AGENT_OUTPUT_CASES = [
       "evidence",
       "edges",
       "omitted",
-      "nextActions",
+      "nextAction",
     ],
-    requiredActionabilityKeys: ["evidence", "nextActions"],
+    requiredActionabilityKeys: ["evidence"],
     executionMode: "read-only",
   }),
   compactCase({
@@ -1310,6 +1326,87 @@ export const AGENT_OUTPUT_CASES = [
  * These families intentionally pin only today's safe compact boundary. Later
  * migration tasks own their family-specific full and diagnostic RED assertions.
  */
+export const AGENT_OUTPUT_PROFILE_CASES = Object.freeze([
+  Object.freeze({
+    name: "compact",
+    detail: "compact",
+    includeDiagnostics: false,
+    budgetClass: "profile",
+  }),
+  Object.freeze({
+    name: "full",
+    detail: "full",
+    includeDiagnostics: false,
+    budgetClass: "full",
+  }),
+  Object.freeze({
+    name: "diagnostic",
+    detail: "compact",
+    includeDiagnostics: true,
+    budgetClass: "diagnostic",
+  }),
+] as const);
+
+export const AGENT_OUTPUT_SUMMARY_FACT_KEYS = Object.freeze([
+  "status",
+  "mode",
+  "total",
+  "count",
+  "callCount",
+  "changedCount",
+  "filteredCount",
+  "blastRadiusCount",
+  "truncated",
+  "complete",
+  "hasMore",
+] as const);
+
+/** Summary facts intentionally omitted from prose because they are non-summary data. */
+export const AGENT_OUTPUT_SUMMARY_FACT_EXCLUSIONS_BY_ACTION = Object.freeze({
+  "action.search": Object.freeze(["$.recovery"]),
+  context: Object.freeze(["$.recovery"]),
+} satisfies Readonly<Record<string, readonly string[]>>);
+
+export const AGENT_OUTPUT_TOKEN_BUDGETS = Object.freeze({
+  summary: 120,
+  empty: 200,
+  error: 200,
+  small: 500,
+  compact: 1_000,
+  standard: 2_000,
+  full: 8_000,
+  diagnostic: 8_000,
+} as const);
+
+export const AGENT_OUTPUT_DISALLOWED_FIELD_NAMES = Object.freeze([
+  "_displayFooter",
+  "_packedStats",
+  "actionsTaken",
+  "etagCache",
+  "projectionStats",
+  "retrievalEvidence",
+  "structuredContent",
+] as const);
+
+export const AGENT_OUTPUT_DISALLOWED_FIELDS_BY_ACTION = Object.freeze({
+  "usage.stats": Object.freeze([
+    "pid",
+    "process",
+    "processId",
+    "sessionId",
+    "startedAt",
+    "timestamp",
+  ] as const),
+} satisfies Partial<Record<ProjectionAction, readonly string[]>>);
+
+export const AGENT_OUTPUT_DIAGNOSTIC_FIELD_NAMES = Object.freeze([
+  "diagnostics",
+] as const);
+
+export const AGENT_OUTPUT_DISALLOWED_PATH_PATTERNS = Object.freeze([
+  String.raw`(?:[A-Za-z]:[\\/]|\\\\\?\\)`,
+] as const);
+
 export const DEFERRED_FAMILY_ASSERTIONS = Object.freeze([
   "retrieval-family-full-detail",
   "mutation-family-recovery",

@@ -604,17 +604,11 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
       assert.equal(response.isError, true);
       assert.deepEqual(
         results?.map((result) => result.status),
-        ["ok", "ok", "error"],
+        [undefined, undefined, "error"],
         JSON.stringify(response.structuredContent),
       );
-      const applyFailure = results?.[2] as {
-        error?: string;
-        failureTrace?: { message?: string };
-      } | undefined;
-      assert.match(
-        [applyFailure?.error, applyFailure?.failureTrace?.message].join("\n"),
-        /drifted/iu,
-      );
+      const applyFailure = results?.[2] as Record<string, unknown> | undefined;
+      assert.match(JSON.stringify(applyFailure), /drifted/iu);
       assert.equal(
         readFileSync(join(REPO_ROOT, "src", "greeting.ts"), "utf8"),
         interveningSource,

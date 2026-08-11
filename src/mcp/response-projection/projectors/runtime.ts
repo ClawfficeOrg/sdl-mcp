@@ -369,7 +369,12 @@ export function projectRuntimeValue(
   input: ModelProjectionInput,
   projectCompatibilityValue: ModelValueProjectionDelegate,
 ): unknown {
-  if (input.action === "runtime.execute") return projectRuntimeExecute(input);
+  if (
+    input.action === "runtime.execute"
+    || input.action === "sdl.runtime.execute"
+  ) {
+    return projectRuntimeExecute(input);
+  }
   if (input.action === "file.read" || input.action === "sdl.file.read") {
     return projectFileReadValue(input, projectCompatibilityValue);
   }

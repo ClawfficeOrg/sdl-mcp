@@ -1,5 +1,5 @@
 {
-  "$comment": "Determinism fixtures for determinism.test.ts. Adding an SDL-MCP tool requires adding at least one stable call here or an uncoveredAllowlist entry with a reason.",
+  "$comment": "Determinism fixtures cover every registered action with explicit compact/full projections; diagnostic exclusions require a named reason.",
   "repoId": "determinism-fixtures",
   "fixtureRepo": "../stress/fixtures",
   "toolCatalogExpectations": {
@@ -13,6 +13,27 @@
         "query": "symbol.search",
         "limit": 5,
         "includeSchemas": false,
+        "includeExamples": false,
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.action.search",
+      "args": {
+        "query": "symbol.search",
+        "limit": 5,
+        "includeSchemas": false,
+        "includeExamples": false,
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.action.search",
+      "args": {
+        "query": "response.get",
+        "limit": 1,
+        "detail": "compact",
+        "includeSchemas": true,
         "includeExamples": false
       }
     },
@@ -22,6 +43,16 @@
         "query": "response.get",
         "limit": 1,
         "detail": "full",
+        "includeSchemas": true,
+        "includeExamples": false
+      }
+    },
+    {
+      "tool": "sdl.action.search",
+      "args": {
+        "query": "slice.build",
+        "limit": 1,
+        "detail": "compact",
         "includeSchemas": true,
         "includeExamples": false
       }
@@ -44,6 +75,18 @@
         "offset": 0,
         "includeSchemas": true,
         "includeExamples": true,
+        "detail": "compact",
+        "maxTokens": 2000
+      }
+    },
+    {
+      "tool": "sdl.action.search",
+      "args": {
+        "query": "*",
+        "limit": 50,
+        "offset": 0,
+        "includeSchemas": true,
+        "includeExamples": true,
         "detail": "full",
         "maxTokens": 2000
       }
@@ -51,7 +94,15 @@
     {
       "tool": "sdl.info",
       "args": {
-        "redactPaths": true
+        "redactPaths": true,
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.info",
+      "args": {
+        "redactPaths": true,
+        "detail": "full"
       }
     },
     {
@@ -69,7 +120,8 @@
         ],
         "refsMode": "off",
         "responseMode": "inline",
-        "wireFormat": "json"
+        "wireFormat": "json",
+        "detail": "compact"
       }
     },
     {
@@ -87,7 +139,46 @@
         ],
         "refsMode": "off",
         "responseMode": "inline",
-        "wireFormat": "packed"
+        "wireFormat": "json",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.context",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskType": "explain",
+        "taskText": "Explain UserRepository findById behavior",
+        "budget": {
+          "maxTokens": 2048
+        },
+        "focusSymbols": [
+          "UserRepository",
+          "findById"
+        ],
+        "refsMode": "off",
+        "responseMode": "inline",
+        "wireFormat": "packed",
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.context",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskType": "explain",
+        "taskText": "Explain UserRepository findById behavior",
+        "budget": {
+          "maxTokens": 2048
+        },
+        "focusSymbols": [
+          "UserRepository",
+          "findById"
+        ],
+        "refsMode": "off",
+        "responseMode": "inline",
+        "wireFormat": "packed",
+        "detail": "full"
       }
     },
     {
@@ -105,7 +196,37 @@
         ],
         "refsMode": "off",
         "responseMode": "inline",
-        "wireFormat": "json"
+        "wireFormat": "json",
+        "detail": "compact"
+      },
+      "expectedErrorCode": "CONTEXT_FOCUS_PATH_UNAVAILABLE"
+    },
+    {
+      "tool": "sdl.context",
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskType": "explain",
+        "taskText": "Explain the unavailable exact focus file",
+        "budget": {
+          "maxTokens": 1000
+        },
+        "focusPaths": [
+          "src/javascript/no-symbols.js"
+        ],
+        "refsMode": "off",
+        "responseMode": "inline",
+        "wireFormat": "json",
+        "detail": "full"
+      },
+      "expectedErrorCode": "CONTEXT_FOCUS_PATH_UNAVAILABLE"
+    },
+    {
+      "tool": "sdl.repo.status",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "compact",
+        "includeTelemetry": false
       }
     },
     {
@@ -123,7 +244,19 @@
         "query": "UserRepository",
         "limit": 10,
         "semantic": false,
-        "wireFormat": "json"
+        "wireFormat": "json",
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.symbol.search",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "query": "UserRepository",
+        "limit": 10,
+        "semantic": false,
+        "wireFormat": "json",
+        "detail": "full"
       }
     },
     {
@@ -133,7 +266,19 @@
         "query": "zz_no_such_symbol_zz",
         "limit": 5,
         "semantic": false,
-        "wireFormat": "json"
+        "wireFormat": "json",
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.symbol.search",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "query": "zz_no_such_symbol_zz",
+        "limit": 5,
+        "semantic": false,
+        "wireFormat": "json",
+        "detail": "full"
       }
     },
     {
@@ -144,7 +289,20 @@
         "symbolRef": {
           "name": "UserRepository",
           "file": "src/typescript/models.ts"
-        }
+        },
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.symbol.getCard",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "refsMode": "off",
+        "symbolRef": {
+          "name": "UserRepository",
+          "file": "src/typescript/models.ts"
+        },
+        "detail": "full"
       }
     },
     {
@@ -155,7 +313,20 @@
         "symbolRef": {
           "name": "keeps sdl.info callable and discoverable in exclusive Code Mode",
           "file": "tests/unit/code-mode-tool-validation.test.ts"
-        }
+        },
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.symbol.getCard",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "refsMode": "off",
+        "symbolRef": {
+          "name": "keeps sdl.info callable and discoverable in exclusive Code Mode",
+          "file": "tests/unit/code-mode-tool-validation.test.ts"
+        },
+        "detail": "full"
       }
     },
     {
@@ -167,7 +338,21 @@
           "name": "UserRepository",
           "file": "src/typescript/models.ts"
         },
-        "maxLines": 80
+        "maxLines": 80,
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.code.getSkeleton",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "refsMode": "off",
+        "symbolRef": {
+          "name": "UserRepository",
+          "file": "src/typescript/models.ts"
+        },
+        "maxLines": 80,
+        "detail": "full"
       }
     },
     {
@@ -182,7 +367,24 @@
         "identifiersToFind": [
           "findById"
         ],
-        "maxLines": 40
+        "maxLines": 40,
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.code.getHotPath",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "refsMode": "off",
+        "symbolRef": {
+          "name": "UserRepository",
+          "file": "src/typescript/models.ts"
+        },
+        "identifiersToFind": [
+          "findById"
+        ],
+        "maxLines": 40,
+        "detail": "full"
       }
     },
     {
@@ -199,7 +401,26 @@
         "maxTokens": 160,
         "identifiersToFind": [
           "users"
-        ]
+        ],
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.code.needWindow",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "refsMode": "off",
+        "symbolRef": {
+          "name": "findById",
+          "file": "src/typescript/models.ts"
+        },
+        "reason": "Inspect deterministic repository lookup behavior",
+        "expectedLines": 5,
+        "maxTokens": 160,
+        "identifiersToFind": [
+          "users"
+        ],
+        "detail": "full"
       }
     },
     {
@@ -208,128 +429,301 @@
         "repoId": "{REPO_ID}",
         "filePath": "SDL.md",
         "maxTokens": 500,
-        "responseMode": "inline"
+        "responseMode": "inline",
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.file.read",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "filePath": "SDL.md",
+        "maxTokens": 500,
+        "responseMode": "inline",
+        "detail": "full"
       }
     },
     {
       "tool": "sdl.policy.get",
       "args": {
-        "repoId": "{REPO_ID}"
+        "repoId": "{REPO_ID}",
+        "detail": "compact"
       }
-    }
-  ],
-  "uncoveredAllowlist": [
-    {
-      "tool": "sdl.repo.register",
-      "reason": "Setup mutation; registration can create versions and enforcement files."
     },
     {
-      "tool": "sdl.repo.unregister",
-      "reason": "Destructive repository-lifecycle mutation; a stable call would consume its own fixture state."
-    },
-    {
-      "tool": "sdl.index.refresh",
-      "reason": "Index mutation; response depends on refreshed version state."
+      "tool": "sdl.policy.get",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "full"
+      }
     },
     {
       "tool": "sdl.repo.overview",
-      "reason": "Overview includes repository freshness metadata; add a stable fixture when that output is normalized."
-    },
-    {
-      "tool": "sdl.buffer.push",
-      "reason": "Live draft mutation with session-local state."
-    },
-    {
-      "tool": "sdl.buffer.checkpoint",
-      "reason": "Live draft checkpoint mutation with session-local state."
-    },
-    {
-      "tool": "sdl.buffer.status",
-      "reason": "Live draft status reports current queue/checkpoint state."
-    },
-    {
-      "tool": "sdl.symbol.edit",
-      "reason": "Edit preview/apply surface creates expiring plans and may mutate files."
+      "args": {
+        "repoId": "{REPO_ID}",
+        "level": "stats",
+        "detail": "compact"
+      }
     },
     {
       "tool": "sdl.slice.build",
-      "reason": "Slice responses include leased handles; add stable fixture after handle lease normalization."
-    },
-    {
-      "tool": "sdl.slice.refresh",
-      "reason": "Requires a prior slice handle with lease state."
-    },
-    {
-      "tool": "sdl.slice.spillover.get",
-      "reason": "Requires a prior spillover handle with lease state."
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskText": "Inspect UserRepository deterministically",
+        "entrySymbols": [
+          "UserRepository"
+        ],
+        "detail": "compact"
+      },
+      "expectError": true,
+      "expectedErrorCode": "NO_SYMBOLS"
     },
     {
       "tool": "sdl.delta.get",
-      "reason": "Depends on version history created by index refreshes."
-    },
-    {
-      "tool": "sdl.policy.set",
-      "reason": "Policy mutation."
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "fromVersion": "v1",
+        "toVersion": "v2",
+        "detail": "compact"
+      }
     },
     {
       "tool": "sdl.pr.risk.analyze",
-      "reason": "Depends on selected version range and risk-analysis state."
-    },
-    {
-      "tool": "sdl.agent.feedback",
-      "reason": "Feedback mutation."
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "fromVersion": "v1",
+        "toVersion": "v2",
+        "detail": "compact"
+      }
     },
     {
       "tool": "sdl.agent.feedback.query",
-      "reason": "Feedback query depends on previously stored feedback."
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "compact"
+      }
     },
     {
-      "tool": "sdl.runtime.execute",
-      "reason": "Runtime execution includes process and artifact state."
+      "tool": "sdl.buffer.status",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "compact"
+      }
     },
     {
       "tool": "sdl.runtime.queryOutput",
-      "reason": "Requires a runtime artifact handle from a previous execution."
+      "args": {
+        "repoId": "{REPO_ID}",
+        "artifactHandle": "missing-runtime-artifact",
+        "queryTerms": [
+          "fixture"
+        ],
+        "detail": "compact"
+      }
     },
     {
       "tool": "sdl.response.get",
-      "reason": "Response artifact handles are process-local continuation state; only inline responses participate in byte-stability comparisons."
-    },
-    {
-      "tool": "sdl.manual",
-      "reason": "Manual rendering is covered by focused catalog tests; tools/list is the byte-stability contract here."
-    },
-    {
-      "tool": "sdl.retrieve",
-      "reason": "The unified retrieval variants are covered by their stable underlying tool fixtures."
-    },
-    {
-      "tool": "sdl.workflow",
-      "reason": "Workflow results can include stateful continuation handles and runtime artifacts."
-    },
-    {
-      "tool": "sdl.file",
-      "reason": "The unified file gateway includes mutations and expiring edit plans."
-    },
-    {
-      "tool": "sdl.usage.stats",
-      "reason": "Session usage telemetry is intentionally stateful."
-    },
-    {
-      "tool": "sdl.file.write",
-      "reason": "File mutation."
-    },
-    {
-      "tool": "sdl.semantic.enrichment.refresh",
-      "reason": "Provider-backed enrichment mutation."
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "handle": "missing-response-artifact",
+        "detail": "compact"
+      }
     },
     {
       "tool": "sdl.semantic.enrichment.status",
-      "reason": "Run identifiers and timestamps are model-gated; provider selection and run state remain intentionally live."
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "compact"
+      }
     },
     {
-      "tool": "sdl.search.edit",
-      "reason": "Cross-file edit preview/apply surface creates expiring plans and may mutate files."
+      "tool": "sdl.manual",
+      "args": {
+        "actions": [
+          "symbol.search"
+        ],
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.retrieve",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "op": "symbolSearch",
+        "args": {
+          "query": "UserRepository",
+          "limit": 1,
+          "semantic": false,
+          "wireFormat": "json"
+        },
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.workflow",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "steps": [
+          {
+            "fn": "symbolSearch",
+            "args": {
+              "query": "UserRepository",
+              "limit": 1,
+              "semantic": false,
+              "wireFormat": "json"
+            }
+          }
+        ],
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.file",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "op": "read",
+        "filePath": "SDL.md",
+        "maxTokens": 500,
+        "responseMode": "inline",
+        "detail": "compact"
+      }
+    },
+    {
+      "tool": "sdl.repo.overview",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "level": "stats",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.slice.build",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "taskText": "Inspect UserRepository deterministically",
+        "entrySymbols": [
+          "UserRepository"
+        ],
+        "detail": "full"
+      },
+      "expectError": true,
+      "expectedErrorCode": "NO_SYMBOLS"
+    },
+    {
+      "tool": "sdl.delta.get",
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "fromVersion": "v1",
+        "toVersion": "v2",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.pr.risk.analyze",
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "fromVersion": "v1",
+        "toVersion": "v2",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.agent.feedback.query",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.buffer.status",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.runtime.queryOutput",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "artifactHandle": "missing-runtime-artifact",
+        "queryTerms": [
+          "fixture"
+        ],
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.response.get",
+      "expectError": true,
+      "args": {
+        "repoId": "{REPO_ID}",
+        "handle": "missing-response-artifact",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.semantic.enrichment.status",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.manual",
+      "args": {
+        "actions": [
+          "symbol.search"
+        ],
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.retrieve",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "op": "symbolSearch",
+        "args": {
+          "query": "UserRepository",
+          "limit": 1,
+          "semantic": false,
+          "wireFormat": "json"
+        },
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.workflow",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "steps": [
+          {
+            "fn": "symbolSearch",
+            "args": {
+              "query": "UserRepository",
+              "limit": 1,
+              "semantic": false,
+              "wireFormat": "json"
+            }
+          }
+        ],
+        "detail": "full"
+      }
+    },
+    {
+      "tool": "sdl.file",
+      "args": {
+        "repoId": "{REPO_ID}",
+        "op": "read",
+        "filePath": "SDL.md",
+        "maxTokens": 500,
+        "responseMode": "inline",
+        "detail": "full"
+      }
     }
   ],
   "projectionCases": [
@@ -339,8 +733,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "symbol.search",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "symbol.getCard",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "symbol.getCard",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -349,8 +753,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "symbol.edit",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "slice.build",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "slice.build",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -359,8 +773,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "slice.refresh",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "slice.spillover.get",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "slice.spillover.get",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -369,8 +793,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "delta.get",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "pr.risk.analyze",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "pr.risk.analyze",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -379,8 +813,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "code.needWindow",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "code.getSkeleton",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "code.getSkeleton",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -389,8 +833,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "code.getHotPath",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "repo.register",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "repo.register",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -399,8 +853,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "repo.status",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "repo.unregister",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "repo.unregister",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -409,8 +873,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "repo.overview",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "index.refresh",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "index.refresh",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -419,8 +893,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "policy.get",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "policy.set",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "policy.set",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -429,8 +913,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "usage.stats",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "file.read",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "file.read",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -439,8 +933,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "file.write",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "search.edit",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "search.edit",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -449,8 +953,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "semantic.enrichment.refresh",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "semantic.enrichment.status",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "semantic.enrichment.status",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -459,8 +973,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "agent.feedback",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "agent.feedback.query",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "agent.feedback.query",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -469,8 +993,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "buffer.push",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "buffer.checkpoint",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "buffer.checkpoint",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -479,8 +1013,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "buffer.status",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "runtime.execute",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "runtime.execute",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -489,8 +1033,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "runtime.queryOutput",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "response.get",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "response.get",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -499,8 +1053,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "memory.store",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "memory.query",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "memory.query",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -509,8 +1073,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "memory.remove",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "memory.surface",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "memory.surface",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -519,8 +1093,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "dataPick",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "dataMap",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataMap",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -529,8 +1113,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "dataFilter",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "dataSort",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "dataSort",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -539,8 +1133,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "dataTemplate",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "workflowContinuationGet",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "workflowContinuationGet",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -549,8 +1153,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "action.search",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "info",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "info",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -559,8 +1173,18 @@
       "includeDiagnostics": false
     },
     {
+      "action": "manual",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "context",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "context",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
@@ -569,15 +1193,47 @@
       "includeDiagnostics": false
     },
     {
+      "action": "file",
+      "detail": "full",
+      "includeDiagnostics": false
+    },
+    {
       "action": "retrieve",
       "detail": "compact",
+      "includeDiagnostics": false
+    },
+    {
+      "action": "retrieve",
+      "detail": "full",
       "includeDiagnostics": false
     },
     {
       "action": "workflow",
       "detail": "compact",
       "includeDiagnostics": false
+    },
+    {
+      "action": "workflow",
+      "detail": "full",
+      "includeDiagnostics": false
     }
   ],
-  "projectionDiagnosticVolatilityAllowlist": []
+  "projectionDiagnosticVolatilityAllowlist": [],
+  "handlerDeterminismExclusions": {
+    "sdl.repo.register": "Mutates persistent repository registration; exercised only by fixture setup, not as a read-only determinism call.",
+    "sdl.repo.unregister": "Destructively removes persistent repository registration.",
+    "sdl.index.refresh": "Mutates the graph index; fixture setup performs the single bounded initial index only.",
+    "sdl.buffer.push": "Mutates the live draft buffer.",
+    "sdl.buffer.checkpoint": "Mutates and reconciles the live draft buffer.",
+    "sdl.symbol.edit": "Mutates indexed source code.",
+    "sdl.slice.refresh": "Requires a prior generated slice handle and mutates the slice cache.",
+    "sdl.slice.spillover.get": "Requires a spillover handle generated only by a truncated slice.",
+    "sdl.policy.set": "Mutates persistent repository policy.",
+    "sdl.agent.feedback": "Persists feedback records.",
+    "sdl.runtime.execute": "Executes an arbitrary child process and is unsafe for a read-only determinism fixture.",
+    "sdl.usage.stats": "Opt-in diagnostic session counters intentionally change as handler calls accumulate.",
+    "sdl.file.write": "Mutates repository files.",
+    "sdl.semantic.enrichment.refresh": "Mutates semantic enrichment state.",
+    "sdl.search.edit": "Mutates repository files, including multi-file apply and rollback state."
+  }
 }

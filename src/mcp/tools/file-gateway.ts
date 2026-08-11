@@ -5,13 +5,20 @@ import { normalizePath } from "../../util/paths.js";
 import { resolveSymbolId } from "../../util/resolve-symbol-id.js";
 import type { ToolContext } from "../../server.js";
 import { NotFoundError, ValidationError } from "../errors.js";
-import type {
-  CodeNeedWindowResponse,
-  FileReadResponse,
-  FileWriteResponse,
-  SearchEditPreviewResponse,
-  SearchEditResponse,
-  SymbolEditResponse,
+import {
+  CodeNeedWindowResponseSchema,
+  DiffPreviewSnippetsSchema,
+  FileReadResponseSchema,
+  FileWriteResponseSchema,
+  SearchEditResponseSchema,
+  SymbolEditResponseSchema,
+  withProjectionSuccessOutputSchema,
+  type CodeNeedWindowResponse,
+  type FileReadResponse,
+  type FileWriteResponse,
+  type SearchEditPreviewResponse,
+  type SearchEditResponse,
+  type SymbolEditResponse,
 } from "../tools.js";
 import {
   FileGatewayRequestSchema,
@@ -56,19 +63,38 @@ export type FileGatewayResponse =
   | SymbolEditResponse
   | FileGatewayPreviewWindowResponse;
 
-const FILE_GATEWAY_OUTPUT_KEYS = ["filePath", "mode", "kind"] as const;
-
-// Operation-specific schemas remain authoritative for nested file/edit payloads.
-export const FileGatewayOutputSchema = z
+const FileGatewayPreviewWindowResponseSchema = z
   .object({
-    filePath: z.string().optional(),
-    mode: z.string().optional(),
-    kind: z.unknown().optional(),
+    mode: z.enum(["previewWindow", "sourceWindow"]),
+    planHandle: z.string(),
+    file: z.string(),
+    indexedSource: z.literal(true),
+    snippets: DiffPreviewSnippetsSchema.optional(),
+    codeWindow: withProjectionSuccessOutputSchema(
+      "code.needWindow",
+      CodeNeedWindowResponseSchema,
+    ),
+    diagnostics: z
+      .object({
+        timings: z
+          .object({
+            totalMs: z.number(),
+            phases: z.record(z.string(), z.number()),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
-  .passthrough()
-  .refine((value) => FILE_GATEWAY_OUTPUT_KEYS.some((key) => key in value), {
-    message: "Unrecognized sdl.file response shape",
-  });
+  .strict();
+
+export const FileGatewayOutputSchema = z.union([
+  withProjectionSuccessOutputSchema("file.read", FileReadResponseSchema),
+  withProjectionSuccessOutputSchema("file.write", FileWriteResponseSchema),
+  withProjectionSuccessOutputSchema("search.edit", SearchEditResponseSchema),
+  withProjectionSuccessOutputSchema("symbol.edit", SymbolEditResponseSchema),
+  FileGatewayPreviewWindowResponseSchema,
+]);
 
 function findPlanPreviewEntry(
   plan: StoredPlan,

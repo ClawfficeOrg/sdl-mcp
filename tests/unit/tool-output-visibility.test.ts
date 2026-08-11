@@ -245,7 +245,7 @@ describe("visible tool output", () => {
     assert.doesNotMatch(envelope.content[0]?.text ?? "", /etag-sym|etagCache/);
   });
 
-  it("marks workflows with failed steps as MCP errors without dropping results", () => {
+  it("marks workflows with failed steps as MCP errors without duplicating raw errors", () => {
     const failedResults = [
       { fn: "fileWrite", status: "error", result: { message: "invalid syntax" } },
       { fn: "searchEditApply", status: "skipped" },
@@ -255,10 +255,14 @@ describe("visible tool output", () => {
       null,
       "",
       "sdl.workflow",
+      { detail: "full" },
     );
 
     assert.equal(failedEnvelope.isError, true);
-    assert.deepEqual(failedEnvelope.structuredContent?.results, failedResults);
+    assert.deepEqual(failedEnvelope.structuredContent?.results, [
+      { stepIndex: 0, fn: "fileWrite", status: "error" },
+      { stepIndex: 1, fn: "searchEditApply", status: "skipped" },
+    ]);
 
     const successfulEnvelope = buildToolResponseEnvelope(
       {
@@ -397,7 +401,8 @@ describe("visible tool output", () => {
     const envelope = buildVisibleEnvelope("sdl.runtime.execute", {}, payload);
 
     assert.equal(summary, full);
-    assert.equal(envelope.content[0]?.text, full);
+    assert.equal(envelope.content[0]?.text, "runtime.execute -> complete");
+    assert.doesNotMatch(envelope.content[0]?.text ?? "", /diff-looking text/);
   });
 
   it("projects sdl.context structured fields after compact visible projection", () => {
@@ -423,13 +428,28 @@ describe("visible tool output", () => {
     assert.doesNotMatch(String(content[0]?.text), /context-etag/);
   });
 
-  it("preserves compact usageStats formattedSummary in structured content", async () => {
+  it("projects compact usageStats aggregate and top tools", async () => {
     const server = new MCPServer();
     server.registerTool(
       "sdl.usage.stats",
       "Usage stats test tool",
       z.object({}),
-      async () => ({ formattedSummary: "usage summary" }),
+      async () => ({
+        session: {
+          totalSdlTokens: 120,
+          totalRawEquivalent: 500,
+          totalSavedTokens: 380,
+          overallSavingsPercent: 76,
+          callCount: 2,
+          toolBreakdown: [{
+            tool: "sdl.symbol.search",
+            sdlTokens: 120,
+            rawEquivalent: 500,
+            savedTokens: 380,
+            callCount: 2,
+          }],
+        },
+      }),
     );
 
     const handler = getCallToolHandler(server);
@@ -446,12 +466,16 @@ describe("visible tool output", () => {
     );
 
     const structuredContent = result.structuredContent as Record<string, unknown>;
-    assert.equal(structuredContent.formattedSummary, "usage summary");
-    assert.match(
+    const aggregate = structuredContent.aggregate as Record<string, unknown>;
+    const topTools = structuredContent.topTools as Array<Record<string, unknown>>;
+    assert.equal(aggregate.totalSdlTokens, 120);
+    assert.equal(aggregate.totalSavedTokens, 380);
+    assert.equal(topTools[0]?.tool, "sdl.symbol.search");
+    assert.doesNotMatch(
       (result.content as Array<Record<string, unknown>>)
         .map((block) => String(block.text))
         .join("\n"),
-      /usage summary/,
+      /^\s*[\[{]/,
     );
   });
 

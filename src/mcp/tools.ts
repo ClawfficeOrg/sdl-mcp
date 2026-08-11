@@ -71,6 +71,7 @@ const SymbolSignatureParamSchema = z.object({
 
 const SymbolSignatureSchema = z.object({
   name: z.string().optional(),
+  text: z.string().optional(),
   params: z.array(SymbolSignatureParamSchema).optional(),
   returns: z.string().optional(),
   generics: z.array(z.string()).optional(),
@@ -707,6 +708,17 @@ const RepoStatusRawResponseSchema = z.object({
   rootPath: z.string().optional(),
   rootAvailability: RepoRootAvailabilitySchema,
   latestVersionId: z.string().nullable(),
+  recentVersions: z
+    .array(
+      z
+        .object({
+          versionId: z.string(),
+          createdAt: z.string().optional(),
+          reason: z.string().nullable().optional(),
+        })
+        .strict(),
+    )
+    .optional(),
   indexOperations: z.array(IndexOperationSchema).optional(),
   filesIndexed: z.number().int(),
   symbolsIndexed: z.number().int(),
@@ -729,6 +741,7 @@ const RepoStatusRawResponseSchema = z.object({
     })
     .optional(),
   healthAvailable: z.boolean().optional(),
+  healthNote: z.string().optional(),
   /**
    * Watcher health states:
    * - null: server never started watchers for this repo
@@ -819,6 +832,8 @@ const RepoStatusRawResponseSchema = z.object({
       graphIntegrityRevision: z.number().int().nonnegative().nullable(),
       graphIntegrityVerifiedRevision: z.number().int().nonnegative().nullable(),
       graphIntegrityDigest: z.string().nullable(),
+      graphIntegrityFilelessPruningSupported: z.boolean().nullable().optional(),
+      graphIntegrityManifestEstablished: z.boolean().optional(),
       nextBestAction: z.string().optional(),
     })
     .optional(),
@@ -846,6 +861,7 @@ const RepoStatusCompactResponseSchema = z.object({
   indexOperations: z.array(IndexOperationSchema).optional(),
   filesIndexed: z.number().int().optional(),
   symbolsIndexed: z.number().int().optional(),
+  watcherNote: z.string().optional(),
   healthScore: z.number().int().min(0).max(100).nullable().optional(),
   healthAvailable: z.boolean().optional(),
   watcherHealth: z
@@ -858,6 +874,7 @@ const RepoStatusCompactResponseSchema = z.object({
       queueDepth: z.number().int().min(0).optional(),
       stale: z.boolean().optional(),
     })
+    .strict()
     .optional(),
   derivedState: z
     .object({
@@ -871,11 +888,12 @@ const RepoStatusCompactResponseSchema = z.object({
       graphIntegrityState: z.enum(["unknown", "verifying", "verified", "failed"]).optional(),
       nextBestAction: z.string().optional(),
     })
+    .strict()
     .optional(),
   nextBestAction: z.string().optional(),
   diagnostics: z.unknown().optional(),
   retrievalEvidence: z.unknown().optional(),
-});
+}).strict();
 
 export const RepoStatusResponseSchema = z.union([
   RepoStatusRawResponseSchema,
@@ -1206,7 +1224,7 @@ const FileWriteModeSchema = z.enum([
   "append",
 ]);
 
-const DiffPreviewSnippetsSchema = z.object({
+export const DiffPreviewSnippetsSchema = z.object({
   before: z.string(),
   after: z.string(),
   beforeStartLine: z.number().int().nonnegative(),
@@ -1561,6 +1579,13 @@ const CardWithETagSchema = SymbolCardSchema.extend({
 const WireCardWithETagSchema = CardWithETagSchema.extend({
   repoId: z.string().min(1).optional(),
   exported: z.boolean().optional(),
+  // Native extraction persists an empty string when visibility is unavailable.
+  visibility: z
+    .union([
+      z.enum(["public", "protected", "private", "exported", "internal"]),
+      z.literal(""),
+    ])
+    .optional(),
   signature: SymbolSignatureSchema.extend({
     name: z.string().optional(),
   }).optional(),
@@ -2439,6 +2464,8 @@ const RepoOverviewPayloadSchema = z.object({
       ),
     })
     .optional(),
+  clustersAvailable: z.boolean().optional(),
+  clustersHint: z.string().optional(),
   processes: z
     .object({
       totalProcesses: z.number().int().min(0),
@@ -3656,7 +3683,7 @@ export const UsageStatsResponseSchema = z.object({
   wire: z.object({ packed: WirePackedSummarySchema }).optional(),
   signalDensity: SignalDensitySummarySchema.optional(),
   formattedSummary: z.string().optional(),
-});
+}).strict();
 
 export type UsageStatsRequest = z.infer<typeof UsageStatsRequestSchema>;
 export type UsageStatsResponse = z.infer<typeof UsageStatsResponseSchema>;
@@ -4564,6 +4591,429 @@ export type SearchEditApplyResponse = WithRequiredFields<
   z.infer<typeof SearchEditApplyResponseSchema>,
   "rollback"
 >;
+const PublicRecoveryActionSchema = z
+  .object({
+    action: z.string().min(1),
+    args: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+/** Closed public error envelope shared by every projected tool response. */
+export const GenericToolErrorResponseSchema = z
+  .object({
+    error: z
+      .object({
+        message: z.string().min(1),
+        code: z.string().min(1).optional(),
+        details: z.array(z.unknown()).optional(),
+        classification: z.string().optional(),
+        retryable: z.boolean().optional(),
+        fallbackTools: z.array(z.string()).optional(),
+        fallbackRationale: z.string().optional(),
+      })
+      .strict(),
+    nextAction: PublicRecoveryActionSchema.optional(),
+  })
+  .strict();
+
+const ProjectedPolicyConfigSchema = z
+  .object({
+    maxWindowLines: z.number().int().min(1),
+    maxWindowTokens: z.number().int().min(1),
+    requireIdentifiers: z.boolean(),
+    allowBreakGlass: z.boolean(),
+    defaultMinCallConfidence: z.number().min(0).max(1).optional(),
+    defaultDenyRaw: z.boolean().optional(),
+    budgetCaps: z
+      .object({
+        maxCards: z.number().int().min(1),
+        maxEstimatedTokens: z.number().int().min(100),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const ProjectedSymbolEditPreviewResponseSchema =
+  SymbolEditPreviewResponseSchema.omit({ expiresAt: true }).strict();
+
+const ProjectedSearchEditPreviewResponseSchema =
+  SearchEditPreviewResponseSchema.omit({
+    expiresAt: true,
+    fileEntries: true,
+  })
+    .extend({
+      fileEntries: z.array(
+        SearchEditFileEntrySchema.omit({ matchCount: true }).strict(),
+      ),
+    })
+    .strict();
+
+const ProjectedPRRiskCompactResponseSchema = z
+  .object({
+    summary: PRRiskSummarySchema,
+    analysis: z
+      .object({
+        fromVersion: z.string(),
+        toVersion: z.string(),
+        riskScore: z.number(),
+        riskLevel: z.enum(["low", "medium", "high", "critical"]),
+        changedSymbolsCount: z.number().int().nonnegative(),
+        blastRadiusCount: z.number().int().nonnegative(),
+      })
+      .strict(),
+    escalationRequired: z.boolean(),
+    policyDecision: PolicyDecisionSummarySchema.optional(),
+    truncationWarning: z.string().optional(),
+  })
+  .strict();
+
+const ProjectedRangeSchema = z
+  .object({
+    startLine: z.number().int(),
+    startCol: z.number().int(),
+    endLine: z.number().int(),
+    endCol: z.number().int(),
+  })
+  .strict();
+
+const ProjectedCodeSkeletonCompactResponseSchema = z
+  .object({
+    file: z.string(),
+    range: ProjectedRangeSchema,
+    skeleton: z.string(),
+  })
+  .strict();
+
+const ProjectedCodeHotPathCompactResponseSchema = z
+  .object({
+    file: z.string(),
+    range: ProjectedRangeSchema,
+    excerpt: z.string(),
+    matchedIdentifiers: z.array(z.string()),
+    nextAction: ContextLogicalActionSchema.optional(),
+  })
+  .strict();
+
+const ProjectedRuntimeExecuteResponseSchema = z
+  .object({
+    status: z.enum(["success", "failure", "timeout", "cancelled", "denied"]),
+  })
+  .strict();
+
+const ProjectedRuntimeQueryCompactResponseSchema =
+  RuntimeQueryOutputResponseSchema.pick({
+    artifactHandle: true,
+    excerpts: true,
+    matchStatus: true,
+    nextCursor: true,
+  }).strict();
+
+const ProjectedResponseMetadataSchema =
+  ResponseArtifactPublicMetadataSchema.extend({
+    handle: z.string().optional(),
+  }).strict();
+
+const ProjectedResponseGetCompactSchema = ResponseGetResponseSchema.omit({
+  metadata: true,
+  range: true,
+})
+  .extend({
+    metadata: ProjectedResponseMetadataSchema,
+    range: z
+      .object({
+        offsetBytes: z.number().int().nonnegative(),
+        returnedBytes: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const ProjectedResponseGetFullSchema = ResponseGetResponseSchema.omit({
+  metadata: true,
+  range: true,
+})
+  .extend({
+    metadata: ProjectedResponseMetadataSchema,
+    range: z
+      .object({
+        offsetBytes: z.number().int().nonnegative(),
+        returnedBytes: z.number().int().nonnegative(),
+        totalBytes: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const ProjectedContextCompactResponseSchema = z
+  .object({
+    status: z.enum(["complete", "budgetLimited", "empty"]),
+    taskType: ContextTaskTypeSchema,
+    retrieval: z
+      .object({
+        level: z.enum(["hybrid", "hybrid-partial", "lexical", "graph-only"]),
+      })
+      .strict()
+      .optional(),
+    evidence: z
+      .array(ContextEvidenceSchema.omit({ rank: true, lanes: true }).strict())
+      .optional(),
+    edges: z.array(ContextEdgeSchema).optional(),
+    omitted: z
+      .object({
+        total: z.number().int().nonnegative(),
+        byReason: z
+          .object({
+            budget: z.number().int().nonnegative(),
+            unavailable: z.number().int().nonnegative().optional(),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
+    nextAction: ContextLogicalActionSchema.optional(),
+  })
+  .strict();
+
+const ProjectedUsageStatsResponseSchema = UsageStatsResponseSchema.omit({
+  session: true,
+  history: true,
+})
+  .extend({
+    session: SessionUsageSnapshotSchema.omit({
+      sessionId: true,
+      startedAt: true,
+    })
+      .strict()
+      .optional(),
+    history: z
+      .object({
+        snapshots: z.array(
+          UsageHistorySnapshotSchema.omit({
+            sessionId: true,
+            timestamp: true,
+          }).strict(),
+        ),
+        aggregate: z
+          .object({
+            totalSdlTokens: z.number(),
+            totalRawEquivalent: z.number(),
+            totalSavedTokens: z.number(),
+            overallSavingsPercent: z.number(),
+            totalCalls: z.number().int(),
+            sessionCount: z.number().int(),
+            topToolsBySavings: z.array(TopToolSavingsSchema),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const PROJECTED_SUCCESS_SCHEMA_BY_ACTION: Readonly<
+  Record<string, readonly z.ZodType[]>
+> = Object.freeze({
+  "symbol.edit": [ProjectedSymbolEditPreviewResponseSchema],
+  "pr.risk.analyze": [ProjectedPRRiskCompactResponseSchema],
+  "code.getSkeleton": [ProjectedCodeSkeletonCompactResponseSchema],
+  "code.getHotPath": [ProjectedCodeHotPathCompactResponseSchema],
+  "repo.unregister": [
+    z.object({ ok: z.literal(true), removed: z.literal(true) }).strict(),
+  ],
+  "policy.get": [
+    z.object({ policy: ProjectedPolicyConfigSchema }).strict(),
+  ],
+  "policy.set": [z.object({ ok: z.boolean() }).strict()],
+  "usage.stats": [ProjectedUsageStatsResponseSchema],
+  "search.edit": [ProjectedSearchEditPreviewResponseSchema],
+  "agent.feedback": [
+    z
+      .object({
+        ok: z.boolean(),
+        feedbackId: z.string(),
+      })
+      .strict(),
+  ],
+  "buffer.push": [
+    BufferPushResponseSchema.omit({ repoId: true }).strict(),
+  ],
+  "runtime.execute": [ProjectedRuntimeExecuteResponseSchema],
+  "runtime.queryOutput": [ProjectedRuntimeQueryCompactResponseSchema],
+  "response.get": [
+    ProjectedResponseGetCompactSchema,
+    ProjectedResponseGetFullSchema,
+  ],
+  "memory.store": [
+    MemoryStoreResponseSchema.omit({
+      created: true,
+      deduplicated: true,
+    }).strict(),
+  ],
+  "memory.query": [MemoryQueryResponseSchema.omit({ repoId: true }).strict()],
+  "memory.surface": [
+    MemorySurfaceResponseSchema.omit({ repoId: true }).strict(),
+  ],
+  workflowContinuationGet: [
+    z
+      .object({
+        data: z.array(z.unknown()),
+        hasMore: z.boolean(),
+        nextOffset: z.number().int().nonnegative().optional(),
+      })
+      .strict(),
+  ],
+  context: [ProjectedContextCompactResponseSchema],
+});
+
+const PublicRecordKeySchema = z.string().refine(
+  (key) => !key.startsWith("__"),
+  { message: "Public record output contains a reserved private field" },
+);
+const PublicModelValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(PublicModelValueSchema),
+    z.record(PublicRecordKeySchema, PublicModelValueSchema),
+  ]),
+);
+
+function strictCanonicalPublicSuccessSchema(
+  action: string,
+  schema: unknown,
+  root = true,
+): z.ZodType {
+  const descend = (child: unknown): z.ZodType =>
+    strictCanonicalPublicSuccessSchema(action, child, false);
+
+  if (schema instanceof z.ZodObject) {
+    const strictShape = Object.fromEntries(
+      Object.entries(schema.shape).map(([key, child]) => [key, descend(child)]),
+    );
+    return schema.safeExtend(strictShape).strict();
+  }
+  if (schema instanceof z.ZodDiscriminatedUnion) {
+    return schema.clone({
+      ...schema.def,
+      options: schema.options.map(descend),
+    });
+  }
+  if (schema instanceof z.ZodUnion) {
+    return schema.clone({
+      ...schema.def,
+      options: schema.options.map(descend),
+    });
+  }
+  if (schema instanceof z.ZodArray) {
+    const strictArray = schema.clone({
+      ...schema.def,
+      element: descend(schema.element),
+    });
+    if (!root) return strictArray;
+    return z
+      .custom<unknown[]>(
+        (value) =>
+          Array.isArray(value)
+          && Object.keys(value).every((key) => /^\d+$/.test(key)),
+        { message: "Public array output contains an unknown named field" },
+      )
+      .pipe(strictArray);
+  }
+  if (schema instanceof z.ZodOptional) {
+    return schema.clone({
+      ...schema.def,
+      innerType: descend(schema.def.innerType),
+    });
+  }
+  if (schema instanceof z.ZodNullable) {
+    return schema.clone({
+      ...schema.def,
+      innerType: descend(schema.def.innerType),
+    });
+  }
+  if (schema instanceof z.ZodDefault) {
+    return schema.clone({
+      ...schema.def,
+      innerType: descend(schema.def.innerType),
+    });
+  }
+  if (schema instanceof z.ZodRecord) {
+    if (root && action !== "dataPick") {
+      throw new TypeError(
+        "Only dataPick may expose a top-level arbitrary record",
+      );
+    }
+    return schema.clone({
+      ...schema.def,
+      keyType: action === "dataPick"
+        ? schema.def.keyType
+        : schema.def.keyType instanceof z.ZodString
+          ? schema.def.keyType.refine((key) => !key.startsWith("__"), {
+              message: "Public record output contains a reserved private field",
+            })
+          : schema.def.keyType,
+      valueType: action === "dataPick"
+        ? schema.def.valueType
+        : descend(schema.def.valueType),
+    });
+  }
+  if (schema instanceof z.ZodUnknown) {
+    return action === "dataPick" ? schema : PublicModelValueSchema;
+  }
+  if (schema instanceof z.ZodPipe) {
+    return schema.clone({
+      ...schema.def,
+      in: descend(schema.def.in),
+      out: descend(schema.def.out),
+    });
+  }
+  if (schema instanceof z.ZodTuple) {
+    return schema.clone({
+      ...schema.def,
+      items: schema.def.items.map(descend),
+      rest: schema.def.rest ? descend(schema.def.rest) : null,
+    });
+  }
+  if (schema instanceof z.ZodType) {
+    return schema;
+  }
+  throw new TypeError("Public output schema contains an unsupported node");
+}
+
+/**
+ * Adds only the named public projection arms for an action plus the closed
+ * generic error envelope. Canonical handler schemas stay reusable internally,
+ * while their public registration arms reject unknown response fields.
+ */
+export function withProjectionSuccessOutputSchema(
+  action: string,
+  canonicalSchema: z.ZodType,
+): z.ZodType {
+  const projectedSchemas = PROJECTED_SUCCESS_SCHEMA_BY_ACTION[action] ?? [];
+  const successSchemas = [
+    ...projectedSchemas.map((schema) =>
+      strictCanonicalPublicSuccessSchema(action, schema),
+    ),
+    strictCanonicalPublicSuccessSchema(action, canonicalSchema),
+  ];
+  return successSchemas.length === 1
+    ? successSchemas[0]
+    : z.union(successSchemas);
+}
+
+export function withProjectionOutputSchema(
+  action: string,
+  canonicalSchema: z.ZodType,
+): z.ZodType {
+  return z.union([
+    GenericToolErrorResponseSchema,
+    withProjectionSuccessOutputSchema(action, canonicalSchema),
+  ]);
+}
+
 export type SearchEditResponse =
   | SearchEditPreviewResponse
   | SearchEditApplyResponse

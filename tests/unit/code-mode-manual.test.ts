@@ -350,10 +350,16 @@ describe("Task 12 bounded manual discovery", () => {
       includeExamples: true,
       detail: "compact",
       format: "json",
-    }) as { manual?: string; actions?: unknown[]; tokenEstimate: number };
-    assert.match(unfocused.manual ?? "", /SDL-MCP action index/);
-    assert.equal(unfocused.actions, undefined);
-    assert.ok(unfocused.tokenEstimate < 1500);
+    }) as {
+      actions?: Array<{ schemaSummary?: unknown; example?: unknown }>;
+      tokenEstimate: number;
+    };
+    assert.ok(unfocused.actions && unfocused.actions.length > 0);
+    assert.equal(
+      unfocused.actions.some((action) => action.schemaSummary || action.example),
+      false,
+    );
+    assert.ok(unfocused.tokenEstimate < 7_500);
 
     const focused = handleManual({
       actions: ["runtime.execute"],

@@ -64,7 +64,6 @@ describe("code-mode tool validation", () => {
       answerFirst: true,
       cardDetail: "full",
       requireDiagnostics: true,
-      includeDiagnostics: true,
     };
 
     for (const [field, value] of Object.entries(removedFields)) {
@@ -83,6 +82,16 @@ describe("code-mode tool validation", () => {
       assert.deepEqual(issue?.path, [], field);
       assert.deepEqual("keys" in issue ? issue.keys : undefined, [field], field);
     }
+    assert.equal(
+      AgentContextRequestSchema.safeParse({
+        repoId: "demo-repo",
+        taskType: "implement",
+        taskText: "explain handleSymbolSearch",
+        budget: { maxTokens: 1234 },
+        includeDiagnostics: true,
+      }).success,
+      true,
+    );
   });
 
   it("requires the explicit sdl.context token budget", () => {
@@ -108,6 +117,7 @@ describe("code-mode tool validation", () => {
       "sdl.file",
     ] as const;
     const outputSchemas = new Map<string, OutputSchema | undefined>();
+    const validationSchemas = new Map<string, OutputSchema | undefined>();
     const fakeServer = {
       registerTool(
         name: string,
@@ -117,9 +127,11 @@ describe("code-mode tool validation", () => {
         _wireSchema?: unknown,
         _annotations?: unknown,
         outputSchema?: OutputSchema,
+        validationOutputSchema?: OutputSchema,
       ) {
         if (gatewayNames.includes(name as (typeof gatewayNames)[number])) {
           outputSchemas.set(name, outputSchema);
+          validationSchemas.set(name, validationOutputSchema);
         }
       },
     };
@@ -193,8 +205,9 @@ describe("code-mode tool validation", () => {
       for (const success of representativeSuccesses.get(name) ?? []) {
         assert.equal(schema.safeParse(success).success, true, name);
       }
+      const exhaustiveSchema = validationSchemas.get(name) ?? schema;
       assert.equal(
-        schema.safeParse({ actionSpecific: true }).success,
+        exhaustiveSchema.safeParse({ actionSpecific: true }).success,
         false,
         `${name} must reject unknown-only objects`,
       );
@@ -204,6 +217,14 @@ describe("code-mode tool validation", () => {
         `${name} must reject arrays`,
       );
     }
+    const retrieveValidationSchema = validationSchemas.get("sdl.retrieve");
+    assert.ok(retrieveValidationSchema);
+    assert.equal(
+      retrieveValidationSchema.safeParse({
+        results: [{ sessionId: "private" }],
+      }).success,
+      false,
+    );
     assert.equal(new Set(schemas).size, gatewayNames.length);
   });
 
@@ -500,6 +521,7 @@ describe("code-mode tool validation", () => {
         includeExamples: false,
       })) as { actions: Array<{ action: string; disabled?: boolean }> };
 
+      assert.ok(response.actions.length > 0);
       assert.equal(
         response.actions.some((action) => action.disabled),
         false,

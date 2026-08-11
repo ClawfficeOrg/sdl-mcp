@@ -15,13 +15,21 @@ import { getContinuation } from "../../dist/code-mode/workflow-truncation.js";
 import { SHUTDOWN_FORCE_EXIT_TIMEOUT_MS } from "../../dist/config/constants.js";
 import { closeLadybugDb, initLadybugDb } from "../../dist/db/ladybug.js";
 import type { CodeModeConfig } from "../../dist/config/types.js";
-import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
+import {
+  projectToolResultForModelContent,
+  projectWorkflowChildResultForModel,
+} from "../../dist/mcp/context-response-projection.js";
 import { sessionContentLedger } from "../../dist/mcp/session-dedupe.js";
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "../../dist/mcp/server-instructions.js";
 import { handleAgentContext } from "../../dist/mcp/tools/context.js";
 import { handleSymbolGetCard } from "../../dist/mcp/tools/symbol.js";
 import { indexRepo } from "../../dist/indexer/indexer.js";
-import type { MCPServer, ToolContext } from "../../dist/server.js";
+import {
+  buildToolResponseEnvelope,
+  type MCPServer,
+  type ToolContext,
+} from "../../dist/server.js";
+import { WORKFLOW_CHILD_ACTION_BINDINGS } from "../../dist/mcp/response-projection/registry.js";
 import {
   DeltaGetResponseSchema,
   IndexRefreshResponseSchema,
@@ -51,6 +59,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import fixtures from "./determinism.fixtures.json" with { type: "json" };
+import {
+  AGENT_OUTPUT_CASES,
+} from "../fixtures/response-projection/agent-output-cases.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ID = fixtures.repoId;
@@ -96,6 +107,7 @@ interface FixtureToolCall {
   tool: string;
   args: unknown;
   expectError?: boolean;
+  expectedErrorCode?: string;
 }
 
 interface Leg {
@@ -245,11 +257,17 @@ async function callToolStrict(
   name: string,
   args: unknown,
   expectError = false,
+  expectedErrorCode?: string,
 ): Promise<unknown> {
-  const response = await client.callTool({
-    name,
-    arguments: args as Record<string, unknown>,
-  });
+  let response: Awaited<ReturnType<Client["callTool"]>>;
+  try {
+    response = await client.callTool({
+      name,
+      arguments: args as Record<string, unknown>,
+    });
+  } catch (error) {
+    assert.fail(`${name} MCP call rejected: ${String(error)}`);
+  }
   const structuredContent = (
     response as {
       structuredContent?: {
@@ -266,11 +284,8 @@ async function callToolStrict(
       `${name} ${expectError ? "did not return the expected error" : "failed"}: ${canonical(response)}`,
     );
   }
-  if (expectError) {
-    assert.equal(
-      structuredContent?.error?.code,
-      "CONTEXT_FOCUS_PATH_UNAVAILABLE",
-    );
+  if (expectError && expectedErrorCode !== undefined) {
+    assert.equal(structuredContent?.error?.code, expectedErrorCode);
   }
   return response;
 }
@@ -353,6 +368,7 @@ async function runLeg(repeats: number, options: { setup: boolean }): Promise<Leg
           call.tool,
           args,
           call.expectError,
+          call.expectedErrorCode,
         );
         if (
           call.tool === "sdl.action.search"
@@ -496,34 +512,174 @@ after(() => {
   rmSync(TEST_ROOT, { recursive: true, force: true });
 });
 
+test("PROJECTION MATRIX: all compact/full fixtures are stable across process and unchanged index", () => {
+  const projectionCases = fixtures.projectionCases as Array<{
+    action: string;
+    detail: string;
+    includeDiagnostics: boolean;
+  }>;
+  const diagnosticAllowlist =
+    fixtures.projectionDiagnosticVolatilityAllowlist as Array<{
+      action: string;
+      reason: string;
+    }>;
+
+  for (const fixture of AGENT_OUTPUT_CASES) {
+    const declared = projectionCases
+      .filter(({ action }) => action === fixture.action)
+      .map(({ detail, includeDiagnostics }) => [detail, includeDiagnostics])
+      .sort();
+    assert.deepEqual(
+      declared,
+      [["compact", false], ["full", false]],
+      fixture.action,
+    );
+  }
+
+  const cases = projectionCases.map((entry) => {
+    const fixture = AGENT_OUTPUT_CASES.find(({ action }) => action === entry.action);
+    assert.ok(fixture, entry.action);
+    return {
+      entry,
+      args: {
+        ...fixture.publicRequest,
+        detail: entry.detail,
+        includeDiagnostics: entry.includeDiagnostics,
+      },
+      canonicalResult: fixture.canonicalResultFactory(),
+    };
+  });
+  const serialize = () =>
+    cases.map(({ entry, args, canonicalResult }) =>
+      JSON.stringify(
+        buildToolResponseEnvelope(
+          canonicalResult,
+          null,
+          "",
+          `sdl.${entry.action}`,
+          args,
+        ),
+      ),
+    );
+  const baseline = serialize();
+  assert.deepEqual(serialize(), baseline, "same-process repeated envelopes");
+
+  for (const [index, fixtureCase] of cases.entries()) {
+    const projected = projectToolResultForModelContent(
+      fixtureCase.entry.action,
+      fixtureCase.canonicalResult,
+      fixtureCase.args,
+    );
+    const envelope = JSON.parse(baseline[index]) as { structuredContent?: unknown };
+    const envelopeValue =
+      projected !== null && typeof projected === "object" && !Array.isArray(projected)
+        ? envelope.structuredContent
+        : (envelope.structuredContent as { value?: unknown } | undefined)?.value;
+    assert.deepEqual(envelopeValue, projected, fixtureCase.entry.action);
+
+    const binding = Object.entries(WORKFLOW_CHILD_ACTION_BINDINGS).find(
+      ([, candidate]) => candidate.action === fixtureCase.entry.action,
+    );
+    if (binding) {
+      assert.deepEqual(
+        projectWorkflowChildResultForModel(
+          binding[0],
+          fixtureCase.canonicalResult,
+          fixtureCase.args,
+        ),
+        projected,
+        `${fixtureCase.entry.action} workflow child routing`,
+      );
+    }
+  }
+
+  const childSource = [
+    'import { buildToolResponseEnvelope } from "./dist/server.js";',
+    'let source = "";',
+    'for await (const chunk of process.stdin) source += chunk;',
+    'const cases = JSON.parse(source);',
+    'const values = cases.map(({ action, canonicalResult, args }) =>',
+    '  JSON.stringify(buildToolResponseEnvelope(canonicalResult, null, "", "sdl." + action, args)),',
+    ');',
+    'await new Promise((resolve) => process.stdout.write(JSON.stringify(values), resolve));',
+    'process.exit(0);',
+  ].join("\n");
+  const fresh = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", childSource],
+    {
+      cwd: process.cwd(),
+      input: JSON.stringify(
+        cases.map(({ entry, args, canonicalResult }) => ({
+          action: entry.action,
+          args,
+          canonicalResult,
+        })),
+      ),
+      encoding: "utf8",
+      timeout: 30_000,
+      env: process.env,
+    },
+  );
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.deepEqual(
+    JSON.parse(fresh.stdout) as string[],
+    baseline,
+    "fresh-process envelopes",
+  );
+
+  let statusProofs = 0;
+  for (const [ordinal, call] of (fixtures.toolCalls as FixtureToolCall[]).entries()) {
+    if (call.tool !== "sdl.repo.status") continue;
+    const args = materializeArgs(call.args);
+    const key = callKey(call.tool, args, ordinal);
+    assert.equal(legB.results.get(key)?.[0], legA.results.get(key)?.[0], key);
+    statusProofs += 1;
+  }
+  assert.ok(statusProofs >= 2, "compact/full unchanged-index repo.status proof");
+  assert.deepEqual(serialize(), baseline, "unchanged-index fixture envelopes");
+
+  for (const entry of diagnosticAllowlist) {
+    assert.ok(entry.reason.trim().length > 0, entry.action);
+  }
+});
+
 test("INVARIANT 1: tool surface is byte-stable across processes", () => {
   if (legA.toolsCanonical !== legB.toolsCanonical) {
     assert.fail(reportMismatch("tools-list", legA.toolsCanonical, legB.toolsCanonical));
   }
 });
 
-test("INVARIANT 2a: exposed tools are covered or justified", () => {
+test("INVARIANT 2a: every exposed tool has live handler determinism coverage or a named exclusion", () => {
   const exposed: string[] = JSON.parse(legA.toolsCanonical).tools.map(
     (tool: { name: string }) => tool.name,
   );
-  const covered = new Set(fixtures.toolCalls.map((call) => call.tool));
-  const allow = new Map(
-    fixtures.uncoveredAllowlist.map((entry) => [entry.tool, entry.reason]),
+  const liveCovered = new Set(
+    fixtures.toolCalls.map((call) => call.tool),
   );
+  const exclusions = fixtures.handlerDeterminismExclusions as Record<
+    string,
+    string
+  >;
 
-  const missing = exposed.filter((tool) => !covered.has(tool) && !allow.has(tool));
-  const stale = [...allow.keys()].filter((tool) => !exposed.includes(tool));
-  const reasonless = [...allow.entries()]
-    .filter(([, reason]) => typeof reason !== "string" || reason.trim() === "")
-    .map(([tool]) => tool);
+  for (const [tool, reason] of Object.entries(exclusions)) {
+    assert.ok(exposed.includes(tool), `excluded tool is not exposed: ${tool}`);
+    assert.ok(reason.trim().length > 0, `missing exclusion reason: ${tool}`);
+    assert.equal(
+      liveCovered.has(tool),
+      false,
+      `live-covered tool must not be excluded: ${tool}`,
+    );
+  }
 
+  const missing = exposed.filter(
+    (tool) => !liveCovered.has(tool) && !Object.hasOwn(exclusions, tool),
+  );
   assert.deepEqual(
     missing,
     [],
-    `Tools with no determinism fixture or allowlist reason: ${missing.join(", ")}`,
+    `Tools with no live handler determinism fixture or named exclusion: ${missing.join(", ")}`,
   );
-  assert.deepEqual(stale, [], `Allowlist entries for non-exposed tools: ${stale.join(", ")}`);
-  assert.deepEqual(reasonless, [], `Allowlist entries missing reasons: ${reasonless.join(", ")}`);
 });
 
 test("BYTE-STABILITY SCOPE: ref-compacting context calls disable session refs", () => {

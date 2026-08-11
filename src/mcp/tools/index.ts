@@ -1,3 +1,5 @@
+import type { z } from "zod";
+
 import type { MCPServer } from "../../server.js";
 import { createMemoryHintHook } from "../hooks/memory-hint.js";
 import { registerGatewayTools } from "../../gateway/index.js";
@@ -12,9 +14,14 @@ import {
 import type { CodeModeConfig, GatewayConfig } from "../../config/types.js";
 import { loadConfig } from "../../config/loadConfig.js";
 import { anyRepoHasMemoryTools } from "../../config/memory-config.js";
-import { InfoResponseSchema } from "../tools.js";
+import {
+  InfoResponseSchema,
+  withProjectionOutputSchema,
+  withProjectionSuccessOutputSchema,
+} from "../tools.js";
 import {
   assertProjectionProfilesForActions,
+  canonicalActionName,
 } from "../response-projection/registry.js";
 import {
   buildFlatToolDescriptors,
@@ -37,6 +44,49 @@ export function registerTools(
   gatewayConfig?: GatewayConfig,
   codeModeConfig?: CodeModeConfig,
 ): void {
+  // Registration captures the public projection/error union, not only the
+  // canonical handler shape, for every direct, gateway, and code-mode tool.
+  server = new Proxy(server, {
+    get(target, property, receiver): unknown {
+      if (property === "registerTool") {
+        const registerTool: MCPServer["registerTool"] = (
+          name,
+          description,
+          inputSchema,
+          handler,
+          wireSchema,
+          presentation,
+          outputSchema,
+          validationOutputSchema,
+        ) => {
+          const action = canonicalActionName(name);
+          const exhaustiveSchema = validationOutputSchema ?? outputSchema;
+          const projectedValidationSchema =
+            exhaustiveSchema === undefined
+              ? undefined
+              : withProjectionOutputSchema(action, exhaustiveSchema);
+          return target.registerTool(
+            name,
+            description,
+            inputSchema,
+            handler,
+            wireSchema,
+            presentation,
+            validationOutputSchema === undefined
+              ? projectedValidationSchema
+              : outputSchema,
+            validationOutputSchema === undefined
+              ? undefined
+              : projectedValidationSchema,
+          );
+        };
+        return registerTool;
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
   // Tool visibility is fixed once at server registration so every projection
   // sees the same static action set for the lifetime of this process.
   const stableServices: ToolServices = {
@@ -48,6 +98,17 @@ export function registerTools(
       infoTool: true,
     },
   };
+  const descriptors = buildFlatToolDescriptors(stableServices);
+  const publicSuccessOutputSchemaByAction = new Map<string, z.ZodType>();
+  for (const descriptor of descriptors) {
+    if (descriptor.outputSchema) {
+      const action = canonicalActionName(descriptor.name);
+      publicSuccessOutputSchemaByAction.set(
+        action,
+        withProjectionSuccessOutputSchema(action, descriptor.outputSchema),
+      );
+    }
+  }
 
   assertProjectionProfilesForActions(
     getPublicFlatToolNames(stableServices),
@@ -73,7 +134,13 @@ export function registerTools(
 
   // Code Mode exclusive: register universal tools plus code-mode tools only
   if (codeModeConfig?.enabled && codeModeConfig?.exclusive) {
-    registerCodeModeTools(server, stableServices, codeModeConfig);
+    registerCodeModeTools(
+      server,
+      stableServices,
+      codeModeConfig,
+      undefined,
+      publicSuccessOutputSchemaByAction,
+    );
     return;
   }
 
@@ -106,17 +173,23 @@ export function registerTools(
         stableServices,
         codeModeConfig,
         sharedActionMap,
+        publicSuccessOutputSchemaByAction,
       );
     }
     return;
   }
 
   // Flat tool registration: declarative descriptors registered in a loop
-  const descriptors = buildFlatToolDescriptors(stableServices);
   registerFlatTools(server, descriptors);
 
   // Code Mode alongside flat tools
   if (codeModeConfig?.enabled) {
-    registerCodeModeTools(server, stableServices, codeModeConfig);
+    registerCodeModeTools(
+      server,
+      stableServices,
+      codeModeConfig,
+      undefined,
+      publicSuccessOutputSchemaByAction,
+    );
   }
 }

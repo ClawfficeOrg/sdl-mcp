@@ -6,7 +6,11 @@ import {
   RECOVERY_GATEWAY_ACTION_DEFINITIONS,
 } from "./recovery-action-catalog.js";
 
-import { AgentContextRequestSchema } from "../mcp/tools.js";
+import {
+  AgentContextRequestSchema,
+  withProjectionOutputSchema,
+  withProjectionSuccessOutputSchema,
+} from "../mcp/tools.js";
 import { FileGatewayRequestSchema } from "../mcp/tools/file-gateway.js";
 import { InfoRequestSchema } from "../mcp/tools/info.js";
 import { RetrieveRequestSchema } from "./retrieve-schema.js";
@@ -54,8 +58,8 @@ const META_TOOL_SCHEMAS: Record<string, z.ZodType> = {
 
 // --- Action Tags / Categories ---
 
-/** Raw result contracts for workflow-only transforms, which are not MCP tools. */
-export const INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION = Object.freeze({
+/** Canonical result contracts for workflow-only transforms, which are not MCP tools. */
+const INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION = Object.freeze({
   dataPick: z.record(z.string(), z.unknown()),
   dataMap: z.array(z.record(z.string(), z.unknown())),
   dataFilter: z.array(z.unknown()),
@@ -66,8 +70,35 @@ export const INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION = Object.freeze({
       data: z.unknown(),
       totalTokens: z.number().nonnegative(),
       hasMore: z.boolean(),
+      nextOffset: z.number().int().nonnegative().optional(),
     })
-    .passthrough(),
+    .strict(),
+} satisfies Record<(typeof INTERNAL_TRANSFORM_NAMES)[number], z.ZodType>);
+
+/** Success-only public contracts used inside the workflow success-step union. */
+export const INTERNAL_TRANSFORM_SUCCESS_OUTPUT_SCHEMA_BY_ACTION = Object.freeze({
+  dataPick: withProjectionSuccessOutputSchema("dataPick", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataPick),
+  dataMap: withProjectionSuccessOutputSchema("dataMap", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataMap),
+  dataFilter: withProjectionSuccessOutputSchema("dataFilter", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataFilter),
+  dataSort: withProjectionSuccessOutputSchema("dataSort", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataSort),
+  dataTemplate: withProjectionSuccessOutputSchema("dataTemplate", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataTemplate),
+  workflowContinuationGet: withProjectionSuccessOutputSchema(
+    "workflowContinuationGet",
+    INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.workflowContinuationGet,
+  ),
+} satisfies Record<(typeof INTERNAL_TRANSFORM_NAMES)[number], z.ZodType>);
+
+/** Complete direct-validation contracts, including the single generic error arm. */
+export const INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION = Object.freeze({
+  dataPick: withProjectionOutputSchema("dataPick", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataPick),
+  dataMap: withProjectionOutputSchema("dataMap", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataMap),
+  dataFilter: withProjectionOutputSchema("dataFilter", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataFilter),
+  dataSort: withProjectionOutputSchema("dataSort", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataSort),
+  dataTemplate: withProjectionOutputSchema("dataTemplate", INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.dataTemplate),
+  workflowContinuationGet: withProjectionOutputSchema(
+    "workflowContinuationGet",
+    INTERNAL_TRANSFORM_CANONICAL_OUTPUT_SCHEMA_BY_ACTION.workflowContinuationGet,
+  ),
 } satisfies Record<(typeof INTERNAL_TRANSFORM_NAMES)[number], z.ZodType>);
 
 export type ActionTag =

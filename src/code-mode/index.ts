@@ -7,6 +7,7 @@ import { createActionMap, type ActionMap } from "../gateway/router.js";
 import {
   AgentContextOutputSchema,
   AgentContextRequestSchema,
+  withProjectionSuccessOutputSchema,
 } from "../mcp/tools.js";
 import { handleAgentContext } from "../mcp/tools/context.js";
 import { projectWorkflowChildResultForModel } from "../mcp/context-response-projection.js";
@@ -29,6 +30,7 @@ import { estimateTokens } from "../util/tokenize.js";
 
 import { withExclusiveCodeModeRecoveryProjection } from "./action-reference-projection.js";
 import {
+  INTERNAL_TRANSFORM_SUCCESS_OUTPUT_SCHEMA_BY_ACTION,
   buildCatalog,
   getProjectionCatalogActions,
   rankCatalog,
@@ -60,6 +62,7 @@ import {
 import { parseWorkflowRequest } from "./workflow-parser.js";
 
 import {
+  buildWorkflowPublicOutputSchema,
   WorkflowOutputSchema,
   WorkflowRequestSchema,
   WorkflowTraceOptionsSchema,
@@ -291,7 +294,7 @@ export function handleManual(
   const includeExamples = args.includeExamples;
 
   const unfocused = !args.query && !args.actions;
-  if (unfocused && args.detail !== "full") {
+  if (unfocused && args.detail !== "full" && format !== "json") {
     const manual = getManualIndexCached(
       services.liveIndex,
       services.actionAvailability?.memoryTools,
@@ -316,8 +319,8 @@ export function handleManual(
   const fullCatalog = buildCatalog({
     memoryVisible: services.actionAvailability?.memoryTools,
     infoVisible: services.actionAvailability?.infoTool !== false,
-    includeSchemas,
-    includeExamples,
+    includeSchemas: includeSchemas && (!unfocused || args.detail === "full"),
+    includeExamples: includeExamples && (!unfocused || args.detail === "full"),
     detail: args.detail === "compact" ? "compact" : "full",
   });
   let catalog = fullCatalog.filter((entry) => !entry.disabled);
@@ -420,28 +423,166 @@ export function handleManual(
   };
 }
 
+const PUBLIC_CATALOG_RECORD_KEY_SCHEMA = z.string().refine(
+  (key) =>
+    !key.startsWith("__")
+    && !["sessionId", "absolutePath", "timestamp", "privateField"].includes(key),
+  { message: "Private catalog fields are not public" },
+);
+const PublicCatalogValueSchema: z.ZodType = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(PublicCatalogValueSchema),
+    z.record(PUBLIC_CATALOG_RECORD_KEY_SCHEMA, PublicCatalogValueSchema),
+  ]),
+);
+const PublicCatalogRecordSchema = z.record(
+  PUBLIC_CATALOG_RECORD_KEY_SCHEMA,
+  PublicCatalogValueSchema,
+);
+const PublicSchemaSummaryVariantSchema = z
+  .object({
+    value: z.string(),
+    requiredFields: z.array(z.string()),
+  })
+  .strict();
+const PublicSchemaSummaryFieldSchema: z.ZodType = z.lazy(() =>
+  z
+    .object({
+      name: z.string(),
+      type: z.string(),
+      required: z.boolean(),
+      default: PublicCatalogValueSchema.optional(),
+      enumValues: z.array(z.string()).optional(),
+      nestedFieldCount: z.number().int().nonnegative().optional(),
+      description: z.string().optional(),
+      subFields: z.array(PublicSchemaSummaryFieldSchema).optional(),
+      discriminator: z.string().optional(),
+      variants: z.array(PublicSchemaSummaryVariantSchema).optional(),
+    })
+    .strict(),
+);
+const PublicActionCatalogEntrySchema = z
+  .object({
+    action: z.string(),
+    fn: z.string().optional(),
+    description: z.string().optional(),
+    tags: z.array(
+      z.enum([
+        "query",
+        "code",
+        "repo",
+        "policy",
+        "agent",
+        "buffer",
+        "runtime",
+        "memory",
+        "transform",
+        "meta",
+        "mutation",
+      ]),
+    ).optional(),
+    kind: z.enum(["gateway", "internal", "meta"]).optional(),
+    estTokens: z.number().int().nonnegative().optional(),
+    prerequisites: z.array(z.string()).optional(),
+    recommendedNextActions: z.array(z.string()).optional(),
+    fallbacks: z.array(z.string()).optional(),
+    requiredParams: z.array(z.string()).optional(),
+    disabled: z.boolean().optional(),
+    disabledReason: z.string().optional(),
+    schemaSummary: z
+      .object({ fields: z.array(PublicSchemaSummaryFieldSchema) })
+      .strict()
+      .optional(),
+    example: PublicCatalogRecordSchema.optional(),
+  })
+  .strict();
+
+const ActionSearchSummarySchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    byKind: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    byNamespace: z.record(z.string(), z.number().int().nonnegative()).optional(),
+    matchedActions: z.array(z.string()).optional(),
+  })
+  .strict();
+const ActionSearchDisabledHintSchema = z
+  .object({
+    count: z.number().int().nonnegative(),
+    message: z.string(),
+    actions: z.array(
+      z.object({ action: z.string(), reason: z.string() }).strict(),
+    ),
+  })
+  .strict();
+const ActionSearchAutoEnabledSchema = z
+  .object({
+    includeSchemas: z.boolean(),
+    includeExamples: z.boolean(),
+    reason: z.enum(["limit=1", "exact-name-query"]),
+  })
+  .strict();
+const ActionSearchNextActionSchema = z.union([
+  z
+    .object({
+      action: z.string(),
+      args: PublicCatalogRecordSchema,
+    })
+    .strict(),
+  z
+    .object({
+      id: z.string(),
+      args: PublicCatalogRecordSchema,
+    })
+    .strict(),
+]);
+
+const CompositeHandledOuterShape = {
+  kind: z.unknown().optional(),
+  handle: z.unknown().optional(),
+};
+const RETRIEVE_ADVERTISED_OUTPUT_SCHEMA = z.looseObject({
+  results: z.unknown().optional(),
+  card: z.unknown().optional(),
+  slice: z.unknown().optional(),
+  approved: z.unknown().optional(),
+  ...CompositeHandledOuterShape,
+});
+const WORKFLOW_ADVERTISED_OUTPUT_SCHEMA = z.looseObject({
+  results: z.unknown().optional(),
+  ...CompositeHandledOuterShape,
+});
+const FILE_ADVERTISED_OUTPUT_SCHEMA = z.looseObject({
+  filePath: z.unknown().optional(),
+  mode: z.unknown().optional(),
+  ...CompositeHandledOuterShape,
+});
+
 const ACTION_SEARCH_OUTPUT_SCHEMA = z.object({
-  actions: z.array(z.record(z.string(), z.unknown())).optional(),
-  summary: z.record(z.string(), z.unknown()).optional(),
+  actions: z.array(PublicActionCatalogEntrySchema).optional(),
+  summary: ActionSearchSummarySchema.optional(),
   total: z.number().int().nonnegative().optional(),
   hasMore: z.boolean().optional(),
   tokenEstimate: z.number().int().nonnegative().optional(),
   offset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive().optional(),
   nextOffset: z.number().int().nonnegative().optional(),
-  disabledHint: z.record(z.string(), z.unknown()).optional(),
+  disabledHint: ActionSearchDisabledHintSchema.optional(),
   schemaHint: z.string().optional(),
-  autoEnabled: z.record(z.string(), z.unknown()).optional(),
-  nextAction: z.record(z.string(), z.unknown()).optional(),
-});
+  autoEnabled: ActionSearchAutoEnabledSchema.optional(),
+  nextAction: ActionSearchNextActionSchema.optional(),
+}).strict();
 
 const MANUAL_OUTPUT_SCHEMA = z.object({
   manual: z.string().optional(),
-  actions: z.array(z.record(z.string(), z.unknown())).optional(),
+  actions: z.array(PublicActionCatalogEntrySchema).optional(),
   tokenEstimate: z.number().int().nonnegative().optional(),
   unknownActions: z.array(z.string()).optional(),
   warning: z.string().optional(),
-});
+}).strict();
 
 export function registerActionSearchTool(
   server: MCPServer,
@@ -494,6 +635,7 @@ export function registerCodeModeTools(
   services: ToolServices,
   config: CodeModeConfig,
   prebuiltActionMap?: ActionMap,
+  publicSuccessOutputSchemaByAction: ReadonlyMap<string, z.ZodType> = new Map(),
 ): void {
   assertCodeModeProjectionProfiles();
   const actionMap = prebuiltActionMap ?? createActionMap(
@@ -513,11 +655,32 @@ export function registerCodeModeTools(
       handler: async (args: unknown) => handleActionSearch(args, services),
     },
   };
-  const activeGatewayFunctions = Object.entries(
+  const activeGatewayBindings = Object.entries(
     getActiveFnNameMap(services.actionAvailability?.memoryTools),
-  )
-    .filter(([, action]) => Object.hasOwn(workflowActionMap, action))
-    .map(([fn]) => fn);
+  ).filter(([, action]) => Object.hasOwn(workflowActionMap, action));
+  const activeGatewayFunctions = activeGatewayBindings.map(([fn]) => fn);
+  const actionSearchOutputSchema = ACTION_SEARCH_OUTPUT_SCHEMA;
+  const workflowSuccessOutputSchemaByFn = Object.fromEntries([
+    ["actionSearch", actionSearchOutputSchema],
+    ["action.search", actionSearchOutputSchema],
+    ...activeGatewayBindings.flatMap(([fn, action]) => {
+      const outputSchema =
+        action === "action.search"
+          ? withProjectionSuccessOutputSchema(
+              action,
+              ACTION_SEARCH_OUTPUT_SCHEMA,
+            )
+          : publicSuccessOutputSchemaByAction.get(action);
+      return outputSchema === undefined ? [] : [[fn, outputSchema] as const];
+    }),
+    ...Object.entries(INTERNAL_TRANSFORM_SUCCESS_OUTPUT_SCHEMA_BY_ACTION),
+  ]);
+  // Direct unit harnesses may omit the flat descriptor map; production registration
+  // always supplies it so the advertised workflow schema remains action-specific.
+  const workflowOutputSchema =
+    publicSuccessOutputSchemaByAction.size === 0
+      ? WorkflowOutputSchema
+      : buildWorkflowPublicOutputSchema(workflowSuccessOutputSchemaByFn);
   // Recovery validation uses the same fixed functions and dispatch map as this server.
   server.setActiveWorkflowFunctions?.([
     ...activeGatewayFunctions,
@@ -560,6 +723,7 @@ export function registerCodeModeTools(
       RetrieveRequestSchema,
     ),
     undefined,
+    RETRIEVE_ADVERTISED_OUTPUT_SCHEMA,
     RetrieveOutputSchema,
   );
 
@@ -605,7 +769,8 @@ export function registerCodeModeTools(
     },
     buildCompactJsonSchema(WorkflowRequestSchema),
     undefined,
-    WorkflowOutputSchema,
+    WORKFLOW_ADVERTISED_OUTPUT_SCHEMA,
+    workflowOutputSchema,
   );
 
   server.registerTool(
@@ -705,6 +870,7 @@ export function registerCodeModeTools(
       additionalProperties: false,
     }, FileGatewayRequestSchema),
     undefined,
+    FILE_ADVERTISED_OUTPUT_SCHEMA,
     FileGatewayOutputSchema,
   );
 }

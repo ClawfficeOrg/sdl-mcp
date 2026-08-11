@@ -344,6 +344,31 @@ function usageAggregate(value: unknown): ModelRecord | undefined {
   };
 }
 
+const USAGE_VOLATILE_FIELDS = new Set([
+  "pid",
+  "process",
+  "processId",
+  "sessionId",
+  "startedAt",
+  "timestamp",
+]);
+
+/** Remove process/session volatility recursively while preserving canonical data. */
+function sanitizeUsageValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeUsageValue);
+  }
+  if (!isRecord(value)) return value;
+
+  const sanitized: ModelRecord = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (!USAGE_VOLATILE_FIELDS.has(key)) {
+      sanitized[key] = sanitizeUsageValue(child);
+    }
+  }
+  return sanitized;
+}
+
 function usageStatus(value: ModelRecord, limit: number): ModelRecord {
   const session = isRecord(value.session) ? value.session : undefined;
   const history = isRecord(value.history) ? value.history : undefined;
@@ -682,6 +707,9 @@ export function projectStatusValue(
     && input.options.detail === "full"
   ) {
     return input.canonicalResult;
+  }
+  if (action === "usage.stats" && input.options.detail === "full") {
+    return sanitizeUsageValue(input.canonicalResult);
   }
   if (input.options.detail === "full") {
     return projectCompatibilityValue(input);

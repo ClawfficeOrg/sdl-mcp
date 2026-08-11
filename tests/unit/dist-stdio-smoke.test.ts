@@ -169,6 +169,8 @@ describe("dist stdio smoke", () => {
         "responseMode",
         "refsMode",
         "wireFormat",
+        "detail",
+        "includeDiagnostics",
       ]);
       const budgetSchema = contextInputProperties.budget;
       assert.strictEqual(budgetSchema.additionalProperties, false);

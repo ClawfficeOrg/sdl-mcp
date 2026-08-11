@@ -453,7 +453,13 @@ function fmtMemoryQuery(
   result: Record<string, unknown>,
 ): string | null {
   const memories = (result.memories as unknown[])?.length ?? 0;
-  return `memory.query -> ${memories} result${memories !== 1 ? "s" : ""}`;
+  const paging = typeof result.hasMore === "boolean"
+    ? `; hasMore=${String(result.hasMore)}`
+    : "";
+  const continuation = typeof result.nextOffset === "number"
+    ? `, nextOffset=${result.nextOffset}`
+    : "";
+  return `memory.query -> ${memories} result${memories !== 1 ? "s" : ""}${paging}${continuation}`;
 }
 
 function fmtPrRisk(

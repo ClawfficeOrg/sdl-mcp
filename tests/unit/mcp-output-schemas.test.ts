@@ -2,6 +2,12 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 
 import * as toolSchemas from "../../dist/mcp/tools.js";
+import {
+  ACTION_DEFINITION_BY_ACTION,
+} from "../../dist/code-mode/action-catalog.js";
+import {
+  AGENT_OUTPUT_CASES,
+} from "../fixtures/response-projection/agent-output-cases.ts";
 
 interface RuntimeSchema {
   parse(value: unknown): unknown;
@@ -61,6 +67,48 @@ function responseArtifact(toolName: string) {
 }
 
 describe("MCP output schemas", () => {
+  it("accepts projection options on every direct, gateway, and workflow request", () => {
+    const failures: string[] = [];
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      const definition = ACTION_DEFINITION_BY_ACTION[fixture.action];
+      if (!definition) {
+        failures.push(`${fixture.action}: missing action definition`);
+        continue;
+      }
+      for (const detail of ["compact", "full"] as const) {
+        const parsed = definition.schema.safeParse({
+          ...fixture.publicRequest,
+          detail,
+          includeDiagnostics: false,
+        });
+        if (!parsed.success) {
+          failures.push(
+            `${fixture.action} detail=${detail}: ${JSON.stringify(parsed.error.issues)}`,
+          );
+        }
+      }
+    }
+    assert.deepEqual(failures, [], failures.join("\n"));
+  });
+  it("accepts full cards with the native empty visibility sentinel", () => {
+    const schema = requireSchema("SymbolGetCardResponseSchema");
+    assert.doesNotThrow(() =>
+      schema.parse({
+        card: {
+          symbolId: "symbol",
+          repoId: "repo",
+          file: "src/example.ts",
+          range: { startLine: 1, startCol: 0, endLine: 2, endCol: 1 },
+          kind: "class",
+          name: "UserRepository",
+          exported: true,
+          visibility: "",
+          deps: { imports: [], calls: [] },
+        },
+      }),
+    );
+  });
+
   it("uses the public compact, standard, and full detail contract", () => {
     const cases: Array<{
       schemaName: string;

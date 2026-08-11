@@ -111,14 +111,14 @@ describe("response projection boundary", () => {
     const firstContent = first.content as Array<Record<string, unknown>>;
     const firstStructured = first.structuredContent as Record<string, unknown>;
 
-    assert.equal(firstStructured.source, "canonical-source");
+    assert.equal(firstStructured.source, undefined);
     assert.notEqual(firstStructured.source, "divergent-structured-payload");
     assert.equal(firstStructured._rawContext, undefined);
     assert.equal(firstStructured._tokenUsage, undefined);
     assert.ok(first.projectionStats, "projection stats should be returned internally");
     assert.ok(estimateTokens(String(firstContent[0]?.text ?? "")) <= 120);
     assert.doesNotMatch(String(firstContent[0]?.text ?? ""), /#PACKED\/|canonical-secret/);
-    assert.equal(JSON.stringify(first).match(/canonical-source/g)?.length, 1);
+    assert.doesNotMatch(JSON.stringify(first), /canonical-source/);
     assert.equal(JSON.stringify(first), JSON.stringify(second));
     assert.deepEqual(canonicalResult, original);
   });

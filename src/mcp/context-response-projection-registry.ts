@@ -98,7 +98,14 @@ export const RESPONSE_PROJECTION_RULES = createResponseProjectionRegistry([
   ],
   ["context", { projector: "generic" }],
   ["delta.get", { projector: "generic", showRepoId: true }],
-  ["repo.overview", { projector: "generic", showRepoId: true }],
+  [
+    "repo.overview",
+    {
+      projector: "generic",
+      showRepoId: true,
+      omitTopLevelFields: ["generatedAt"],
+    },
+  ],
   ["repo.status", { projector: "repoStatus", showRepoId: true }],
   ["slice.build", { projector: "generic", omitBudget: true }],
   ["symbol.search", { projector: "generic", omitSymbols: true }],

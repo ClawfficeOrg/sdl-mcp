@@ -6,6 +6,29 @@ import {
   projectWorkflowChildResultForModel,
 } from "../../dist/mcp/context-response-projection.js";
 import { RetrieveRequestSchema } from "../../dist/code-mode/retrieve-schema.js";
+import {
+  buildToolResponseEnvelope,
+} from "../../dist/server.js";
+import {
+  FLAT_RECOVERY_TOOL_NAMES,
+  WORKFLOW_CHILD_ACTION_BINDINGS,
+  getProjectionProfile,
+} from "../../dist/mcp/response-projection/registry.js";
+import {
+  buildValidatedRecoveryAction,
+} from "../../dist/mcp/response-projection/recovery.js";
+import { estimateTokens } from "../../dist/util/tokenize.js";
+import {
+  AGENT_OUTPUT_CASES,
+  AGENT_OUTPUT_DIAGNOSTIC_FIELD_NAMES,
+  AGENT_OUTPUT_DISALLOWED_FIELDS_BY_ACTION,
+  AGENT_OUTPUT_DISALLOWED_FIELD_NAMES,
+  AGENT_OUTPUT_DISALLOWED_PATH_PATTERNS,
+  AGENT_OUTPUT_PROFILE_CASES,
+  AGENT_OUTPUT_SUMMARY_FACT_EXCLUSIONS_BY_ACTION,
+  AGENT_OUTPUT_SUMMARY_FACT_KEYS,
+  AGENT_OUTPUT_TOKEN_BUDGETS,
+} from "../fixtures/response-projection/agent-output-cases.ts";
 import { SliceSpilloverGetResponseSchema } from "../../dist/mcp/tools.js";
 import {
   decodePacked,
@@ -21,7 +44,372 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function fixtureKeyRecord(
+  fixture: (typeof AGENT_OUTPUT_CASES)[number],
+  value: unknown,
+): Record<string, unknown> {
+  if (fixture.compactResultKind === "scalar") return {};
+  const candidate = fixture.compactResultKind === "array"
+    ? (Array.isArray(value) ? value[0] : undefined)
+    : value;
+  assert.ok(isRecord(candidate), fixture.action);
+  return candidate;
+}
+
+function modelValue(envelope: {
+  structuredContent?: Record<string, unknown>;
+}): unknown {
+  const structured = envelope.structuredContent;
+  return structured && Object.keys(structured).length === 1
+      && Object.hasOwn(structured, "value")
+    ? structured.value
+    : structured;
+}
+
+function combinedModelTokens(envelope: {
+  content: Array<{ text: string }>;
+  structuredContent?: Record<string, unknown>;
+}): number {
+  return estimateTokens(envelope.content.map(({ text }) => text).join("\n"))
+    + (envelope.structuredContent === undefined
+      ? 0
+      : estimateTokens(JSON.stringify(envelope.structuredContent)));
+}
+
+function visitRecords(
+  value: unknown,
+  visit: (record: Record<string, unknown>, path: string) => void,
+  path = "$",
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => visitRecords(entry, visit, `${path}[${index}]`));
+    return;
+  }
+  if (!isRecord(value)) return;
+  visit(value, path);
+  for (const [key, entry] of Object.entries(value)) {
+    visitRecords(entry, visit, `${path}.${key}`);
+  }
+}
+
+function recoveryCandidates(value: unknown): unknown[] {
+  const candidates: unknown[] = [];
+  visitRecords(value, (record) => {
+    if (Object.hasOwn(record, "nextAction")) candidates.push(record.nextAction);
+    if (Array.isArray(record.nextActions)) candidates.push(...record.nextActions);
+    if (Array.isArray(record.recovery)) candidates.push(...record.recovery);
+  });
+  return candidates.filter((candidate) => isRecord(candidate));
+}
+
+const SUMMARY_FACT_KEY_SET = new Set<string>(
+  AGENT_OUTPUT_SUMMARY_FACT_KEYS,
+);
+
+function namedSummaryFacts(value: unknown): Array<{
+  readonly name: string;
+  readonly value: string | number | boolean;
+}> {
+  const facts: Array<{
+    readonly name: string;
+    readonly value: string | number | boolean;
+  }> = [];
+  visitRecords(value, (record, path) => {
+    for (const [key, field] of Object.entries(record)) {
+      if (
+        (path === "$" || path === "$.summary")
+        && (SUMMARY_FACT_KEY_SET.has(key) || key.endsWith("Count"))
+        && (typeof field === "string"
+          || typeof field === "number"
+          || field === true)
+      ) {
+        facts.push({ name: `${path}.${key}`, value: field });
+      }
+    }
+    if (isRecord(record.nextAction) && typeof record.nextAction.id === "string") {
+      facts.push({
+        name: `${path}.recovery`,
+        value: record.nextAction.id,
+      });
+    }
+  });
+  return facts;
+}
+
 describe("agent retrieval output matrix", () => {
+  it("enforces idempotent bounded compact/full/diagnostic envelopes", () => {
+    const failures: string[] = [];
+
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      const profile = getProjectionProfile(fixture.action);
+      assert.equal(profile.defaultDetail, "compact", fixture.action);
+      const canonical = fixture.canonicalResultFactory();
+      const before = clone(canonical);
+      const compact = projectToolResultForModelContent(
+        `sdl.${fixture.action}`,
+        canonical,
+        {
+          ...fixture.publicRequest,
+          detail: "compact",
+          includeDiagnostics: false,
+        },
+      );
+      const full = projectToolResultForModelContent(
+        `sdl.${fixture.action}`,
+        canonical,
+        {
+          ...fixture.publicRequest,
+          detail: "full",
+          includeDiagnostics: false,
+        },
+      );
+      const compactRecord = fixtureKeyRecord(fixture, compact);
+      const fullRecord = fixtureKeyRecord(fixture, full);
+
+      assert.deepEqual(
+        Object.keys(compactRecord),
+        fixture.expectedCompactKeys,
+        `${fixture.action}:compact-key-order`,
+      );
+      for (const key of fixture.requiredActionabilityKeys) {
+        assert.ok(
+          Object.hasOwn(compactRecord, key),
+          `${fixture.action}:compact:${key}`,
+        );
+        assert.ok(
+          Object.hasOwn(fullRecord, key),
+          `${fixture.action}:full:${key}`,
+        );
+      }
+
+      for (const profileCase of AGENT_OUTPUT_PROFILE_CASES) {
+        const args = {
+          ...fixture.publicRequest,
+          detail: profileCase.detail,
+          includeDiagnostics: profileCase.includeDiagnostics,
+        };
+        const projected = projectToolResultForModelContent(
+          `sdl.${fixture.action}`,
+          canonical,
+          args,
+        );
+        assert.deepEqual(
+          projectToolResultForModelContent(
+            `sdl.${fixture.action}`,
+            projected,
+            args,
+          ),
+          projected,
+          `${fixture.action}:${profileCase.name}:idempotence`,
+        );
+
+        const first = buildToolResponseEnvelope(
+          canonical,
+          null,
+          "",
+          `sdl.${fixture.action}`,
+          args,
+        );
+        const repeated = buildToolResponseEnvelope(
+          canonical,
+          null,
+          "",
+          `sdl.${fixture.action}`,
+          args,
+        );
+        assert.equal(
+          JSON.stringify(repeated),
+          JSON.stringify(first),
+          `${fixture.action}:${profileCase.name}:stable-key-order`,
+        );
+        assert.deepEqual(
+          modelValue(first),
+          projected,
+          `${fixture.action}:${profileCase.name}:summary-structured-agreement`,
+        );
+
+        const visibleText = first.content.map(({ text }) => text).join("\n");
+        const facts = namedSummaryFacts(projected);
+        const excludedFacts = new Set(
+          AGENT_OUTPUT_SUMMARY_FACT_EXCLUSIONS_BY_ACTION[fixture.action] ?? [],
+        );
+        if (facts.length === 0) {
+          assert.ok(
+            visibleText.trim().length > 0,
+            `${fixture.action}:${profileCase.name}:summary-text`,
+          );
+        }
+        for (const { name, value } of facts) {
+          if (excludedFacts.has(name)) continue;
+          const key = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+          const lowerText = visibleText.toLowerCase();
+          const valueWords = String(value)
+            .replace(/([a-z])([A-Z])/g, "$1 $2")
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter((word) => word.length >= 3);
+          const rendered = visibleText.includes(String(value))
+            || lowerText.includes(key)
+            || valueWords.some((word) => lowerText.includes(word));
+          if (!rendered) {
+            failures.push(
+              `${fixture.action}:${profileCase.name}:summary-fact:${name}=${String(value)}`,
+            );
+          }
+        }
+        assert.doesNotMatch(
+          visibleText,
+          /^\s*[\[{]|#PACKED\//,
+          `${fixture.action}:${profileCase.name}:duplicate-payload`,
+        );
+
+        const actual = combinedModelTokens(first);
+        const budgetClass = profileCase.budgetClass === "profile"
+          ? profile.budgetClass
+          : profileCase.budgetClass;
+        const allowed = AGENT_OUTPUT_TOKEN_BUDGETS[budgetClass];
+        if (actual > allowed) {
+          failures.push(
+            `${fixture.action} profile=${profile.budgetClass} detail=${profileCase.name} actual=${actual} allowed=${allowed}`,
+          );
+        }
+      }
+      assert.deepEqual(canonical, before, `${fixture.action}:canonical`);
+    }
+
+    assert.deepEqual(failures, [], failures.join("\n"));
+  });
+  it("suppresses private data, validates recovery, diagnostics, and workflow parity", () => {
+    const workflowFnByAction = new Map(
+      Object.entries(WORKFLOW_CHILD_ACTION_BINDINGS)
+        .map(([fn, action]) => [action, fn] as const),
+    );
+    const advertisedTools = [...FLAT_RECOVERY_TOOL_NAMES, "sdl.workflow"];
+    const activeWorkflowFunctions = Object.keys(WORKFLOW_CHILD_ACTION_BINDINGS);
+
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      const canonical = fixture.canonicalResultFactory();
+      const compact = projectToolResultForModelContent(
+        `sdl.${fixture.action}`,
+        canonical,
+        {
+          ...fixture.publicRequest,
+          detail: "compact",
+          includeDiagnostics: false,
+        },
+      );
+      const full = projectToolResultForModelContent(
+        `sdl.${fixture.action}`,
+        canonical,
+        {
+          ...fixture.publicRequest,
+          detail: "full",
+          includeDiagnostics: false,
+        },
+      );
+
+      for (const [detail, payload] of [
+        ["compact", compact],
+        ["full", full],
+      ] as const) {
+        const serialized = JSON.stringify(payload);
+        for (const pattern of AGENT_OUTPUT_DISALLOWED_PATH_PATTERNS) {
+          assert.doesNotMatch(
+            serialized,
+            new RegExp(pattern),
+            `${fixture.action}:${detail}:absolute-path`,
+          );
+        }
+        visitRecords(payload, (record, path) => {
+          for (const key of [
+            ...AGENT_OUTPUT_DISALLOWED_FIELD_NAMES,
+            ...(AGENT_OUTPUT_DISALLOWED_FIELDS_BY_ACTION[fixture.action] ?? []),
+          ]) {
+            assert.equal(
+              Object.hasOwn(record, key),
+              false,
+              `${fixture.action}:${detail}:${path}.${key}`,
+            );
+          }
+          if (path !== "$") return;
+          for (const key of AGENT_OUTPUT_DIAGNOSTIC_FIELD_NAMES) {
+            assert.equal(
+              Object.hasOwn(record, key),
+              false,
+              `${fixture.action}:${detail}:${path}.${key}`,
+            );
+          }
+        });
+      }
+
+      for (const candidate of recoveryCandidates(compact)) {
+        const validated = buildValidatedRecoveryAction(candidate, {
+          repoId: String(fixture.publicRequest.repoId ?? "projection-fixture"),
+          advertisedTools,
+          activeWorkflowFunctions,
+        });
+        assert.ok(
+          validated.nextAction,
+          `${fixture.action}:invalid-recovery:${JSON.stringify(candidate)}`,
+        );
+      }
+
+      const diagnosticArgs = {
+        ...fixture.publicRequest,
+        detail: "compact" as const,
+        includeDiagnostics: true,
+      };
+      const diagnostic = projectToolResultForModelContent(
+        `sdl.${fixture.action}`,
+        canonical,
+        diagnosticArgs,
+      );
+      assert.deepEqual(
+        projectToolResultForModelContent(
+          `sdl.${fixture.action}`,
+          canonical,
+          diagnosticArgs,
+        ),
+        diagnostic,
+        `${fixture.action}:diagnostic-opt-in-determinism`,
+      );
+      if (fixture.diagnosticExpectation) {
+        assert.ok(isRecord(diagnostic), `${fixture.action}:diagnostic-shape`);
+        assert.deepEqual(
+          Object.keys(diagnostic),
+          fixture.diagnosticExpectation.expectedKeys,
+          `${fixture.action}:diagnostic-key-order`,
+        );
+      }
+
+      const workflowFn = workflowFnByAction.get(fixture.action);
+      if (workflowFn) {
+        assert.deepEqual(
+          projectWorkflowChildResultForModel(
+            workflowFn,
+            canonical,
+            { repoId: "projection-fixture", detail: "compact" },
+            fixture.publicRequest,
+          ),
+          projectToolResultForModelContent(
+            fixture.action,
+            canonical,
+            {
+              ...fixture.publicRequest,
+              detail: "compact",
+              includeDiagnostics: false,
+            },
+          ),
+          `${fixture.action}:workflow-child-parity`,
+        );
+      }
+    }
+  });
+
   it("compacts cards without mutating canonical dependencies", () => {
     const card = {
       symbolId: "symbol-a",

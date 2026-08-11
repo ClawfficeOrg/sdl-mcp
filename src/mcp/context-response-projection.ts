@@ -478,8 +478,11 @@ function shouldKeepModelField(
   if (
     key === "matchCount" &&
     (toolName === "sdl.file" ||
+      toolName === "file" ||
       toolName === "sdl.search.edit" ||
-      toolName === "sdl.symbol.edit")
+      toolName === "search.edit" ||
+      toolName === "sdl.symbol.edit" ||
+      toolName === "symbol.edit")
   ) {
     return true;
   }
