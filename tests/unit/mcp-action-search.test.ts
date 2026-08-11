@@ -580,3 +580,143 @@ describe("bounded full action search", () => {
     }
   });
 });
+
+describe("Task 12 bounded action discovery projection", () => {
+  const actions = [
+    {
+      action: "symbol.search",
+      fn: "symbolSearch",
+      description: "Search symbols across the indexed repository.\nOperational detail.",
+      requiredParams: ["query"],
+      disabled: false,
+      prerequisites: ["repo.status"],
+    },
+    {
+      action: "symbol.getCard",
+      fn: "symbolGetCard",
+      description: "Get one compact symbol card.",
+      requiredParams: ["symbolId"],
+    },
+    {
+      action: "symbol.search",
+      fn: "symbolSearch",
+      description: "Duplicate presentation candidate.",
+      requiredParams: ["query"],
+    },
+  ];
+
+  it("projects zero, one, many, and last-page fixtures without inert paging fields", async () => {
+    const { projectToolResultForModelContent } = await import(
+      "../../dist/mcp/context-response-projection.js"
+    );
+    const zero = projectToolResultForModelContent(
+      "sdl.action.search",
+      { actions: [], total: 0, hasMore: false, offset: 0, limit: 5 },
+      { query: "none", detail: "compact" },
+    ) as Record<string, unknown> & { actions: unknown[] };
+    assert.deepStrictEqual(zero.actions, []);
+    assert.equal(zero.hasMore, undefined);
+    assert.equal(zero.offset, undefined);
+    assert.equal(zero.nextOffset, undefined);
+    assert.equal(zero.nextAction, undefined);
+
+    const one = projectToolResultForModelContent(
+      "sdl.action.search",
+      {
+        actions: [actions[0]],
+        total: 1,
+        hasMore: false,
+        offset: 0,
+        limit: 1,
+        autoEnabled: { includeSchemas: true },
+      },
+      { query: "symbol.search", limit: 1, detail: "compact" },
+    ) as Record<string, unknown> & { actions: Array<Record<string, unknown>> };
+    assert.deepStrictEqual(Object.keys(one.actions[0] ?? {}), [
+      "action",
+      "fn",
+      "description",
+      "requiredParams",
+    ]);
+    assert.equal(one.hasMore, undefined);
+    assert.equal(one.offset, undefined);
+    assert.equal(one.nextOffset, undefined);
+    assert.equal(one.nextAction, undefined);
+
+    const many = projectToolResultForModelContent(
+      "sdl.action.search",
+      {
+        actions,
+        total: 4,
+        hasMore: true,
+        offset: 0,
+        limit: 3,
+        nextOffset: 3,
+      },
+      { query: "symbol", limit: 3, detail: "compact" },
+    ) as Record<string, unknown> & { actions: Array<{ action: string }> };
+    assert.deepStrictEqual(
+      many.actions.map((entry) => entry.action),
+      ["symbol.search", "symbol.getCard"],
+    );
+    assert.equal(many.hasMore, true);
+    assert.equal(many.offset, 0);
+    assert.equal(many.nextOffset, 3);
+    assert.deepStrictEqual(many.nextAction, {
+      action: "sdl.manual",
+      args: {
+        actions: ["symbol.search", "symbol.getCard"],
+        includeSchemas: true,
+        detail: "full",
+        format: "json",
+      },
+    });
+
+    const lastPage = projectToolResultForModelContent(
+      "sdl.action.search",
+      { actions: [actions[1]], total: 4, hasMore: false, offset: 3, limit: 3 },
+      { query: "symbol", offset: 3, limit: 3, detail: "compact" },
+    ) as Record<string, unknown>;
+    assert.equal(lastPage.hasMore, undefined);
+    assert.equal(lastPage.offset, undefined);
+    assert.equal(lastPage.nextOffset, undefined);
+  });
+
+  it("keeps formatter counts equal to projected listed-result counts", async () => {
+    const [{ projectToolResultForModelContent }, { formatToolCallForUser }] =
+      await Promise.all([
+        import("../../dist/mcp/context-response-projection.js"),
+        import("../../dist/mcp/tool-call-formatter.js"),
+      ]);
+    const args = { query: "symbol", limit: 3, detail: "compact" };
+    const projected = projectToolResultForModelContent(
+      "sdl.action.search",
+      { actions, total: 4, hasMore: true, offset: 0, limit: 3, nextOffset: 3 },
+      args,
+    ) as Record<string, unknown> & { actions: unknown[] };
+    const text = formatToolCallForUser("sdl.action.search", args, projected);
+    assert.ok(text);
+    assert.equal(Number(text.match(/-> (\d+)\//)?.[1]), projected.actions.length);
+  });
+
+  it("preserves canonical candidate order and content in full detail", async () => {
+    const { projectToolResultForModelContent } = await import(
+      "../../dist/mcp/context-response-projection.js"
+    );
+    const canonical = {
+      actions,
+      total: actions.length,
+      hasMore: false,
+      offset: 0,
+      limit: 3,
+    };
+    const before = JSON.stringify(canonical.actions);
+    const projected = projectToolResultForModelContent(
+      "sdl.action.search",
+      canonical,
+      { query: "symbol", detail: "full" },
+    ) as { actions: unknown[] };
+    assert.equal(JSON.stringify(projected.actions), before);
+    assert.equal(JSON.stringify(canonical.actions), before);
+  });
+});

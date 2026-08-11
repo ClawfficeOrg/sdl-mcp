@@ -53,6 +53,7 @@ import {
 import { executeWorkflow } from "./workflow-executor.js";
 import {
   getManualCached,
+  getManualIndexCached,
   invalidateManualCache,
   getActiveFnNameMap,
 } from "./manual-generator.js";
@@ -289,9 +290,18 @@ export function handleManual(
   const includeSchemas = args.includeSchemas;
   const includeExamples = args.includeExamples;
 
+  const unfocused = !args.query && !args.actions;
+  if (unfocused && args.detail !== "full") {
+    const manual = getManualIndexCached(
+      services.liveIndex,
+      services.actionAvailability?.memoryTools,
+      services.actionAvailability?.infoTool !== false,
+    );
+    return { manual, tokenEstimate: estimateTokens(manual) };
+  }
+
   if (
-    !args.query &&
-    !args.actions &&
+    unfocused &&
     format === "typescript" &&
     !includeSchemas &&
     !includeExamples

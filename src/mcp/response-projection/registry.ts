@@ -130,7 +130,7 @@ const MUTATING_ARTIFACT_PROFILE = profile(
   "mutation",
 );
 const ACTION_SEARCH_PROFILE = profile(
-  "actionSearch",
+  "status",
   "compact",
   "truncate",
   "none",

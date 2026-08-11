@@ -174,3 +174,37 @@ describe("code-mode regressions", () => {
     assert.deepEqual(parsed.steps[0].args, {});
   });
 });
+
+describe("Task 12 action-search paging regressions", () => {
+  it("omits offset and continuation fields on the projected last page", async () => {
+    let handler: ((args: unknown) => Promise<unknown>) | null = null;
+    const fakeServer = {
+      registerTool(
+        name: string,
+        _description: string,
+        _schema: unknown,
+        toolHandler: (args: unknown) => Promise<unknown>,
+      ) {
+        if (name === "sdl.action.search") handler = toolHandler;
+      },
+    };
+    registerActionSearchTool(fakeServer as never, { liveIndex: undefined } as never);
+    assert.ok(handler);
+    const first = await handler({ query: "*", limit: 50, offset: 0 }) as {
+      total: number;
+    };
+    const offset = Math.max(0, first.total - 1);
+    const canonicalLast = await handler({ query: "*", limit: 2, offset });
+    const { projectToolResultForModelContent } = await import(
+      "../../dist/mcp/context-response-projection.js"
+    );
+    const projectedLast = projectToolResultForModelContent(
+      "sdl.action.search",
+      canonicalLast,
+      { query: "*", limit: 2, offset, detail: "compact" },
+    ) as Record<string, unknown>;
+    assert.equal(projectedLast.hasMore, undefined);
+    assert.equal(projectedLast.offset, undefined);
+    assert.equal(projectedLast.nextOffset, undefined);
+  });
+});

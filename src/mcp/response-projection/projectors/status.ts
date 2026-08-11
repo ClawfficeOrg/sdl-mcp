@@ -551,6 +551,104 @@ function infoStatus(
   };
 }
 
+function actionPurpose(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.split(/\r?\n/, 1)[0]?.replace(/\s+/g, " ").trim() || undefined;
+}
+
+function conciseAction(value: unknown): ModelRecord | undefined {
+  if (!isRecord(value) || !stringValue(value.action)) return undefined;
+  const action = value.action as string;
+  const fn = stringValue(value.fn);
+  const description = actionPurpose(value.description);
+  const requiredParams = Array.isArray(value.requiredParams)
+    ? value.requiredParams.filter((param): param is string => typeof param === "string")
+    : [];
+  return {
+    action,
+    ...(fn && fn !== action ? { fn } : {}),
+    ...(description ? { description } : {}),
+    ...(requiredParams.length > 0 ? { requiredParams } : {}),
+    ...(isRecord(value.schemaSummary)
+      ? { schemaSummary: value.schemaSummary }
+      : {}),
+    ...(value.example !== undefined ? { example: value.example } : {}),
+    ...(value.disabled === true
+      ? {
+          disabled: true,
+          ...(stringValue(value.disabledReason)
+            ? { disabledReason: value.disabledReason }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+function actionSearchStatus(
+  value: ModelRecord,
+  requestArgs: Readonly<Record<string, unknown>>,
+): ModelRecord {
+  const rawActions = Array.isArray(value.actions) ? value.actions : [];
+  if (rawActions.length === 0 && isRecord(value.summary)) {
+    return { summary: value.summary };
+  }
+  const actions: ModelRecord[] = [];
+  const seen = new Set<string>();
+  for (const rawAction of rawActions) {
+    const action = conciseAction(rawAction);
+    const name = action && stringValue(action.action);
+    if (!action || !name || seen.has(name)) continue;
+    seen.add(name);
+    actions.push(action);
+  }
+  const hasMore = value.hasMore === true;
+  const offset = typeof value.offset === "number"
+    ? value.offset
+    : typeof requestArgs.offset === "number"
+      ? requestArgs.offset
+      : 0;
+  const autoEnabled = isRecord(value.autoEnabled) ? value.autoEnabled : undefined;
+  const schemasAvailable =
+    requestArgs.includeSchemas === true
+    || autoEnabled?.includeSchemas === true
+    || (
+      rawActions.length > 0
+      && rawActions.every(
+        (action) => isRecord(action) && isRecord(action.schemaSummary),
+      )
+    );
+  const nextAction = actions.length > 0 && !schemasAvailable
+    ? {
+        action: "sdl.manual",
+        args: {
+          actions: actions.map((action) => action.action),
+          includeSchemas: true,
+          detail: "full",
+          format: "json",
+        },
+      }
+    : undefined;
+  return {
+    actions,
+    ...(isRecord(value.summary) ? { summary: value.summary } : {}),
+    ...(typeof value.total === "number" ? { total: value.total } : {}),
+    ...(isRecord(value.disabledHint) ? { disabledHint: value.disabledHint } : {}),
+    ...(stringValue(value.schemaHint) ? { schemaHint: value.schemaHint } : {}),
+    ...(hasMore
+      ? {
+          hasMore: true,
+          offset,
+          ...(typeof value.limit === "number" ? { limit: value.limit } : {}),
+          nextOffset: typeof value.nextOffset === "number"
+            ? value.nextOffset
+            : offset + rawActions.length,
+        }
+      : {}),
+    ...(autoEnabled ? { autoEnabled } : {}),
+    ...(nextAction ? { nextAction } : {}),
+  };
+}
+
 /** Construct stable status-family projections without mutating canonical data. */
 export function projectStatusValue(
   input: ModelProjectionInput,
@@ -570,6 +668,14 @@ export function projectStatusValue(
       input.options.includeDiagnostics
         && input.context.requestArgs.redactPaths === false,
     );
+  }
+  if (action === "action.search") {
+    return input.options.detail === "full"
+      ? input.canonicalResult
+      : actionSearchStatus(
+          input.canonicalResult,
+          input.context.requestArgs,
+        );
   }
   if (
     action === "semantic.enrichment.status"

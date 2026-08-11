@@ -754,3 +754,27 @@ describe("schema summary merge hardening", () => {
     ]);
   });
 });
+
+describe("Task 12 canonical catalog invariants", () => {
+  it("leaves catalog generation and rankCatalog byte-identical after projection", async () => {
+    invalidateCatalog();
+    const catalog = buildCatalog({
+      includeSchemas: true,
+      includeExamples: true,
+      detail: "full",
+    });
+    const ranked = rankCatalog(catalog, "symbol");
+    const catalogBefore = JSON.stringify(catalog);
+    const rankedBefore = JSON.stringify(ranked);
+    const { projectToolResultForModelContent } = await import(
+      "../../dist/mcp/context-response-projection.js"
+    );
+    projectToolResultForModelContent(
+      "sdl.action.search",
+      { actions: ranked, total: ranked.length, hasMore: false, offset: 0, limit: 50 },
+      { query: "symbol", detail: "compact" },
+    );
+    assert.equal(JSON.stringify(catalog), catalogBefore);
+    assert.equal(JSON.stringify(rankCatalog(catalog, "symbol")), rankedBefore);
+  });
+});

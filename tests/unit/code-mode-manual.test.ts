@@ -331,3 +331,50 @@ describe("bounded schema manual regressions", () => {
     assert.match(result.manual, /limit capped at 1000/i);
   });
 });
+
+describe("Task 12 bounded manual discovery", () => {
+  it("uses a bounded action index for the unfocused compact default", () => {
+    const result = handleManual({}) as { manual: string; tokenEstimate: number };
+    assert.match(result.manual, /SDL-MCP action index/);
+    assert.ok(
+      result.tokenEstimate < 1500,
+      `expected compact manual under 1500 tokens, got ${result.tokenEstimate}`,
+    );
+    assert.doesNotMatch(result.manual, /function symbolSearch\(/);
+    assert.doesNotMatch(result.manual, /schemaSummary|example:/);
+  });
+
+  it("requires focus before expanding schemas in compact detail", () => {
+    const unfocused = handleManual({
+      includeSchemas: true,
+      includeExamples: true,
+      detail: "compact",
+      format: "json",
+    }) as { manual?: string; actions?: unknown[]; tokenEstimate: number };
+    assert.match(unfocused.manual ?? "", /SDL-MCP action index/);
+    assert.equal(unfocused.actions, undefined);
+    assert.ok(unfocused.tokenEstimate < 1500);
+
+    const focused = handleManual({
+      actions: ["runtime.execute"],
+      includeSchemas: true,
+      includeExamples: true,
+      detail: "compact",
+      format: "json",
+    }) as {
+      actions: Array<{ action: string; schemaSummary?: unknown; example?: unknown }>;
+    };
+    assert.equal(focused.actions.length, 1);
+    assert.equal(focused.actions[0]?.action, "runtime.execute");
+    assert.ok(focused.actions[0]?.schemaSummary);
+    assert.ok(focused.actions[0]?.example);
+  });
+
+  it("returns the complete cached TypeScript manual only for explicit full detail", () => {
+    const compact = handleManual({}) as { manual: string };
+    const full = handleManual({ detail: "full" }) as { manual: string };
+    assert.doesNotMatch(compact.manual, /function symbolSearch\(/);
+    assert.match(full.manual, /function symbolSearch\(/);
+    assert.ok(full.manual.length > compact.manual.length);
+  });
+});

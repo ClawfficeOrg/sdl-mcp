@@ -150,6 +150,7 @@ describe("context-response-projection", () => {
       "offset",
       "limit",
       "nextOffset",
+      "nextAction",
     ]);
     assert.equal(projected.nextOffset, 1);
   });

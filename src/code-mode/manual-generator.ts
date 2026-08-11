@@ -6,6 +6,7 @@ import {
   ACTION_TO_FN,
   FN_NAME_MAP,
   GATEWAY_ACTION_DEFINITIONS,
+  buildCatalog,
 } from "./action-catalog.js";
 
 export { ACTION_TO_FN, FN_NAME_MAP } from "./action-catalog.js";
@@ -209,8 +210,44 @@ export function generateManual(
   return filtered.join("\n");
 }
 
+/** Render the bounded discovery surface; the full signature manual remains separate. */
+export function generateManualIndex(
+  _liveIndex?: LiveIndexCoordinator,
+  memoryVisible = anyRepoHasMemoryTools(loadConfig()),
+  infoVisible = true,
+): string {
+  const lines = [
+    "# SDL-MCP action index",
+    "Use sdl.action.search({ query }) to narrow actions; use a focused sdl.manual request for schemas and examples.",
+  ];
+  for (const entry of buildCatalog({ memoryVisible, infoVisible })) {
+    const purposeLine = entry.description
+      .split(/\r?\n/, 1)[0]
+      ?.replace(/\s+/g, " ")
+      .trim();
+    const purpose = purposeLine && purposeLine.length > 60
+      ? `${purposeLine.slice(0, 57)}...`
+      : purposeLine;
+    const fn = entry.fn !== entry.action ? ` (${entry.fn})` : "";
+    const requiredParams = entry.requiredParams.slice(0, 3);
+    const required = requiredParams.length > 0
+      ? ` [required: ${requiredParams.join(", ")}${entry.requiredParams.length > 3 ? ", ..." : ""}]`
+      : "";
+    const disabled = entry.disabled
+      ? ` [disabled: ${entry.disabledReason ?? "Unavailable"}]`
+      : "";
+    lines.push(
+      `- ${entry.action}${fn}: ${purpose ?? "SDL action."}${required}${disabled}`,
+    );
+  }
+  return lines.join("\n");
+}
+
 let cachedManual: string | null = null;
 let cachedManualMemoryVisible: boolean | null = null;
+let cachedManualIndex: string | null = null;
+let cachedManualIndexMemoryVisible: boolean | null = null;
+let cachedManualIndexInfoVisible: boolean | null = null;
 
 export function getManualCached(
   liveIndex?: LiveIndexCoordinator,
@@ -223,7 +260,31 @@ export function getManualCached(
   return cachedManual;
 }
 
+export function getManualIndexCached(
+  liveIndex?: LiveIndexCoordinator,
+  memoryVisible = anyRepoHasMemoryTools(loadConfig()),
+  infoVisible = true,
+): string {
+  if (
+    cachedManualIndex === null
+    || cachedManualIndexMemoryVisible !== memoryVisible
+    || cachedManualIndexInfoVisible !== infoVisible
+  ) {
+    cachedManualIndex = generateManualIndex(
+      liveIndex,
+      memoryVisible,
+      infoVisible,
+    );
+    cachedManualIndexMemoryVisible = memoryVisible;
+    cachedManualIndexInfoVisible = infoVisible;
+  }
+  return cachedManualIndex;
+}
+
 export function invalidateManualCache(): void {
   cachedManual = null;
   cachedManualMemoryVisible = null;
+  cachedManualIndex = null;
+  cachedManualIndexMemoryVisible = null;
+  cachedManualIndexInfoVisible = null;
 }

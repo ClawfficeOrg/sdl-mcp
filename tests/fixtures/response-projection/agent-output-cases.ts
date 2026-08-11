@@ -1107,7 +1107,6 @@ export const AGENT_OUTPUT_CASES = [
       "actions",
       "summary",
       "total",
-      "hasMore",
       "nextAction",
     ],
     requiredActionabilityKeys: ["actions", "nextAction"],
