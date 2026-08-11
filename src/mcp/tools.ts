@@ -585,36 +585,33 @@ const CodeWindowRequestSchema = z.object({
 /** Public runtime/configuration report returned by the special sdl.info tool. */
 export const InfoResponseSchema = z.object({
   version: z.string(),
-  runtime: z.object({
-    node: z.string(),
-    platform: z.string(),
-    arch: z.string(),
-  }),
+  runtime: z.object({ node: z.string(), platform: z.string(), arch: z.string() }),
   config: z.object({
-    path: z.string(),
+    path: z.string().optional(),
     exists: z.boolean(),
     loaded: z.boolean(),
   }),
-  logging: z.object({
-    path: z.string().nullable(),
-    consoleMirroring: z.boolean(),
-    fallbackUsed: z.boolean(),
-  }),
+  logging: z
+    .object({
+      path: z.string().nullable().optional(),
+      consoleMirroring: z.boolean().optional(),
+      fallbackUsed: z.boolean().optional(),
+    })
+    .optional(),
   ladybug: z.object({
     available: z.boolean(),
-    activePath: z.string().nullable(),
+    activePath: z.string().nullable().optional(),
   }),
-  native: z.object({
-    available: z.boolean(),
-    sourcePath: z.string().nullable(),
-    disabledByEnv: z.boolean(),
-    reason: z.string(),
-  }),
-  warnings: z
-    .array(z.string())
-    .optional()
-    .describe("Omitted by compact projection when no warnings are present."),
-  misconfigurations: z.array(z.string()),
+  native: z
+    .object({
+      available: z.boolean(),
+      sourcePath: z.string().nullable().optional(),
+      disabledByEnv: z.boolean().optional(),
+      reason: z.string().optional(),
+    })
+    .optional(),
+  warnings: z.array(z.string()).optional(),
+  misconfigurations: z.array(z.string()).optional(),
 });
 
 export type InfoResponse = z.infer<typeof InfoResponseSchema>;
@@ -845,10 +842,10 @@ const RepoStatusRawResponseSchema = z.object({
 const RepoStatusCompactResponseSchema = z.object({
   repoId: z.string().min(1),
   rootAvailability: RepoRootAvailabilitySchema,
-  latestVersionId: z.string().nullable(),
+  latestVersionId: z.string().nullable().optional(),
   indexOperations: z.array(IndexOperationSchema).optional(),
-  filesIndexed: z.number().int(),
-  symbolsIndexed: z.number().int(),
+  filesIndexed: z.number().int().optional(),
+  symbolsIndexed: z.number().int().optional(),
   healthScore: z.number().int().min(0).max(100).nullable().optional(),
   healthAvailable: z.boolean().optional(),
   watcherHealth: z
@@ -871,18 +868,7 @@ const RepoStatusCompactResponseSchema = z.object({
       summariesDirty: z.boolean().optional(),
       embeddingsDirty: z.boolean().optional(),
       lastError: z.string().nullable().optional(),
-      graphIntegrityState: z
-        .enum(["unknown", "verifying", "verified", "failed"])
-        .optional(),
-      graphIntegrityVersionId: z.string().nullable().optional(),
-      graphIntegrityRevision: z.number().int().nonnegative().nullable().optional(),
-      graphIntegrityVerifiedRevision: z
-        .number()
-        .int()
-        .nonnegative()
-        .nullable()
-        .optional(),
-      graphIntegrityDigest: z.string().nullable().optional(),
+      graphIntegrityState: z.enum(["unknown", "verifying", "verified", "failed"]).optional(),
       nextBestAction: z.string().optional(),
     })
     .optional(),
@@ -1000,17 +986,15 @@ export const BufferStatusRequestSchema = withProjectionRequestOptions(z.object({
 export const BufferStatusResponseSchema = z.object({
   repoId: z.string().min(1),
   enabled: z.boolean(),
-  pendingBuffers: z.number().int().min(0),
-  dirtyBuffers: z.number().int().min(0),
-  parseQueueDepth: z.number().int().min(0),
-  checkpointPending: z.boolean(),
-  lastBufferEventAt: z.string().nullable(),
-  lastCheckpointAt: z.string().nullable(),
+  state: z.enum(["idle", "active", "unavailable"]).optional(),
+  pendingBuffers: z.number().int().min(0).optional(),
+  dirtyBuffers: z.number().int().min(0).optional(),
+  parseQueueDepth: z.number().int().min(0).optional(),
+  checkpointPending: z.boolean().optional(),
+  lastBufferEventAt: z.string().nullable().optional(),
+  lastCheckpointAt: z.string().nullable().optional(),
   lastCheckpointAttemptAt: z.string().nullable().optional(),
-  lastCheckpointResult: z
-    .enum(["success", "partial", "failed"])
-    .nullable()
-    .optional(),
+  lastCheckpointResult: z.enum(["success", "partial", "failed"]).nullable().optional(),
   lastCheckpointError: z.string().nullable().optional(),
   lastCheckpointReason: z.string().nullable().optional(),
   reconcileQueueDepth: z.number().int().min(0).optional(),
@@ -2983,40 +2967,36 @@ export const AgentFeedbackQueryRequestSchema = withProjectionRequestOptions(z.ob
 
 export const AgentFeedbackQueryResponseSchema = z.object({
   repoId: z.string().describe("Repository identifier"),
+  state: z.enum(["empty", "available"]).optional(),
   feedback: z
     .array(
       z.object({
-        feedbackId: z.string(),
-        versionId: z.string(),
-        sliceHandle: z.string(),
-        usefulSymbols: z.array(z.string()),
-        missingSymbols: z.array(z.string()),
-        taskTags: z.array(z.string()).nullable(),
-        taskType: z.string().nullable(),
-        taskText: z.string().nullable(),
-        createdAt: z.string(),
+        feedbackId: z.string().optional(),
+        versionId: z.string().optional(),
+        sliceHandle: z.string().optional(),
+        usefulSymbols: z.array(z.string()).optional(),
+        missingSymbols: z.array(z.string()).optional(),
+        taskTags: z.array(z.string()).nullable().optional(),
+        taskType: z.string().nullable().optional(),
+        taskText: z.string().nullable().optional(),
+        createdAt: z.string().optional(),
       }),
     )
+    .optional()
     .describe("Array of feedback records"),
   aggregatedStats: z
     .object({
-      totalFeedback: z.number().int(),
-      topUsefulSymbols: z.array(
-        z.object({
-          symbolId: z.string(),
-          count: z.number().int(),
-        }),
-      ),
-      topMissingSymbols: z.array(
-        z.object({
-          symbolId: z.string(),
-          count: z.number().int(),
-        }),
-      ),
+      totalFeedback: z.number().int().optional(),
+      topUsefulSymbols: z
+        .array(z.object({ symbolId: z.string(), count: z.number().int() }))
+        .optional(),
+      topMissingSymbols: z
+        .array(z.object({ symbolId: z.string(), count: z.number().int() }))
+        .optional(),
     })
     .optional()
     .describe("Aggregated statistics if requested"),
-  hasMore: z.boolean().describe("Whether more records are available"),
+  hasMore: z.boolean().optional().describe("Whether more records are available"),
 });
 
 export type AgentFeedbackRequest = z.infer<typeof AgentFeedbackRequestSchema>;
@@ -3627,6 +3607,26 @@ const SignalDensitySummarySchema = z.object({
 });
 
 export const UsageStatsResponseSchema = z.object({
+  status: z.literal("empty").optional(),
+  aggregate: z
+    .object({
+      totalSdlTokens: z.number(),
+      totalRawEquivalent: z.number(),
+      totalSavedTokens: z.number(),
+      savingsPercent: z.number(),
+      callCount: z.number().int(),
+    })
+    .optional(),
+  topTools: z
+    .array(
+      z.object({
+        tool: z.string(),
+        savedTokens: z.number(),
+        savingsPercent: z.number(),
+        callCount: z.number().int().optional(),
+      }),
+    )
+    .optional(),
   session: SessionUsageSnapshotSchema.optional(),
   history: z
     .object({
@@ -3642,11 +3642,7 @@ export const UsageStatsResponseSchema = z.object({
       }),
     })
     .optional(),
-  wire: z
-    .object({
-      packed: WirePackedSummarySchema,
-    })
-    .optional(),
+  wire: z.object({ packed: WirePackedSummarySchema }).optional(),
   signalDensity: SignalDensitySummarySchema.optional(),
   formattedSummary: z.string().optional(),
 });
@@ -3960,39 +3956,40 @@ const SemanticEnrichmentCompactStatusResponseSchema = z.object({
   ok: z.boolean(),
   repoId: z.string().optional(),
   enabled: z.boolean(),
-  autoRunOnIndexRefresh: z.boolean(),
-  installPolicy: SemanticInstallPolicySchema,
-  selections: z.object({
-    totalLanguages: z.number().int().nonnegative(),
-    selectedLanguages: z.number().int().nonnegative(),
-    skippedProviders: z.number().int().nonnegative(),
-    languagesWithSelection: z.array(z.string()),
-  }),
-  lastRuns: z.array(
-    z.object({
-      runId: z.string().optional(),
-      providerType: PersistedSemanticProviderTypeSchema,
-      providerId: z.string(),
-      languages: z.array(z.string()),
+  availability: z.enum(["available", "unavailable"]),
+  selections: z
+    .array(
+      z.object({
+        languageId: z.string(),
+        providerType: PersistedSemanticProviderTypeSchema,
+        providerId: z.string(),
+      }),
+    )
+    .optional(),
+  latestRun: z
+    .object({
+      providerType: PersistedSemanticProviderTypeSchema.optional(),
+      providerId: z.string().optional(),
+      languages: z.array(z.string()).optional(),
       status: z.enum(["planned", "running", "completed", "failed", "skipped"]),
-      startedAt: z.string().optional(),
-      finishedAt: z.string().optional(),
-      symbolsMatched: z.number().int().nonnegative(),
-      edgesCreated: z.number().int().nonnegative(),
-      diagnosticsCount: z.number().int().nonnegative(),
-      diagnosticsBySeverity: z
-        .object({
-          error: z.number().int().nonnegative(),
-          warning: z.number().int().nonnegative(),
-          information: z.number().int().nonnegative(),
-          hint: z.number().int().nonnegative(),
-        })
-        .nullable(),
+      documentsProcessed: z.number().int().nonnegative().optional(),
+      symbolsMatched: z.number().int().nonnegative().optional(),
+      edgesCreated: z.number().int().nonnegative().optional(),
+      edgesUpgraded: z.number().int().nonnegative().optional(),
+      edgesReplaced: z.number().int().nonnegative().optional(),
+      edgesSkipped: z.number().int().nonnegative().optional(),
+      diagnosticsCount: z.number().int().nonnegative().optional(),
       precisionScore: z.number().optional(),
-      precisionMeasurement: z.enum(["unavailable", "measured"]),
+      precisionMeasurement: z.enum(["unavailable", "measured"]).optional(),
       precisionBasis: z.literal("operational-composite").optional(),
-    }),
-  ),
+    })
+    .optional(),
+  warnings: z
+    .object({
+      skippedProviders: z.number().int().nonnegative().optional(),
+      diagnostics: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
 const SemanticEnrichmentFullStatusResponseSchema = z.object({

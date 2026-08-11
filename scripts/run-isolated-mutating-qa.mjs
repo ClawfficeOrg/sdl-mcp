@@ -316,7 +316,7 @@ export async function runIsolatedMutatingQa(options) {
     assertScenarioToolsAvailable(toolsResult, scenario);
     const infoResult = await client.callTool({
       name: "sdl.info",
-      arguments: { redactPaths: false },
+      arguments: { includeDiagnostics: true, redactPaths: false },
     });
     assertToolSucceeded("sdl.info", infoResult);
     const reportedDbPath = extractActiveDbPath(infoResult);

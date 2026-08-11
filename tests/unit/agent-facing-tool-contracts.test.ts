@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
+import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
+
 import {
   PolicySetRequestSchema,
   PRRiskAnalysisRequestSchema,
@@ -108,6 +110,683 @@ describe("agent-facing SDL tool contracts", () => {
       dryRun: true,
     });
     assert.equal(repoRegister.detail, "compact");
+  });
+
+  it("projects healthy, degraded, and blocked repository status fixtures", () => {
+    const base = {
+      repoId: "repo",
+      rootAvailability: { status: "available" },
+      latestVersionId: "v1",
+      filesIndexed: 12,
+      symbolsIndexed: 34,
+    };
+    const cases = [
+      {
+        label: "healthy graph with non-blocking semantic staleness",
+        canonical: {
+          ...base,
+          rootPath: "C:\\private\\repo",
+          countNotes: { filesIndexed: "files", symbolsIndexed: "symbols" },
+          healthAvailable: true,
+          watcherHealth: {
+            enabled: true, running: true, provider: "watchman",
+            configuredProvider: "auto", fallbackReason: null,
+            errors: 0, queueDepth: 0, stale: false,
+          },
+          derivedState: {
+            stale: true, clustersDirty: false, processesDirty: false,
+            algorithmsDirty: false, summariesDirty: false, embeddingsDirty: true,
+            targetVersionId: "v1", computedVersionId: "v1", lastError: null,
+            graphIntegrityState: "verified", graphIntegrityVersionId: "v1",
+            graphIntegrityRevision: 8, graphIntegrityVerifiedRevision: 8,
+            graphIntegrityDigest: "a".repeat(64),
+            nextBestAction: "Run sdl.index.refresh with mode:\"incremental\".",
+          },
+        },
+        expected: {
+          ...base,
+          derivedState: { embeddingsDirty: true, graphIntegrityState: "verified" },
+        },
+      },
+      {
+        label: "degraded graph blocks requested graph capability",
+        canonical: {
+          ...base,
+          latestVersionId: "v2",
+          watcherHealth: {
+            enabled: true, running: false, provider: "watchman",
+            configuredProvider: "auto", fallbackReason: "watchman unavailable",
+            errors: 2, queueDepth: 0, stale: true,
+          },
+          derivedState: {
+            stale: true, clustersDirty: false, processesDirty: false,
+            algorithmsDirty: true, summariesDirty: false, embeddingsDirty: false,
+            targetVersionId: "v2", computedVersionId: "v1",
+            graphIntegrityState: "verifying", graphIntegrityVersionId: "v1",
+            graphIntegrityRevision: 9, graphIntegrityVerifiedRevision: 8,
+            graphIntegrityDigest: "b".repeat(64),
+            nextBestAction: "Run sdl.index.refresh with mode:\"incremental\".",
+          },
+        },
+        expected: {
+          ...base,
+          latestVersionId: "v2",
+          watcherHealth: {
+            running: false, fallbackReason: "watchman unavailable",
+            errors: 2, stale: true,
+          },
+          derivedState: {
+            stale: true, algorithmsDirty: true,
+            graphIntegrityState: "verifying",
+            nextBestAction: "Run sdl.index.refresh with mode:\"incremental\".",
+          },
+        },
+      },
+      {
+        label: "blocked root",
+        canonical: {
+          ...base,
+          rootAvailability: {
+            status: "missing",
+            nextBestAction: "Restore the repository root.",
+          },
+          latestVersionId: null, filesIndexed: 0, symbolsIndexed: 0,
+          healthAvailable: false, watcherHealth: null, derivedState: null,
+        },
+        expected: {
+          repoId: "repo",
+          rootAvailability: {
+            status: "missing",
+            nextBestAction: "Restore the repository root.",
+          },
+          healthAvailable: false,
+        },
+      },
+    ];
+    for (const fixture of cases) {
+      assert.deepEqual(
+        projectToolResultForModelContent(
+          "sdl.repo.status", fixture.canonical, { detail: "compact" },
+        ),
+        fixture.expected,
+        fixture.label,
+      );
+    }
+  });
+
+  it("projects idle/nonempty buffers and no/some feedback without placeholders", () => {
+    const cases = [
+      {
+        label: "idle buffer",
+        action: "sdl.buffer.status",
+        canonical: {
+          repoId: "repo", enabled: true, pendingBuffers: 0, dirtyBuffers: 0,
+          parseQueueDepth: 0, checkpointPending: false,
+          lastBufferEventAt: null, lastCheckpointAt: null,
+          reconcileQueueDepth: 0, reconcileInflight: false,
+        },
+        expected: { repoId: "repo", enabled: true, state: "idle" },
+      },
+      {
+        label: "nonempty buffer",
+        action: "sdl.buffer.status",
+        canonical: {
+          repoId: "repo", enabled: true, pendingBuffers: 2, dirtyBuffers: 1,
+          parseQueueDepth: 0, checkpointPending: true,
+          lastBufferEventAt: null, lastCheckpointAt: null,
+          lastCheckpointError: "checkpoint failed",
+          reconcileQueueDepth: 0, reconcileInflight: true,
+        },
+        expected: {
+          repoId: "repo", enabled: true, state: "active",
+          pendingBuffers: 2, dirtyBuffers: 1, checkpointPending: true,
+          lastCheckpointError: "checkpoint failed", reconcileInflight: true,
+        },
+      },
+      {
+        label: "no feedback",
+        action: "sdl.agent.feedback.query",
+        canonical: {
+          repoId: "repo", feedback: [],
+          aggregatedStats: {
+            totalFeedback: 0, topUsefulSymbols: [], topMissingSymbols: [],
+          },
+          hasMore: false,
+        },
+        expected: { repoId: "repo", state: "empty" },
+      },
+      {
+        label: "some feedback",
+        action: "sdl.agent.feedback.query",
+        canonical: {
+          repoId: "repo",
+          feedback: [{
+            feedbackId: "feedback-1", versionId: "v1", sliceHandle: "slice-1",
+            usefulSymbols: ["sym-useful"], missingSymbols: [], taskTags: null,
+            taskType: "review", taskText: null,
+            createdAt: "2026-08-09T00:00:00.000Z",
+          }],
+          aggregatedStats: {
+            totalFeedback: 2,
+            topUsefulSymbols: [{ symbolId: "sym-useful", count: 2 }],
+            topMissingSymbols: [],
+          },
+          hasMore: true,
+        },
+        expected: {
+          repoId: "repo", state: "available",
+          feedback: [{ usefulSymbols: ["sym-useful"], taskType: "review" }],
+          aggregatedStats: {
+            totalFeedback: 2,
+            topUsefulSymbols: [{ symbolId: "sym-useful", count: 2 }],
+          },
+          hasMore: true,
+        },
+      },
+    ];
+    for (const fixture of cases) {
+      assert.deepEqual(
+        projectToolResultForModelContent(
+          fixture.action, fixture.canonical, { detail: "compact" },
+        ),
+        fixture.expected,
+        fixture.label,
+      );
+    }
+  });
+
+  it("projects unavailable/healthy semantic state and zero/nonzero usage", () => {
+    const semanticRun = {
+      runId: "semantic-run-1", repoId: "repo", providerType: "scip",
+      providerId: "scip", languages: ["typescript"], status: "completed",
+      startedAt: "2026-08-09T00:00:00.000Z",
+      finishedAt: "2026-08-09T00:00:01.000Z",
+      documentsProcessed: 4, symbolsMatched: 8, edgesCreated: 5,
+      edgesUpgraded: 0, edgesReplaced: 0, edgesSkipped: 0,
+      diagnosticsCount: 2, precisionScore: 0.9,
+      precisionMeasurement: "measured", precisionBasis: "operational-composite",
+      metadataJson:
+        '{"diagnosticsBySeverity":{"error":0,"warning":2,"information":0,"hint":0}}',
+    };
+    const cases = [
+      {
+        label: "semantic unavailable",
+        action: "sdl.semantic.enrichment.status",
+        canonical: {
+          ok: true, repoId: "repo", enabled: false,
+          autoRunOnIndexRefresh: false, installPolicy: "never",
+          selections: [], lastRuns: [],
+        },
+        expected: { ok: true, enabled: false, availability: "unavailable" },
+      },
+      {
+        label: "semantic healthy",
+        action: "sdl.semantic.enrichment.status",
+        canonical: {
+          ok: true, repoId: "repo", enabled: true,
+          autoRunOnIndexRefresh: true, installPolicy: "never",
+          selections: [{
+            languageId: "typescript",
+            selected: {
+              providerType: "scip", providerId: "scip", canAffectPass2: true,
+            },
+            skipped: [{ providerType: "lsp", reason: "unavailable" }],
+          }],
+          lastRuns: [semanticRun],
+        },
+        expected: {
+          ok: true, enabled: true, availability: "available",
+          selections: [{
+            languageId: "typescript", providerType: "scip", providerId: "scip",
+          }],
+          latestRun: {
+            providerType: "scip", providerId: "scip",
+            languages: ["typescript"], status: "completed",
+            symbolsMatched: 8, edgesCreated: 5, diagnosticsCount: 2,
+            precisionScore: 0.9,
+          },
+          warnings: { skippedProviders: 1, diagnostics: 2 },
+        },
+      },
+      {
+        label: "zero usage",
+        action: "sdl.usage.stats",
+        canonical: {
+          session: {
+            sessionId: "session-1", startedAt: "2026-08-09T00:00:00.000Z",
+            totalSdlTokens: 0, totalRawEquivalent: 0, totalSavedTokens: 0,
+            overallSavingsPercent: 0, toolBreakdown: [], callCount: 0,
+          },
+          formattedSummary: "+--------+\n| empty |\n+--------+",
+        },
+        expected: { status: "empty" },
+      },
+      {
+        label: "nonzero usage",
+        action: "sdl.usage.stats",
+        canonical: {
+          session: {
+            sessionId: "session-1", startedAt: "2026-08-09T00:00:00.000Z",
+            totalSdlTokens: 150, totalRawEquivalent: 600,
+            totalSavedTokens: 450, overallSavingsPercent: 75, callCount: 2,
+            toolBreakdown: [
+              {
+                tool: "sdl.symbol.search", sdlTokens: 50, rawEquivalent: 500,
+                savedTokens: 450, callCount: 1,
+              },
+              {
+                tool: "repoStatus", sdlTokens: 100, rawEquivalent: 100,
+                savedTokens: 0, callCount: 1,
+              },
+            ],
+          },
+          formattedSummary: "+-------------------+--------+",
+        },
+        expected: {
+          aggregate: {
+            totalSdlTokens: 150, totalRawEquivalent: 600,
+            totalSavedTokens: 450, savingsPercent: 75, callCount: 2,
+          },
+          topTools: [{
+            tool: "sdl.symbol.search", savedTokens: 450,
+            savingsPercent: 90, callCount: 1,
+          }],
+        },
+      },
+    ];
+    for (const fixture of cases) {
+      const projected = projectToolResultForModelContent(
+        fixture.action, fixture.canonical, { detail: "compact" },
+      );
+      assert.deepEqual(projected, fixture.expected, fixture.label);
+      assert.doesNotMatch(JSON.stringify(projected), /\+[-+]+\+/);
+    }
+  });
+
+  it("projects semantic compact status idempotently without mutating canonical input", () => {
+    const canonical = {
+      ok: true,
+      enabled: true,
+      selections: [
+        {
+          languageId: "typescript",
+          selected: {
+            providerType: "scip",
+            providerId: "scip",
+            canAffectPass2: true,
+          },
+          skipped: [{ providerType: "lsp", reason: "provider unavailable" }],
+        },
+      ],
+      lastRuns: [
+        {
+          providerType: "scip",
+          providerId: "scip",
+          languages: ["typescript"],
+          status: "completed",
+          symbolsMatched: 7,
+          edgesCreated: 4,
+          diagnosticsCount: 2,
+        },
+      ],
+    };
+    const original = structuredClone(canonical);
+    const first = projectToolResultForModelContent(
+      "sdl.semantic.enrichment.status",
+      canonical,
+      { detail: "compact" },
+    );
+    const second = projectToolResultForModelContent(
+      "sdl.semantic.enrichment.status",
+      first,
+      { detail: "compact" },
+    );
+
+    assert.deepEqual(second, first);
+    assert.deepEqual(canonical, original);
+  });
+
+  it("projects usage compact status idempotently without mutating canonical input", () => {
+    const canonical = {
+      session: {
+        totalSdlTokens: 120,
+        totalRawEquivalent: 500,
+        totalSavedTokens: 380,
+        overallSavingsPercent: 76,
+        callCount: 2,
+        toolBreakdown: [
+          {
+            tool: "sdl.symbol.search",
+            sdlTokens: 120,
+            rawEquivalent: 500,
+            savedTokens: 380,
+            callCount: 2,
+          },
+        ],
+      },
+    };
+    const original = structuredClone(canonical);
+    const first = projectToolResultForModelContent(
+      "sdl.usage.stats",
+      canonical,
+      { detail: "compact" },
+    );
+    const second = projectToolResultForModelContent(
+      "sdl.usage.stats",
+      first,
+      { detail: "compact" },
+    );
+
+    assert.deepEqual(second, first);
+    assert.deepEqual(canonical, original);
+  });
+
+  it("redacts info paths in free-form text unless both disclosure gates are open", () => {
+    const canonical = {
+      version: "0.13.3",
+      runtime: { node: "v24", platform: "win32", arch: "x64" },
+      config: {
+        path: "C:\\Server\\SDL\\sdl.config.json",
+        exists: true,
+        loaded: false,
+      },
+      logging: {
+        path: "c:/server/sdl/logs/sdl.log",
+        consoleMirroring: false,
+        fallbackUsed: true,
+      },
+      ladybug: {
+        available: false,
+        activePath: "/var/lib/sdl/graph.lbug",
+      },
+      native: {
+        available: false,
+        sourcePath: "\\\\?\\C:\\Server\\SDL\\addon\\sdl.node",
+        disabledByEnv: false,
+        reason:
+          "Native \\\\?\\c:/SERVER/SDL/addon/sdl.node failed; TypeScript fallback remains active.",
+      },
+      warnings: [
+        "Config c:/SERVER/SDL/sdl.config.json could not load; retry after repair.",
+        "Ladybug /var/lib/sdl/graph.lbug is unavailable; graph reads remain blocked.",
+      ],
+      misconfigurations: [
+        "Logging C:\\SERVER\\SDL\\LOGS\\SDL.LOG is not writable; console fallback remains active.",
+      ],
+    };
+    const cases = [
+      { includeDiagnostics: false, redactPaths: false, disclose: false },
+      { includeDiagnostics: false, redactPaths: true, disclose: false },
+      { includeDiagnostics: true, redactPaths: true, disclose: false },
+      { includeDiagnostics: true, redactPaths: false, disclose: true },
+    ];
+
+    for (const testCase of cases) {
+      const projected = projectToolResultForModelContent("sdl.info", canonical, {
+        detail: "full",
+        includeDiagnostics: testCase.includeDiagnostics,
+        redactPaths: testCase.redactPaths,
+      }) as Record<string, unknown>;
+      const serialized = JSON.stringify(projected);
+      if (testCase.disclose) {
+        assert.match(serialized, /sdl\.config\.json/);
+        assert.match(serialized, /graph\.lbug/);
+        assert.match(serialized, /sdl\.node/);
+      } else {
+        assert.doesNotMatch(
+          serialized,
+          /(?:[a-z]:[\\/]|\\\\\?\\[a-z]:[\\/]|\/var\/lib\/sdl)/i,
+        );
+        assert.match(serialized, /retry after repair/);
+        assert.match(serialized, /graph reads remain blocked/);
+        assert.match(serialized, /console fallback remains active/);
+        assert.match(serialized, /TypeScript fallback remains active/);
+      }
+    }
+  });
+
+  it("redacts standard and extended UNC paths unless both disclosure gates are open", () => {
+    const canonical = {
+      version: "0.13.3",
+      runtime: { node: "v24", platform: "win32", arch: "x64" },
+      config: {
+        path: "\\\\Server\\Share\\config\\sdl.config.json",
+        exists: true,
+        loaded: false,
+      },
+      logging: {
+        path: "\\\\?\\UNC\\Server\\Share\\logs\\sdl.log",
+        consoleMirroring: false,
+        fallbackUsed: true,
+      },
+      ladybug: {
+        available: false,
+        activePath: "\\\\Server\\Share\\db\\graph.lbug",
+      },
+      native: {
+        available: false,
+        sourcePath: "\\\\?\\UNC\\Server\\Share\\native\\sdl.node",
+        disabledByEnv: false,
+        reason:
+          "Native //?/unc/SERVER/share/native/sdl.node failed; \\\\server\\SHARE\\native\\sdl.node remains unavailable; TypeScript fallback remains active.",
+      },
+      warnings: [
+        "Config //SERVER/share/config/sdl.config.json and \\\\?\\UNC\\server\\SHARE\\config\\sdl.config.json could not load; retry after repair; ordinary server share guidance remains visible.",
+      ],
+      misconfigurations: [
+        "Logging \\\\SERVER\\share\\logs\\sdl.log and //?/UNC/server/SHARE/logs/sdl.log are not writable; console fallback remains active.",
+      ],
+    };
+    const cases = [
+      { includeDiagnostics: false, redactPaths: false, disclose: false },
+      { includeDiagnostics: false, redactPaths: true, disclose: false },
+      { includeDiagnostics: true, redactPaths: true, disclose: false },
+      { includeDiagnostics: true, redactPaths: false, disclose: true },
+    ];
+
+    for (const testCase of cases) {
+      const projected = projectToolResultForModelContent("sdl.info", canonical, {
+        detail: "full",
+        includeDiagnostics: testCase.includeDiagnostics,
+        redactPaths: testCase.redactPaths,
+      }) as Record<string, unknown>;
+      const serialized = JSON.stringify(projected);
+      if (testCase.disclose) {
+        assert.match(serialized, /sdl\.config\.json/i);
+        assert.match(serialized, /sdl\.log/i);
+        assert.match(serialized, /graph\.lbug/i);
+        assert.match(serialized, /sdl\.node/i);
+      } else {
+        assert.doesNotMatch(
+          serialized,
+          /sdl\.config\.json|sdl\.log|graph\.lbug|sdl\.node/i,
+        );
+        assert.match(serialized, /retry after repair/);
+        assert.match(serialized, /ordinary server share guidance remains visible/);
+        assert.match(serialized, /console fallback remains active/);
+        assert.match(serialized, /TypeScript fallback remains active/);
+      }
+    }
+  });
+
+  it("redacts remaining extended Windows namespace paths without redacting namespace prose", () => {
+    const canonical = {
+      version: "0.13.3",
+      runtime: { node: "v24", platform: "win32", arch: "x64" },
+      config: {
+        path: "\\\\?\\Volume{A1B2-C3D4}\\config\\sdl.config.json",
+        exists: true,
+        loaded: false,
+      },
+      logging: {
+        path: "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy7\\logs\\sdl.log",
+        consoleMirroring: false,
+        fallbackUsed: true,
+      },
+      ladybug: {
+        available: false,
+        activePath: "\\\\?\\Volume{A1B2-C3D4}\\db\\graph.lbug",
+      },
+      native: {
+        available: false,
+        sourcePath:
+          "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy7\\native\\sdl.node",
+        disabledByEnv: false,
+        reason:
+          "Native //?/globalroot/device/HARDDISKVOLUMESHADOWCOPY7/native/sdl.node failed; \\\\?\\volume{a1b2-c3d4}/db\\graph.lbug is unavailable; namespace fallback remains active.",
+      },
+      warnings: [
+        "Config //?/volume{a1b2-c3d4}/config/sdl.config.json and \\\\?\\gLoBaLrOoT/DEVICE\\HarddiskVolumeShadowCopy7\\logs/sdl.log are unavailable; retry after repair.",
+        "Volume GUID and GLOBALROOT namespace guidance remains visible.",
+      ],
+      misconfigurations: [
+        "Paths \\\\?\\VOLUME{a1b2-c3d4}\\db/graph.lbug and //?/GLOBALROOT/device/harddiskvolumeshadowcopy7/native/sdl.node are blocked; console fallback remains active.",
+      ],
+    };
+    const cases = [
+      { includeDiagnostics: false, redactPaths: false, disclose: false },
+      { includeDiagnostics: false, redactPaths: true, disclose: false },
+      { includeDiagnostics: true, redactPaths: true, disclose: false },
+      { includeDiagnostics: true, redactPaths: false, disclose: true },
+    ];
+
+    for (const testCase of cases) {
+      const projected = projectToolResultForModelContent("sdl.info", canonical, {
+        detail: "full",
+        includeDiagnostics: testCase.includeDiagnostics,
+        redactPaths: testCase.redactPaths,
+      }) as Record<string, unknown>;
+      const serialized = JSON.stringify(projected);
+      if (testCase.disclose) {
+        assert.match(serialized, /sdl\.config\.json/i);
+        assert.match(serialized, /sdl\.log/i);
+        assert.match(serialized, /graph\.lbug/i);
+        assert.match(serialized, /sdl\.node/i);
+      } else {
+        assert.doesNotMatch(
+          serialized,
+          /sdl\.config\.json|sdl\.log|graph\.lbug|sdl\.node/i,
+        );
+        assert.match(serialized, /retry after repair/);
+        assert.match(
+          serialized,
+          /Volume GUID and GLOBALROOT namespace guidance remains visible/,
+        );
+        assert.match(serialized, /console fallback remains active/);
+        assert.match(serialized, /namespace fallback remains active/);
+      }
+    }
+  });
+
+  it("projects info without machine paths unless diagnostics and disclosure allow them", () => {
+    const healthy = {
+      version: "0.13.3",
+      runtime: { node: "v24.0.0", platform: "win32", arch: "x64" },
+      config: {
+        path: "C:\\private\\sdl.config.json", exists: true, loaded: true,
+      },
+      logging: {
+        path: "C:\\private\\sdl.log",
+        consoleMirroring: false, fallbackUsed: false,
+      },
+      ladybug: { available: true, activePath: "C:\\private\\graph.lbug" },
+      native: {
+        available: true, sourcePath: "C:\\private\\sdl.node",
+        disabledByEnv: false, reason: "loaded",
+      },
+      warnings: [],
+      misconfigurations: [],
+      secret: "must not leak",
+    };
+    const degraded = {
+      ...healthy,
+      config: {
+        path: "C:\\private\\missing.json", exists: false, loaded: false,
+      },
+      logging: { ...healthy.logging, fallbackUsed: true },
+      ladybug: { available: false, activePath: null },
+      native: {
+        available: false, sourcePath: "C:\\private\\sdl.node",
+        disabledByEnv: true, reason: "disabled by environment",
+      },
+      warnings: ["Native addon disabled at C:\\private\\sdl.node."],
+      misconfigurations: ["Config file missing."],
+    };
+
+    assert.deepEqual(
+      projectToolResultForModelContent("sdl.info", healthy, {
+        detail: "compact",
+      }),
+      {
+        version: "0.13.3",
+        runtime: { node: "v24.0.0", platform: "win32", arch: "x64" },
+        config: { exists: true, loaded: true },
+        ladybug: { available: true },
+        native: { available: true },
+      },
+    );
+    assert.deepEqual(
+      projectToolResultForModelContent("sdl.info", degraded, {
+        detail: "compact",
+      }),
+      {
+        version: "0.13.3",
+        runtime: { node: "v24.0.0", platform: "win32", arch: "x64" },
+        config: { exists: false, loaded: false },
+        logging: { fallbackUsed: true },
+        ladybug: { available: false },
+        native: {
+          available: false, disabledByEnv: true,
+          reason: "disabled by environment",
+        },
+        warnings: ["Native addon disabled at <redacted>."],
+        misconfigurations: ["Config file missing."],
+      },
+    );
+
+    const defaultFull = projectToolResultForModelContent("sdl.info", healthy, {
+      detail: "full",
+    }) as Record<string, unknown>;
+    assert.doesNotMatch(JSON.stringify(defaultFull), /C:\\\\private/);
+    assert.equal("secret" in defaultFull, false);
+
+    const diagnostic = projectToolResultForModelContent("sdl.info", healthy, {
+      detail: "full", includeDiagnostics: true, redactPaths: false,
+    }) as Record<string, unknown>;
+    assert.equal(
+      (diagnostic.config as Record<string, unknown>).path,
+      "C:\\private\\sdl.config.json",
+    );
+    assert.equal("secret" in diagnostic, false);
+  });
+
+  it("full semantic projection restores all public canonical fields", () => {
+    const semantic = {
+      ok: true, repoId: "repo", enabled: true,
+      autoRunOnIndexRefresh: true, installPolicy: "never",
+      selections: [{
+        languageId: "typescript",
+        selected: {
+          providerType: "scip", providerId: "scip", canAffectPass2: true,
+        },
+        skipped: [],
+      }],
+      lastRuns: [{
+        runId: "semantic-run-1", repoId: "repo", providerType: "scip",
+        providerId: "scip", languages: ["typescript"],
+        sourceIndexPath: "index.scip", status: "completed",
+        startedAt: "2026-08-09T00:00:00.000Z", documentsProcessed: 1,
+        symbolsMatched: 2, edgesCreated: 3, edgesUpgraded: 0,
+        edgesReplaced: 0, edgesSkipped: 0, diagnosticsCount: 0,
+        precisionMeasurement: "unavailable", metadataJson: "{}",
+      }],
+    };
+    assert.deepEqual(
+      projectToolResultForModelContent(
+        "sdl.semantic.enrichment.status", semantic, { detail: "full" },
+      ),
+      semantic,
+    );
   });
 
   it("compact pr risk responses are actionable without duplicate scores or counts", () => {
@@ -361,44 +1040,23 @@ describe("agent-facing SDL tool contracts", () => {
           edgesReplaced: 0,
           edgesSkipped: 0,
           diagnosticsCount: 3,
-          precisionMeasurement: "unavailable",
-          metadataJson: "{\"diagnosticsBySeverity\":{\"error\":1,\"warning\":2,\"information\":0,\"hint\":0}}",
-        },
-        {
-          runId: "run-2",
-          repoId: "r",
-          providerType: "scip",
-          providerId: "scip",
-          languages: ["typescript"],
-          status: "completed",
-          startedAt: "2026-01-02T00:00:00.000Z",
-          documentsProcessed: 1,
-          symbolsMatched: 1,
-          edgesCreated: 1,
-          edgesUpgraded: 0,
-          edgesReplaced: 0,
-          edgesSkipped: 0,
-          diagnosticsCount: 0,
-          metadataJson: "{\"internal\":true}",
+          metadataJson: "{\"diagnosticsBySeverity\":{\"error\":1,\"warning\":2}}",
         },
       ],
     }, 1);
 
-    assert.equal("selected" in compact.selections, false);
-    assert.equal(compact.selections.selectedLanguages, 1);
-    assert.deepEqual(compact.selections.languagesWithSelection, ["typescript"]);
-    assert.equal("metadataJson" in compact.lastRuns[0], false);
-    assert.equal("documentsProcessed" in compact.lastRuns[0], false);
-    assert.equal(compact.lastRuns.length, 1);
-    const latestRun = compact.lastRuns[0];
-    assert.ok(latestRun);
-    assert.equal("precisionScore" in latestRun, false);
-    assert.equal(latestRun.precisionMeasurement, "unavailable");
-    assert.deepEqual(latestRun.diagnosticsBySeverity, {
-      error: 1,
-      warning: 2,
-      information: 0,
-      hint: 0,
+    assert.deepEqual(compact.selections, [
+      { languageId: "typescript", providerType: "scip", providerId: "scip" },
+    ]);
+    const latestRun = compact.latestRun as Record<string, unknown>;
+    assert.equal("metadataJson" in latestRun, false);
+    assert.equal("runId" in latestRun, false);
+    assert.equal(latestRun.status, "completed");
+    assert.equal(latestRun.symbolsMatched, 1);
+    assert.equal(latestRun.edgesCreated, 1);
+    assert.deepEqual(compact.warnings, {
+      skippedProviders: 1,
+      diagnostics: 3,
     });
   });
 

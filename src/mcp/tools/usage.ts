@@ -229,12 +229,6 @@ export async function handleUsageStats(
     }
   }
 
-  if (request.detail !== "full") {
-    return response.formattedSummary
-      ? { formattedSummary: response.formattedSummary }
-      : {};
-  }
-
   return response;
   } catch (error) {
     if (error instanceof ValidationError || error instanceof DatabaseError) {

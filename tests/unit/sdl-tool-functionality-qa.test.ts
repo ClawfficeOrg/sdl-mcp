@@ -15,12 +15,43 @@ describe("SDL tool functionality QA", () => {
   it("preserves compact usage summaries through workflow projection", () => {
     const projected = projectToolResultForModelContent(
       "sdl.usage.stats",
-      { formattedSummary: "session: 2 calls, 120 tokens" },
+      {
+        session: {
+          totalSdlTokens: 120,
+          totalRawEquivalent: 500,
+          totalSavedTokens: 380,
+          overallSavingsPercent: 76,
+          callCount: 2,
+          toolBreakdown: [
+            {
+              tool: "sdl.symbol.search",
+              sdlTokens: 120,
+              rawEquivalent: 500,
+              savedTokens: 380,
+              callCount: 2,
+            },
+          ],
+        },
+      },
       { detail: "compact" },
     );
 
     assert.deepEqual(projected, {
-      formattedSummary: "session: 2 calls, 120 tokens",
+      aggregate: {
+        totalSdlTokens: 120,
+        totalRawEquivalent: 500,
+        totalSavedTokens: 380,
+        savingsPercent: 76,
+        callCount: 2,
+      },
+      topTools: [
+        {
+          tool: "sdl.symbol.search",
+          savedTokens: 380,
+          savingsPercent: 76,
+          callCount: 2,
+        },
+      ],
     });
   });
 
@@ -111,10 +142,11 @@ describe("SDL tool functionality QA", () => {
     const semanticStatus = projectToolResultForModelContent(
       "sdl.semantic.enrichment.status",
       {
+        enabled: true,
         lastRuns: [
           {
             runId: "semantic-1784030000000",
-            status: "complete",
+            status: "completed",
             startedAt: "2026-07-14T12:00:00.000Z",
             finishedAt: "2026-07-14T12:03:00.000Z",
           },
@@ -122,11 +154,11 @@ describe("SDL tool functionality QA", () => {
       },
       { detail: "compact" },
     ) as Record<string, unknown>;
-    const lastRuns = semanticStatus.lastRuns as Array<Record<string, unknown>>;
+    const latestRun = semanticStatus.latestRun as Record<string, unknown>;
 
-    assert.equal("runId" in lastRuns[0], false);
-    assert.equal("startedAt" in lastRuns[0], false);
-    assert.equal("finishedAt" in lastRuns[0], false);
+    assert.equal("runId" in latestRun, false);
+    assert.equal("startedAt" in latestRun, false);
+    assert.equal("finishedAt" in latestRun, false);
 
     const telemetryStatus = projectToolResultForModelContent(
       "sdl.repo.status",

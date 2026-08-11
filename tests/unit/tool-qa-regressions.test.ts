@@ -64,14 +64,13 @@ describe("SDL tool QA regressions", () => {
       1,
     ) as any;
 
-    assert.deepEqual(compact.selections, {
-      totalLanguages: 2,
-      selectedLanguages: 1,
-      skippedProviders: 1,
-      languagesWithSelection: ["typescript"],
-    });
-    assert.equal(compact.lastRuns.length, 1);
-    assert.equal("metadataJson" in compact.lastRuns[0], false);
+    assert.deepEqual(compact.selections, [
+      { languageId: "typescript", providerType: "scip", providerId: "scip" },
+    ]);
+    assert.equal(compact.availability, "available");
+    assert.equal(compact.latestRun.status, "completed");
+    assert.equal("metadataJson" in compact.latestRun, false);
+    assert.deepEqual(compact.warnings, { skippedProviders: 1 });
   });
 
   it("distinguishes whole-symbol identifier misses from truncation", () => {

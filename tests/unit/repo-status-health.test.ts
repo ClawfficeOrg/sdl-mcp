@@ -20,7 +20,7 @@ describe("repo status health fields", () => {
   it("defaults requests to compact status with telemetry opt-in disabled", () => {
     const parsed = RepoStatusRequestSchema.parse({ repoId: "sdl-mcp" });
 
-    assert.strictEqual(parsed.detail, "minimal");
+    assert.strictEqual(parsed.detail, "compact");
     assert.strictEqual(parsed.includeTelemetry, false);
   });
 
@@ -283,12 +283,7 @@ describe("repo status health fields", () => {
     }) as { derivedState: Record<string, unknown> };
 
     assert.deepStrictEqual(Object.keys(projected.derivedState), [
-      "stale",
       "graphIntegrityState",
-      "graphIntegrityVersionId",
-      "graphIntegrityRevision",
-      "graphIntegrityVerifiedRevision",
-      "graphIntegrityDigest",
       "nextBestAction",
     ]);
   });

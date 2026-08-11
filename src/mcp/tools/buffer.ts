@@ -19,6 +19,7 @@ import { getDefaultLiveIndexCoordinator } from "../../live-index/coordinator.js"
 import type { LiveIndexCoordinator } from "../../live-index/types.js";
 import type { ToolContext } from "../../server.js";
 import { logger } from "../../util/logger.js";
+import { projectBufferStatusForAgent } from "../response-projection/projectors/status.js";
 
 function resolveLiveIndex(
   liveIndex?: LiveIndexCoordinator,
@@ -152,27 +153,8 @@ export async function handleBufferCheckpoint(
 
 export function compactBufferStatusForAgent(
   status: BufferStatusResponse,
-): BufferStatusResponse {
-  const compact: BufferStatusResponse = {
-    repoId: status.repoId,
-    enabled: status.enabled,
-    pendingBuffers: status.pendingBuffers,
-    dirtyBuffers: status.dirtyBuffers,
-    parseQueueDepth: status.parseQueueDepth,
-    checkpointPending: status.checkpointPending,
-    lastBufferEventAt: status.lastBufferEventAt,
-    lastCheckpointAt: status.lastCheckpointAt,
-  };
-  if (status.lastCheckpointAttemptAt != null) compact.lastCheckpointAttemptAt = status.lastCheckpointAttemptAt;
-  if (status.lastCheckpointResult != null) compact.lastCheckpointResult = status.lastCheckpointResult;
-  if (status.lastCheckpointError != null) compact.lastCheckpointError = status.lastCheckpointError;
-  if (status.lastCheckpointReason != null) compact.lastCheckpointReason = status.lastCheckpointReason;
-  if (status.reconcileQueueDepth !== undefined) compact.reconcileQueueDepth = status.reconcileQueueDepth;
-  if (status.oldestReconcileAt != null) compact.oldestReconcileAt = status.oldestReconcileAt;
-  if (status.lastReconciledAt != null) compact.lastReconciledAt = status.lastReconciledAt;
-  if (status.reconcileInflight !== undefined) compact.reconcileInflight = status.reconcileInflight;
-  if (status.reconcileLastError != null) compact.reconcileLastError = status.reconcileLastError;
-  return compact;
+): Record<string, unknown> {
+  return projectBufferStatusForAgent(status);
 }
 
 export async function handleBufferStatus(
@@ -183,7 +165,7 @@ export async function handleBufferStatus(
   try {
     const request = parseActionHandlerArgs(BufferStatusRequestSchema, args);
     const status = await resolveLiveIndex(liveIndex).getLiveStatus(request.repoId);
-    return compactBufferStatusForAgent(status);
+    return status;
   } catch (error) {
     if (error instanceof ZodError) {
       throw new ValidationError(

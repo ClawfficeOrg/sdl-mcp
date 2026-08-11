@@ -770,47 +770,6 @@ export async function handleRepoStatus(
       isStale: false,
     };
 
-function compactWatcherHealthForStatus(
-  watcherHealth: ReturnType<typeof getWatcherHealth>,
-  includeTelemetry: boolean,
-) {
-  if (!watcherHealth) return watcherHealth;
-  const stableState = {
-    enabled: watcherHealth.enabled,
-    running: watcherHealth.running,
-    provider: watcherHealth.provider,
-    configuredProvider: watcherHealth.configuredProvider,
-    fallbackReason: watcherHealth.fallbackReason,
-    stale: watcherHealth.stale,
-  };
-  return includeTelemetry
-    ? {
-        ...stableState,
-        errors: watcherHealth.errors,
-        queueDepth: watcherHealth.queueDepth,
-        lastEventAt: watcherHealth.lastEventAt,
-        lastSuccessfulReindexAt: watcherHealth.lastSuccessfulReindexAt,
-      }
-    : stableState;
-}
-
-function compactPrefetchStatsForStatus(
-  prefetchStats: ReturnType<typeof getPrefetchStats> | undefined,
-) {
-  if (!prefetchStats) return undefined;
-  return {
-    enabled: prefetchStats.enabled,
-    queueDepth: prefetchStats.queueDepth,
-    running: prefetchStats.running,
-    hitRate: prefetchStats.hitRate,
-    wasteRate: prefetchStats.wasteRate,
-    avgLatencyReductionMs: prefetchStats.avgLatencyReductionMs,
-    lastRunAt: prefetchStats.lastRunAt,
-    policyMode: prefetchStats.policyMode,
-    suppressedPrefetch: prefetchStats.suppressedPrefetch,
-    acceptedPrefetch: prefetchStats.acceptedPrefetch,
-  };
-}
     const latestVersion = await ladybugDb.getLatestVersion(conn, repoId);
     const filesIndexed = await ladybugDb.getFileCount(conn, repoId);
     const symbolsIndexed = await ladybugDb.getSymbolCount(conn, repoId);
@@ -932,12 +891,7 @@ function compactPrefetchStatsForStatus(
     const effectiveHealth = rootAvailable && graphIntegrityAvailable
       ? health
       : unavailableHealth.snapshot;
-    const stableDerivedState = derivedState
-      ? (({ updatedAt: _updatedAt, ...rest }) => rest)(derivedState)
-      : undefined;
-    const statusDerivedState = includeTelemetry
-      ? derivedState ?? undefined
-      : stableDerivedState;
+    const statusDerivedState = derivedState ?? undefined;
 
     // Surface relevant memories if enabled (default: false) and config allows it
     const memCaps = getMemoryCapabilities(appConfig, repoId);
@@ -1014,10 +968,7 @@ function compactPrefetchStatsForStatus(
                 "Health data may be stale (last known result). Fresh computation failed; retry or run sdl.index.refresh.",
             }
           : {}),
-      watcherHealth: compactWatcherHealthForStatus(
-        watcherHealth,
-        includeTelemetry,
-      ),
+      watcherHealth,
       ...(rootAvailable && watcherHealth === null
         ? {
             watcherNote:
@@ -1026,7 +977,7 @@ function compactPrefetchStatsForStatus(
         : {}),
       ...(includeTelemetry
         ? {
-            prefetchStats: compactPrefetchStatsForStatus(prefetchStats),
+            prefetchStats,
             serverInfo: getServerInfo(),
             liveIndexStatus,
           }

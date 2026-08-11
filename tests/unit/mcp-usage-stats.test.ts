@@ -7,6 +7,7 @@ import {
 } from "../../dist/mcp/tools.js";
 import { tokenAccumulator } from "../../dist/mcp/token-accumulator.js";
 import { wasteLedger } from "../../dist/mcp/waste-ledger.js";
+import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
 
 describe("UsageStatsRequestSchema validation", () => {
   it("parses minimal valid request (defaults scope to 'both')", () => {
@@ -187,18 +188,36 @@ describe("handleUsageStats session scope (no DB required)", () => {
     assert.ok(typeof session.callCount === "number", "session should have callCount");
   });
 
-  it("returns only formattedSummary for compact session scope", async (t) => {
+  it("retains canonical session statistics before compact projection", async (t) => {
     if (!usageAvailable) return t.skip("usage module not available");
     tokenAccumulator.reset();
     tokenAccumulator.recordUsage("sdl.symbol.search", 100, 500);
 
     const result = (await handleUsageStats({ scope: "session" })) as Record<string, unknown>;
     UsageStatsResponseSchema.parse(result);
+    assert.ok(result.session, "canonical handler output should retain session statistics");
 
-    assert.ok(typeof result.formattedSummary === "string", "should have formattedSummary");
-    assert.strictEqual(result.session, undefined);
-    assert.strictEqual(result.history, undefined);
-    assert.strictEqual(result.wire, undefined);
+    const projected = projectToolResultForModelContent(
+      "sdl.usage.stats",
+      result,
+      { detail: "compact" },
+    ) as Record<string, unknown>;
+    assert.deepEqual(projected.aggregate, {
+      totalSdlTokens: 100,
+      totalRawEquivalent: 500,
+      totalSavedTokens: 400,
+      savingsPercent: 80,
+      callCount: 1,
+    });
+    assert.deepEqual(projected.topTools, [
+      {
+        tool: "sdl.symbol.search",
+        savedTokens: 400,
+        savingsPercent: 80,
+        callCount: 1,
+      },
+    ]);
+    assert.strictEqual(projected.formattedSummary, undefined);
   });
 
   it("includes signal density in session stats", async (t) => {

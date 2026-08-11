@@ -308,6 +308,91 @@ describe("code-mode workflow executor", () => {
     );
   });
 
+  it("projects semantic workflow-child status idempotently", () => {
+    const projector = (responseProjection as Record<string, unknown>)
+      .projectWorkflowChildResultForModel;
+    assert.equal(typeof projector, "function");
+    if (typeof projector !== "function") return;
+    const canonical = {
+      ok: true,
+      enabled: true,
+      selections: [
+        {
+          languageId: "typescript",
+          selected: {
+            providerType: "scip",
+            providerId: "scip",
+            canAffectPass2: true,
+          },
+          skipped: [],
+        },
+      ],
+      lastRuns: [
+        {
+          providerType: "scip",
+          providerId: "scip",
+          languages: ["typescript"],
+          status: "completed",
+          symbolsMatched: 3,
+          edgesCreated: 2,
+          diagnosticsCount: 0,
+        },
+      ],
+    };
+
+    const once = projector(
+      "semanticEnrichmentStatus",
+      canonical,
+      { detail: "compact" },
+      {},
+    );
+    assert.deepEqual(
+      projector(
+        "semanticEnrichmentStatus",
+        once,
+        { detail: "compact" },
+        {},
+      ),
+      once,
+    );
+  });
+
+  it("projects usage workflow-child status idempotently", () => {
+    const projector = (responseProjection as Record<string, unknown>)
+      .projectWorkflowChildResultForModel;
+    assert.equal(typeof projector, "function");
+    if (typeof projector !== "function") return;
+    const canonical = {
+      session: {
+        totalSdlTokens: 75,
+        totalRawEquivalent: 300,
+        totalSavedTokens: 225,
+        overallSavingsPercent: 75,
+        callCount: 1,
+        toolBreakdown: [
+          {
+            tool: "sdl.context",
+            sdlTokens: 75,
+            rawEquivalent: 300,
+            savedTokens: 225,
+            callCount: 1,
+          },
+        ],
+      },
+    };
+
+    const once = projector(
+      "usageStats",
+      canonical,
+      { detail: "compact" },
+      {},
+    );
+    assert.deepEqual(
+      projector("usageStats", once, { detail: "compact" }, {}),
+      once,
+    );
+  });
+
   it("exposes a truncated step's continuation handle to later steps", async () => {
     const request: ParsedWorkflowRequest = {
       repoId: "test",

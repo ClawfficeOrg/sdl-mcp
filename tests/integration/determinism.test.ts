@@ -732,8 +732,8 @@ test("SESSION BOUNDARY: workflow projection is resolved before continuation stor
   assert.notEqual(await run(), firstHandle);
 });
 
-test("INVARIANT 2c: repo status revision fields are ordered without changing normal retrieval", () => {
-  const status = projectToolResultForModelContent("sdl.repo.status", {
+test("INVARIANT 2c: compact repo status omits revisions while full diagnostics stay deterministic", () => {
+  const canonicalStatus = {
     repoId: REPO_ID,
     rootAvailability: { status: "available" },
     latestVersionId: "v2",
@@ -747,8 +747,24 @@ test("INVARIANT 2c: repo status revision fields are ordered without changing nor
       graphIntegrityVerifiedRevision: 1,
       graphIntegrityDigest: "a".repeat(64),
     },
-  }) as { derivedState: Record<string, unknown> };
-  assert.deepEqual(Object.keys(status.derivedState), [
+  };
+
+  const compact = projectToolResultForModelContent(
+    "sdl.repo.status",
+    canonicalStatus,
+  ) as { derivedState: Record<string, unknown> };
+  assert.deepEqual(Object.keys(compact.derivedState), [
+    "graphIntegrityState",
+  ]);
+  assert.equal("graphIntegrityRevision" in compact.derivedState, false);
+  assert.equal("graphIntegrityDigest" in compact.derivedState, false);
+
+  const diagnostic = projectToolResultForModelContent(
+    "sdl.repo.status",
+    canonicalStatus,
+    { detail: "full", includeDiagnostics: true },
+  ) as { derivedState: Record<string, unknown> };
+  assert.deepEqual(Object.keys(diagnostic.derivedState), [
     "stale",
     "graphIntegrityState",
     "graphIntegrityVersionId",
@@ -756,6 +772,8 @@ test("INVARIANT 2c: repo status revision fields are ordered without changing nor
     "graphIntegrityVerifiedRevision",
     "graphIntegrityDigest",
   ]);
+  assert.equal(diagnostic.derivedState.graphIntegrityRevision, 2);
+  assert.equal(diagnostic.derivedState.graphIntegrityDigest, "a".repeat(64));
 
   const retrieval = {
     matches: [{ symbolId: "symbol-1", name: "stable" }],
