@@ -1909,6 +1909,15 @@ export const DeltaGetRequestSchema = withProjectionRequestOptions(z.object({
     .string()
     .optional()
     .describe("End version. Defaults to latest version."),
+  cursor: z
+    .object({
+      fromVersion: z.string(),
+      toVersion: z.string(),
+      offset: z.number().int().min(0),
+    })
+    .strict()
+    .optional()
+    .describe("Version-bound cursor returned by a previous delta page."),
   budget: SliceBudgetSchema.optional(),
   /**
    * Fix #1 — fast count-only preview mode. Returns just the changed-symbol
@@ -1951,6 +1960,21 @@ export const DeltaGetResponseSchema = z.object({
   delta: DeltaPackSchema,
   amplifiers: z.array(AmplifierSummaryItemSchema).optional(),
   blastRadiusTruncated: z.boolean().optional(),
+  cursor: z
+    .object({
+      fromVersion: z.string(),
+      toVersion: z.string(),
+      offset: z.number().int().min(0),
+    })
+    .strict()
+    .optional(),
+  hasMore: z.literal(true).optional(),
+  nextAction: z
+    .object({
+      action: z.literal("sdl.delta.get"),
+      args: DeltaGetRequestSchema,
+    })
+    .optional(),
 });
 
 export const SliceSpilloverGetRequestSchema = withProjectionRequestOptions(z
@@ -2582,16 +2606,24 @@ const PRRiskAnalysisSchema = z.object({
   repoId: z.string().min(1),
   fromVersion: z.string(),
   toVersion: z.string(),
-  riskScore: z.number().int().min(0).max(100),
-  riskLevel: z.enum(["low", "medium", "high"]),
-  // Compact responses keep counts but omit expanded collections.
+  // Full responses retain scores/counts and public collections. Compact
+  // responses keep those values only in summary to avoid duplication.
+  riskScore: z.number().int().min(0).max(100).optional(),
+  riskLevel: z.enum(["low", "medium", "high"]).optional(),
   changedSymbols: ChangedSymbolsSectionSchema.optional(),
   blastRadius: PaginatedSectionSchema(EnrichedBlastRadiusItemSchema).optional(),
   findings: PaginatedSectionSchema(FindingSchema).optional(),
   evidence: PaginatedSectionSchema(EvidenceSchema).optional(),
   recommendedTests: PaginatedSectionSchema(RecommendedTestSchema).optional(),
-  changedSymbolsCount: z.number().int().min(0),
-  blastRadiusCount: z.number().int().min(0),
+  changedSymbolsCount: z.number().int().min(0).optional(),
+  blastRadiusCount: z.number().int().min(0).optional(),
+  topRisk: z
+    .object({
+      target: z.string(),
+      reason: z.string(),
+      recommendedVerification: z.string(),
+    })
+    .optional(),
   preflight: z
     .object({
       skipped: z.array(z.string()),

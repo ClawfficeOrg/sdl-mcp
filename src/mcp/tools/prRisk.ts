@@ -59,6 +59,54 @@ interface RecommendedTest {
   priority: "high" | "medium" | "low";
 }
 
+interface CanonicalTopRisk {
+  target: string;
+  reason: string;
+  recommendedVerification: string;
+}
+
+interface CanonicalRiskFinding {
+  message: string;
+  affectedSymbols: string[];
+}
+
+interface CanonicalRiskTest {
+  description: string;
+  targetSymbols: string[];
+}
+
+/**
+ * Select one tuple from canonical handler order without changing risk ranking.
+ * Matching the verification to the finding target keeps compact guidance
+ * coherent even when presentation budgets later hide either source array.
+ */
+function selectCanonicalTopRisk(
+  findings: readonly CanonicalRiskFinding[],
+  recommendedTests: readonly CanonicalRiskTest[],
+): CanonicalTopRisk | undefined {
+  const finding = findings[0];
+  if (!finding) return undefined;
+
+  for (const target of finding.affectedSymbols) {
+    const recommendedTest = recommendedTests.find((test) =>
+      test.targetSymbols.includes(target),
+    );
+    if (recommendedTest) {
+      return {
+        target,
+        reason: finding.message,
+        recommendedVerification: recommendedTest.description,
+      };
+    }
+  }
+
+  // Without a shared canonical target, a verification would describe a
+  // different risk item. Omit the compact tuple instead of inventing a link.
+  return undefined;
+}
+
+export const _prRiskToolTesting = { selectCanonicalTopRisk };
+
 type CompactPRRiskResponseInput = {
   summary: unknown;
   analysis: Record<string, unknown>;
@@ -69,16 +117,46 @@ type CompactPRRiskResponseInput = {
 
 export function compactPRRiskResponse(
   response: CompactPRRiskResponseInput,
+  canonicalTopRisk?: CanonicalTopRisk,
 ): CompactPRRiskResponseInput {
   const {
     changedSymbols: _changedSymbols,
     blastRadius: _blastRadius,
-    findings: _findings,
+    findings,
     evidence: _evidence,
-    recommendedTests: _recommendedTests,
+    recommendedTests,
+    riskScore: _riskScore,
+    riskLevel: _riskLevel,
+    changedSymbolsCount: _changedSymbolsCount,
+    blastRadiusCount: _blastRadiusCount,
     ...analysis
   } = response.analysis;
-  return { ...response, analysis };
+
+  const findingItems =
+    typeof findings === "object" &&
+    findings !== null &&
+    "items" in findings &&
+    Array.isArray(findings.items)
+      ? findings.items
+      : [];
+  const recommendedTestItems =
+    typeof recommendedTests === "object" &&
+    recommendedTests !== null &&
+    "items" in recommendedTests &&
+    Array.isArray(recommendedTests.items)
+      ? recommendedTests.items
+      : [];
+  const topRisk =
+    canonicalTopRisk ??
+    selectCanonicalTopRisk(findingItems, recommendedTestItems);
+
+  return {
+    ...response,
+    analysis: {
+      ...analysis,
+      ...(topRisk ? { topRisk } : {}),
+    },
+  };
 }
 
 interface BlastRadiusSeedCandidate {
@@ -425,6 +503,8 @@ export async function handlePRRiskAnalysis(args: unknown) {
   };
 
 
+  const canonicalTopRisk = selectCanonicalTopRisk(findings, recommendedTests);
+
   // --- Enrich and truncate changedSymbols ---
   const totalChangedSymbols = filteredChangedSymbols.length;
   const unfilteredTotal = delta.changedSymbols.length;
@@ -626,7 +706,9 @@ export async function handlePRRiskAnalysis(args: unknown) {
     findingsCount: totalFindings,
   });
 
-  return validated.detail === "full" ? response : compactPRRiskResponse(response);
+  return validated.detail === "full"
+    ? response
+    : compactPRRiskResponse(response, canonicalTopRisk);
 }
 
 function generateFindings(

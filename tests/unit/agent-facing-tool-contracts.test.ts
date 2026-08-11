@@ -15,7 +15,10 @@ import { classifyRuntimeStatus } from "../../dist/runtime/executor.js";
 import {
   compactSemanticEnrichmentStatusForAgent,
 } from "../../dist/mcp/tools/semantic-enrichment.js";
-import { compactPRRiskResponse } from "../../dist/mcp/tools/prRisk.js";
+import {
+  _prRiskToolTesting,
+  compactPRRiskResponse,
+} from "../../dist/mcp/tools/prRisk.js";
 import { compactBufferStatusForAgent } from "../../dist/mcp/tools/buffer.js";
 import { _policyToolTesting } from "../../dist/mcp/tools/policy.js";
 import {
@@ -107,22 +110,203 @@ describe("agent-facing SDL tool contracts", () => {
     assert.equal(repoRegister.detail, "compact");
   });
 
-  it("compact pr risk responses omit verbose analysis arrays", () => {
-    const compact = compactPRRiskResponse({
-      summary: { riskScore: 31, riskLevel: "low" },
+  it("compact pr risk responses are actionable without duplicate scores or counts", () => {
+    const empty = compactPRRiskResponse({
+      summary: { riskScore: 0, riskLevel: "low", changedCount: 0 },
       analysis: {
+        repoId: "r",
         fromVersion: "v1",
         toVersion: "v2",
-        changedSymbols: { items: [{ symbolId: "sym-a" }], totalCount: 1 },
-        findings: { items: [{ affectedSymbols: ["sym-a"] }], totalCount: 1 },
-        recommendedTests: { items: [{ targetSymbols: ["sym-a"] }], totalCount: 1 },
+        riskScore: 0,
+        riskLevel: "low",
+        changedSymbolsCount: 0,
+        blastRadiusCount: 0,
+        findings: { items: [], totalCount: 0 },
+        recommendedTests: { items: [], totalCount: 0 },
       },
       escalationRequired: false,
     });
+    assert.deepEqual(empty.analysis, {
+      repoId: "r",
+      fromVersion: "v1",
+      toVersion: "v2",
+    });
 
-    assert.equal("changedSymbols" in compact.analysis, false);
-    assert.equal("findings" in compact.analysis, false);
-    assert.equal("recommendedTests" in compact.analysis, false);
+    const low = compactPRRiskResponse({
+      summary: { riskScore: 31, riskLevel: "low", changedCount: 1 },
+      analysis: {
+        repoId: "r",
+        fromVersion: "v1",
+        toVersion: "v2",
+        riskScore: 31,
+        riskLevel: "low",
+        changedSymbolsCount: 1,
+        blastRadiusCount: 0,
+        findings: {
+          items: [{
+            type: "localized-change",
+            severity: "low",
+            message: "One isolated symbol changed.",
+            affectedSymbols: ["src/leaf.ts#leaf"],
+          }],
+          totalCount: 1,
+        },
+        recommendedTests: { items: [], totalCount: 0 },
+      },
+      escalationRequired: false,
+    });
+    assert.equal("riskScore" in low.analysis, false);
+    assert.equal("changedSymbolsCount" in low.analysis, false);
+
+    const highInput = {
+      summary: {
+        riskScore: 88,
+        riskLevel: "high" as const,
+        changedCount: 4,
+        blastRadiusCount: 9,
+        topRiskItem: "src/core.ts#dispatch",
+      },
+      analysis: {
+        repoId: "r",
+        fromVersion: "v1",
+        toVersion: "v2",
+        riskScore: 88,
+        riskLevel: "high" as const,
+        changedSymbolsCount: 4,
+        blastRadiusCount: 9,
+        changedSymbols: { items: [{ symbolId: "sym-a" }], totalCount: 4 },
+        findings: {
+          items: [{
+            type: "wide-blast-radius",
+            severity: "high" as const,
+            message: "Dispatch changes affect authentication callers.",
+            affectedSymbols: ["src/core.ts#dispatch", "src/auth.ts#login"],
+          }],
+          totalCount: 1,
+        },
+        recommendedTests: {
+          items: [{
+            type: "integration",
+            description: "Run authentication integration tests.",
+            targetSymbols: ["src/core.ts#dispatch"],
+            priority: "high" as const,
+          }],
+          totalCount: 1,
+        },
+      },
+      escalationRequired: true,
+    };
+    const high = compactPRRiskResponse(highInput);
+
+    assert.deepEqual(high.analysis, {
+      repoId: "r",
+      fromVersion: "v1",
+      toVersion: "v2",
+      topRisk: {
+        target: "src/core.ts#dispatch",
+        reason: "Dispatch changes affect authentication callers.",
+        recommendedVerification: "Run authentication integration tests.",
+      },
+    });
+    assert.equal("riskScore" in high.analysis, false);
+    assert.equal("blastRadiusCount" in high.analysis, false);
+    assert.equal(high.summary.riskScore, 88);
+    assert.equal(highInput.analysis.findings.items.length, 1);
+    assert.equal(highInput.analysis.recommendedTests.items.length, 1);
+  });
+
+  it("preserves one coherent canonical top risk across zero presentation budgets", () => {
+    const findings = [
+      {
+        message: "Core dispatch changes affect authentication callers.",
+        affectedSymbols: ["src/core.ts#dispatch", "src/auth.ts#login"],
+      },
+      {
+        message: "Unrelated worker change.",
+        affectedSymbols: ["src/worker.ts#run"],
+      },
+    ];
+    const recommendedTests = [
+      {
+        description: "Run worker unit tests.",
+        targetSymbols: ["src/worker.ts#run"],
+      },
+      {
+        description: "Run authentication integration tests.",
+        targetSymbols: ["src/core.ts#dispatch"],
+      },
+    ];
+    const topRisk = _prRiskToolTesting.selectCanonicalTopRisk(
+      findings,
+      recommendedTests,
+    );
+    assert.deepEqual(topRisk, {
+      target: "src/core.ts#dispatch",
+      reason: "Core dispatch changes affect authentication callers.",
+      recommendedVerification: "Run authentication integration tests.",
+    });
+
+    for (const [label, visibleFindings, visibleTests] of [
+      ["limit:0", [], []],
+      ["budget.maxFindings:0", [], recommendedTests],
+      ["budget.maxRecommendedTests:0", findings, []],
+    ] as const) {
+      const compact = compactPRRiskResponse(
+        {
+          summary: { riskScore: 91, riskLevel: "high", changedCount: 3 },
+          analysis: {
+            repoId: "r",
+            fromVersion: "v1",
+            toVersion: "v2",
+            riskScore: 91,
+            riskLevel: "high",
+            changedSymbolsCount: 3,
+            blastRadiusCount: 8,
+            findings: { items: visibleFindings, totalCount: findings.length },
+            recommendedTests: {
+              items: visibleTests,
+              totalCount: recommendedTests.length,
+            },
+          },
+          escalationRequired: true,
+        },
+        topRisk,
+      );
+      assert.deepEqual(compact.analysis.topRisk, topRisk, label);
+    }
+  });
+
+  it("omits compact top risk when canonical finding and verification targets differ", () => {
+    const findings = [
+      {
+        message: "Core dispatch changes affect authentication callers.",
+        affectedSymbols: ["src/core.ts#dispatch"],
+      },
+    ];
+    const recommendedTests = [
+      {
+        description: "Run worker unit tests.",
+        targetSymbols: ["src/worker.ts#run"],
+      },
+    ];
+
+    assert.equal(
+      _prRiskToolTesting.selectCanonicalTopRisk(findings, recommendedTests),
+      undefined,
+    );
+
+    const compact = compactPRRiskResponse({
+      summary: { riskScore: 91, riskLevel: "high", changedCount: 2 },
+      analysis: {
+        repoId: "r",
+        fromVersion: "v1",
+        toVersion: "v2",
+        findings: { items: findings, totalCount: 1 },
+        recommendedTests: { items: recommendedTests, totalCount: 1 },
+      },
+      escalationRequired: true,
+    });
+    assert.equal("topRisk" in compact.analysis, false);
   });
 
   it("runtime intent excerpts ignore Windows cmd echo lines", () => {
@@ -510,6 +694,54 @@ describe("agent-facing SDL tool contracts", () => {
     });
     assert.equal(invalid.nextAction, undefined);
     assert.equal(invalid.invalidRecoveryCount, 1);
+  });
+
+  it("accepts only version-bound schema-valid delta continuations", () => {
+    const context = {
+      repoId: "repo",
+      advertisedTools: ["sdl.delta.get"],
+    };
+    const cursor = { fromVersion: "v1", toVersion: "v2", offset: 3 };
+    const valid = buildValidatedRecoveryAction(
+      {
+        action: "delta.get",
+        args: {
+          repoId: "repo",
+          fromVersion: "v1",
+          toVersion: "v2",
+          cursor,
+          budget: { maxCards: 3 },
+          skipBlastRadius: true,
+        },
+      },
+      context,
+    );
+    const mismatch = buildValidatedRecoveryAction(
+      {
+        action: "delta.get",
+        args: {
+          repoId: "repo",
+          fromVersion: "v1",
+          toVersion: "v3",
+          cursor,
+        },
+      },
+      context,
+    );
+
+    assert.deepEqual(valid.nextAction, {
+      action: "sdl.delta.get",
+      args: {
+        budget: { maxCards: 3 },
+        cursor,
+        fromVersion: "v1",
+        repoId: "repo",
+        skipBlastRadius: true,
+        toVersion: "v2",
+      },
+    });
+    assert.equal(mismatch.nextAction, undefined);
+    assert.equal(mismatch.invalidRecoveryCount, 1);
   });
 });
 

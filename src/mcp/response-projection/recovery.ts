@@ -345,6 +345,26 @@ function continuationProblem(
     }
   }
 
+  if (action === "delta.get" && args.cursor !== undefined) {
+    const cursor = args.cursor;
+    if (
+      !isRecord(cursor) ||
+      typeof cursor.fromVersion !== "string" ||
+      typeof cursor.toVersion !== "string" ||
+      typeof cursor.offset !== "number" ||
+      !Number.isInteger(cursor.offset) ||
+      cursor.offset < 0
+    ) {
+      return "delta.get requires an exact version-bound cursor";
+    }
+    if (
+      args.fromVersion !== cursor.fromVersion ||
+      args.toVersion !== cursor.toVersion
+    ) {
+      return "delta.get cursor versions must match the requested versions";
+    }
+  }
+
   if (action === "runtime.queryOutput") {
     if (
       typeof args.artifactHandle !== "string" ||

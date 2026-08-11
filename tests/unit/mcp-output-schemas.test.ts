@@ -709,3 +709,126 @@ describe("runtime recovery output schemas", () => {
     });
   });
 });
+
+
+describe("delta paging and PR-risk output schemas", () => {
+  it("requires an exact version-bound delta cursor and parses page continuation", () => {
+    const request = requireSchema("DeltaGetRequestSchema");
+    assert.deepEqual(
+      request.parse({
+        repoId: "repo",
+        cursor: { fromVersion: "v1", toVersion: "v2", offset: 3 },
+      }),
+      {
+        repoId: "repo",
+        cursor: { fromVersion: "v1", toVersion: "v2", offset: 3 },
+      },
+    );
+    assert.throws(() =>
+      request.parse({
+        repoId: "repo",
+        cursor: {
+          fromVersion: "v1",
+          toVersion: "v2",
+          offset: 3,
+          expiredHandle: "unsupported",
+        },
+      }),
+    );
+    assert.throws(() =>
+      request.parse({
+        repoId: "repo",
+        cursor: { fromVersion: "v1", toVersion: "v2", offset: -1 },
+      }),
+    );
+
+    const response = requireSchema("DeltaGetResponseSchema");
+    const delta = {
+      repoId: "repo",
+      fromVersion: "v1",
+      toVersion: "v2",
+      changedSymbols: [{ symbolId: "sym-a", changeType: "added" }],
+      blastRadius: [],
+    };
+    response.parse({
+      delta,
+      cursor: { fromVersion: "v1", toVersion: "v2", offset: 1 },
+      hasMore: true,
+      nextAction: {
+        action: "sdl.delta.get",
+        args: {
+          repoId: "repo",
+          fromVersion: "v1",
+          toVersion: "v2",
+          cursor: { fromVersion: "v1", toVersion: "v2", offset: 1 },
+          budget: { maxCards: 1 },
+          skipBlastRadius: true,
+        },
+      },
+    });
+    response.parse({ delta });
+  });
+
+  it("parses actionable compact PR risk and full public findings/tests", () => {
+    const response = requireSchema("PRRiskAnalysisResponseSchema");
+    response.parse({
+      summary: {
+        riskScore: 88,
+        riskLevel: "high",
+        changedCount: 4,
+        filteredCount: 4,
+        blastRadiusCount: 9,
+      },
+      analysis: {
+        repoId: "repo",
+        fromVersion: "v1",
+        toVersion: "v2",
+        topRisk: {
+          target: "src/core.ts#dispatch",
+          reason: "Dispatch changes affect authentication callers.",
+          recommendedVerification: "Run authentication integration tests.",
+        },
+      },
+      escalationRequired: true,
+    });
+    response.parse({
+      summary: {
+        riskScore: 88,
+        riskLevel: "high",
+        changedCount: 4,
+        filteredCount: 4,
+        blastRadiusCount: 9,
+      },
+      analysis: {
+        repoId: "repo",
+        fromVersion: "v1",
+        toVersion: "v2",
+        riskScore: 88,
+        riskLevel: "high",
+        changedSymbolsCount: 4,
+        blastRadiusCount: 9,
+        findings: {
+          items: [{
+            type: "wide-blast-radius",
+            severity: "high",
+            message: "Dispatch changes affect callers.",
+            affectedSymbols: ["sym-a"],
+          }],
+          totalCount: 1,
+          truncated: false,
+        },
+        recommendedTests: {
+          items: [{
+            type: "integration",
+            description: "Run integration tests.",
+            targetSymbols: ["sym-a"],
+            priority: "high",
+          }],
+          totalCount: 1,
+          truncated: false,
+        },
+      },
+      escalationRequired: true,
+    });
+  });
+});

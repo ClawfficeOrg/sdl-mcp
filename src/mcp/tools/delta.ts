@@ -11,9 +11,6 @@ import {
 } from "../../db/ladybug-queries.js";
 import * as ladybugDb from "../../db/ladybug-queries.js";
 import {
-  DEFAULT_MAX_CARDS,
-} from "../../config/constants.js";
-import {
   prefetchDeltaBlastRadius,
   consumePrefetchedKey,
 } from "../../graph/prefetch.js";
@@ -34,6 +31,21 @@ const DEFAULT_DELTA_MAX_CARDS = 10;
 const DEFAULT_DELTA_MAX_TOKENS = 4000;
 /** Hard cap on blast-radius items returned to the caller. */
 const MAX_BLAST_RADIUS_ITEMS = 25;
+
+class DeltaCursorMismatchError extends Error {
+  readonly code = "DELTA_CURSOR_MISMATCH";
+
+  constructor() {
+    super("Delta cursor versions do not match the requested version range.");
+    this.name = "DeltaCursorMismatchError";
+  }
+}
+
+const DELTA_CHANGE_TYPE_ORDER = {
+  added: 0,
+  modified: 1,
+  removed: 2,
+} as const;
 
 /**
  * Handles delta pack requests.
@@ -75,6 +87,14 @@ export async function handleDeltaGet(
     }
 
     
+    if (
+      validated.cursor &&
+      (validated.cursor.fromVersion !== fromVersion ||
+        validated.cursor.toVersion !== toVersion)
+    ) {
+      throw new DeltaCursorMismatchError();
+    }
+
     const singleVersionHint = fromVersion === toVersion
       ? "Only one ledger version exists — delta is empty. Run index.refresh after making changes to create a new version."
       : undefined;
@@ -92,6 +112,16 @@ export async function handleDeltaGet(
           : "Failed to compute delta pack.";
       throw new IndexError(`Delta pack error: ${message}`);
     }
+
+    delta.changedSymbols.sort((left, right) => {
+      const typeOrder =
+        DELTA_CHANGE_TYPE_ORDER[left.changeType] -
+        DELTA_CHANGE_TYPE_ORDER[right.changeType];
+      if (typeOrder !== 0) return typeOrder;
+      if (left.symbolId < right.symbolId) return -1;
+      if (left.symbolId > right.symbolId) return 1;
+      return 0;
+    });
 
     const changedSymbolIds = delta.changedSymbols.map(
       (change) => change.symbolId,
@@ -188,17 +218,19 @@ export async function handleDeltaGet(
     }
 
     const config = loadConfig();
-    const rawBudget = validated.budget ?? {
-      maxCards: DEFAULT_DELTA_MAX_CARDS,
-      maxEstimatedTokens:
-        config.slice?.defaultMaxTokens ?? DEFAULT_DELTA_MAX_TOKENS,
-    };
+    const defaultDeltaMaxTokens =
+      config.slice?.defaultMaxTokens ?? DEFAULT_DELTA_MAX_TOKENS;
 
-    // Hard cap to prevent unbounded responses
+    // Resolve omitted fields independently before applying hard response caps.
     const budget = {
-      ...rawBudget,
-      maxCards: Math.min(rawBudget.maxCards ?? DEFAULT_MAX_CARDS, 100),
-      maxEstimatedTokens: Math.min(rawBudget.maxEstimatedTokens ?? DEFAULT_DELTA_MAX_TOKENS, 20000),
+      maxCards: Math.min(
+        validated.budget?.maxCards ?? DEFAULT_DELTA_MAX_CARDS,
+        100,
+      ),
+      maxEstimatedTokens: Math.min(
+        validated.budget?.maxEstimatedTokens ?? defaultDeltaMaxTokens,
+        20_000,
+      ),
     };
     const governorOptions = {
       repoId: validated.repoId,
@@ -266,23 +298,30 @@ export async function handleDeltaGet(
       })
     }
 
-    const maxChanges = DEFAULT_DELTA_MAX_CARDS;
+    const maxChanges = budget.maxCards;
     const maxBlastRadius = MAX_BLAST_RADIUS_ITEMS;
-
-    const changedSymbolsTruncation = truncateArray(delta.changedSymbols, {
-      maxItems: maxChanges,
-    });
+    const totalChanges = delta.changedSymbols.length;
+    const pageOffset = validated.cursor?.offset ?? 0;
+    const nextOffset = Math.min(pageOffset + maxChanges, totalChanges);
+    const hasMore = nextOffset < totalChanges;
+    const nextCursor = hasMore
+      ? { fromVersion, toVersion, offset: nextOffset }
+      : undefined;
+    delta.changedSymbols = delta.changedSymbols.slice(pageOffset, nextOffset);
 
     const blastRadiusTruncation = truncateArray(delta.blastRadius, {
       maxItems: maxBlastRadius,
     });
-
-    if (changedSymbolsTruncation.truncated) {
-      delta.changedSymbols = changedSymbolsTruncation.items;
-    }
-
     if (blastRadiusTruncation.truncated) {
       delta.blastRadius = blastRadiusTruncation.items;
+      delta.truncation = {
+        truncated: true,
+        droppedChanges: 0,
+        droppedBlastRadius: blastRadiusTruncation.droppedCount,
+        // Blast-radius spillover is handle-backed above when available. Do not
+        // advertise the legacy array cursor because no public action accepts it.
+        howToResume: null,
+      };
     }
 
     delta.blastRadius = delta.blastRadius.map(
@@ -290,20 +329,7 @@ export async function handleDeltaGet(
         rest as (typeof delta.blastRadius)[number],
     );
 
-    if (changedSymbolsTruncation.truncated || blastRadiusTruncation.truncated) {
-      delta.truncation = {
-        truncated: true,
-        droppedChanges: changedSymbolsTruncation.droppedCount,
-        droppedBlastRadius: blastRadiusTruncation.droppedCount,
-        howToResume:
-          changedSymbolsTruncation.howToResume ??
-          blastRadiusTruncation.howToResume ??
-          null,
-      };
-    }
-
     // Warn when auto-resolved delta is very large
-    const totalChanges = delta.changedSymbols.length + (changedSymbolsTruncation.droppedCount ?? 0);
     if (totalChanges > 500 && !validated.fromVersion) {
       const suffix = shouldSkipBlastRadius
         ? " Blast-radius computation was skipped (pass skipBlastRadius=false to force)."
@@ -317,8 +343,11 @@ export async function handleDeltaGet(
 
     // Collect all symbol IDs for enrichment (changed + blast radius)
     const blastRadiusSymbolIds = delta.blastRadius.map((item) => item.symbolId);
+    const pageChangedSymbolIds = delta.changedSymbols.map(
+      (change) => change.symbolId,
+    );
     const allSymbolIds = [
-      ...new Set([...changedSymbolIds, ...blastRadiusSymbolIds]),
+      ...new Set([...pageChangedSymbolIds, ...blastRadiusSymbolIds]),
     ];
 
     const symbolMap = await ladybugDb.getSymbolsByIds(conn, allSymbolIds);
@@ -372,7 +401,39 @@ export async function handleDeltaGet(
 
     const fileIds = allFileIds;
 
-    const response: Record<string, unknown> = { delta, ...(singleVersionHint ? { hint: singleVersionHint } : {}), amplifiers };
+    const continuationArgs = nextCursor
+      ? {
+          repoId: validated.repoId,
+          fromVersion,
+          toVersion,
+          cursor: nextCursor,
+          budget,
+          ...(validated.preview !== undefined
+            ? { preview: validated.preview }
+            : {}),
+          ...(validated.previewSampleSize !== undefined
+            ? { previewSampleSize: validated.previewSampleSize }
+            : {}),
+          ...(validated.skipBlastRadius !== undefined
+            ? { skipBlastRadius: validated.skipBlastRadius }
+            : {}),
+        }
+      : undefined;
+    const response: Record<string, unknown> = {
+      delta,
+      ...(singleVersionHint ? { hint: singleVersionHint } : {}),
+      amplifiers,
+      ...(nextCursor && continuationArgs
+        ? {
+            cursor: nextCursor,
+            hasMore: true,
+            nextAction: {
+              action: "sdl.delta.get",
+              args: continuationArgs,
+            },
+          }
+        : {}),
+    };
     return attachRawContext(response, { fileIds }) as DeltaGetResponse;
   };
 

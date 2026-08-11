@@ -699,26 +699,46 @@ Paginate additional symbols that exceeded the slice budget. Only use when the sl
 
 ### `sdl.delta.get`
 
-Compute a delta pack between two ledger versions, showing changed symbols and blast radius.
+Compute a delta pack between ledger versions, showing changed symbols and blast radius.
 
 **Parameters:**
 
-| Parameter     | Type                                 | Required | Description                           |
-| ------------- | ------------------------------------ | -------- | ------------------------------------- |
-| `repoId`      | `string`                             | Yes      | Repository identifier                 |
-| `fromVersion` | `string`                             | Yes      | Base version ID                       |
-| `toVersion`   | `string`                             | Yes      | Target version ID                     |
-| `budget`      | `{ maxCards?, maxEstimatedTokens? }` | No       | Budget to constrain blast-radius work |
+| Parameter           | Type                                                | Required | Description |
+| ------------------- | --------------------------------------------------- | -------- | ----------- |
+| `repoId`          | `string`                                          | Yes      | Repository identifier |
+| `fromVersion`     | `string`                                          | No       | Base version ID; defaults to the previous ledger version |
+| `toVersion`       | `string`                                          | No       | Target version ID; defaults to the latest ledger version |
+| `cursor`          | `{ fromVersion, toVersion, offset }`              | No       | Exact version-bound cursor returned by a prior delta page |
+| `budget`          | `{ maxCards?, maxEstimatedTokens? }`              | No       | Budget that resolves the changed-symbol page size and constrains blast-radius work |
+| `preview`         | `boolean`                                         | No       | Return a fast changed-symbol count and sample instead of computing blast radius |
+| `previewSampleSize` | `integer`                                       | No       | Sample size when `preview: true` (0-200; default: 20) |
+
+When either version is omitted, SDL resolves it before computing the delta. The response materializes the resolved range as `delta.fromVersion` and `delta.toVersion`. With a single stored version, both resolve to that version and the delta is empty.
+
+Cursor values are exact: their `fromVersion` and `toVersion` must match the requested range after resolution, or the request fails. A normal delta page contains up to the resolved `budget.maxCards` changed symbols. When another page exists, the response includes `cursor`, `hasMore: true`, and a continuation `nextAction` for `sdl.delta.get`; all three are omitted on the final page.
+
+Preview is a count-and-sample preflight. It skips blast-radius computation and does not return or advertise paging controls.
 
 **Response includes:**
 
-- `delta` — changedSymbols (with changeType, signatureDiff, invariantDiff, sideEffectDiff), blastRadius (ranked by distance/signal: diagnostic|directDependent|graph|process, with fanInTrend), diagnosticsSummary, diagnosticSuspects, truncation, trimmedSet, spilloverHandle
+- `delta` — resolved version range; changedSymbols (with changeType, signatureDiff, invariantDiff, sideEffectDiff); blastRadius (ranked by distance/signal: diagnostic|directDependent|graph|process, with fanInTrend); diagnosticsSummary, diagnosticSuspects, truncation, trimmedSet, spilloverHandle
 - `amplifiers` — multipliers for dependent symbols (symbolId, growthRate, previous/current fan-in) that increase blast-radius scoring
+- On non-final normal pages: `cursor`, `hasMore: true`, and `nextAction`
 
-**Example:**
+**Examples:**
 
 ```json
-{ "repoId": "my-repo", "fromVersion": "v1", "toVersion": "v2" }
+{ "repoId": "my-repo" }
+```
+
+```json
+{
+  "repoId": "my-repo",
+  "fromVersion": "v1",
+  "toVersion": "v2",
+  "cursor": { "fromVersion": "v1", "toVersion": "v2", "offset": 20 },
+  "budget": { "maxCards": 20 }
+}
 ```
 
 ---
@@ -729,16 +749,18 @@ Assess PR-level risk from delta and blast radius, producing findings, impact ana
 
 **Parameters:**
 
-| Parameter       | Type      | Required | Description                                                   |
-| --------------- | --------- | -------- | ------------------------------------------------------------- |
-| `repoId`        | `string`  | Yes      | Repository identifier                                         |
-| `fromVersion`   | `string`  | Yes      | Base version ID                                               |
-| `toVersion`     | `string`  | Yes      | Target version ID                                             |
-| `riskThreshold` | `number`  | No       | Risk threshold 0-100 (raise to focus on highest-risk changes) |
+| Parameter       | Type                 | Required | Description |
+| --------------- | -------------------- | -------- | ----------- |
+| `repoId`        | `string`             | Yes      | Repository identifier |
+| `fromVersion`   | `string`             | Yes      | Base version ID |
+| `toVersion`     | `string`             | Yes      | Target version ID |
+| `riskThreshold` | `number`             | No       | Risk threshold 0-100 (raise to focus on highest-risk changes) |
+| `detail`        | `compact` \| `standard` \| `full` | No       | Response detail; compact and standard condense the analysis, while `full` retains findings and test recommendations |
 
 **Response includes:**
 
-- `analysis` — riskScore (0-100), riskLevel (low/medium/high), findings (type, severity, message, affectedSymbols), impactedSymbols, evidence, recommendedTests (type, description, targetSymbols, priority), changedSymbolsCount, blastRadiusCount
+- Compact `analysis` may include `topRisk` only when SDL can form one coherent canonical tuple: `target`, `reason`, and `recommendedVerification`. The verification must target the same symbol as the selected finding; SDL omits `topRisk` when no such match exists rather than pairing unrelated guidance.
+- Full `analysis` retains findings (type, severity, message, affectedSymbols), impactedSymbols, evidence, recommendedTests (type, description, targetSymbols, priority), changedSymbolsCount, and blastRadiusCount.
 - `escalationRequired` — whether the risk exceeds the threshold
 - `policyDecision` (optional) — decision, deniedReasons, auditHash
 

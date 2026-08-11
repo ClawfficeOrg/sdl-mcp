@@ -198,6 +198,7 @@ describe("PR Risk Analysis Tool", () => {
       fromVersion: "v1",
       toVersion: "v2",
       riskThreshold: 70,
+      detail: "full" as const,
     };
 
     const response = await handlePRRiskAnalysis(request);
