@@ -77,10 +77,23 @@ function projectChildValue(
   });
 }
 
-function errorMessage(step: Record<string, unknown>): string | undefined {
+function errorValue(step: Record<string, unknown>): unknown {
   if (typeof step.error === "string") return step.error;
-  if (isRecord(step.error) && typeof step.error.message === "string") {
-    return step.error.message;
+  if (
+    isRecord(step.error)
+    && typeof step.error.message === "string"
+    && typeof step.error.code === "string"
+    && typeof step.error.classification === "string"
+    && typeof step.error.retryable === "boolean"
+  ) {
+    // Preserve only the stable generic error fields; recovery remains once-only
+    // at the workflow-step level.
+    return {
+      message: step.error.message,
+      code: step.error.code,
+      classification: step.error.classification,
+      retryable: step.error.retryable,
+    };
   }
   if (isRecord(step.result)) {
     if (typeof step.result.error === "string") return step.result.error;
@@ -189,8 +202,8 @@ function compactStep(
   out.fn = raw.fn;
   if (status !== "ok") out.status = status;
   if (status === "ok" && "result" in visible) out.result = result;
-  const message = status === "ok" ? undefined : errorMessage(raw);
-  if (message !== undefined) out.error = message;
+  const error = status === "ok" ? undefined : errorValue(raw);
+  if (error !== undefined) out.error = error;
   if (status !== "ok" && typeof raw.blockedByStep === "number") {
     out.blockedByStep = raw.blockedByStep;
   }

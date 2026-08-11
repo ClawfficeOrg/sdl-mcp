@@ -1,16 +1,28 @@
-import { after, before, describe, it } from "node:test";
 import assert from "node:assert";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { closeLadybugDb, getLadybugConn, initLadybugDb } from "../../dist/db/ladybug.js";
 import * as ladybugDb from "../../dist/db/ladybug-queries.js";
 import { beginGraphIntegrityVersion } from "../../dist/db/ladybug-derived-state.js";
-import { buildToolResponseEnvelope } from "../../dist/server.js";
+import { createGraphIntegrityExpectationFromManifest } from "../../dist/indexer/provider-first/persisted-graph-integrity.js";
+import { executeWorkflow } from "../../dist/code-mode/workflow-executor.js";
+import type { ParsedWorkflowRequest } from "../../dist/code-mode/workflow-parser.js";
+import type { CodeModeConfig } from "../../dist/config/types.js";
+import type { ActionMap } from "../../dist/gateway/router.js";
+import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
+import { buildToolResponseEnvelope, MCPServer } from "../../dist/server.js";
 import { handleSliceSpilloverGet } from "../../dist/mcp/tools/slice.js";
-import { SliceSpilloverGetResponseSchema } from "../../dist/mcp/tools.js";
+import {
+  SliceSpilloverGetRequestSchema,
+  SliceSpilloverGetResponseSchema,
+} from "../../dist/mcp/tools.js";
 
 function toStructuredContent(
   toolName: string,
@@ -26,6 +38,7 @@ const TEST_DB_PATH = join(tmpdir(), ".lbug-mcp-slice-spillover-signature-test-db
 
 describe("MCP slice spillover signatures", () => {
   const repoId = "mcp-slice-spillover-signature-repo";
+  const publicRepoId = `${repoId}-public`;
   const symbolId = "sym-rust-spillover";
   const spilloverHandle = "spillover-handle-1";
 
@@ -109,6 +122,38 @@ describe("MCP slice spillover signatures", () => {
         },
       ]),
     });
+
+    const publicVersionId = "public-v1";
+    await ladybugDb.upsertRepo(conn, {
+      repoId: publicRepoId,
+      rootPath: "C:/public-repo",
+      configJson: JSON.stringify({ policy: {} }),
+      createdAt: now,
+    });
+    await ladybugDb.createVersion(conn, {
+      versionId: publicVersionId,
+      repoId: publicRepoId,
+      createdAt: now,
+      reason: "public missing-handle probe",
+      prevVersionHash: null,
+      versionHash: null,
+    });
+    await ladybugDb.replaceGraphIntegrityManifestInTransaction(
+      conn,
+      publicRepoId,
+      { files: [], fileless: [] },
+    );
+    const publicExpectation = createGraphIntegrityExpectationFromManifest(
+      [],
+      [],
+    );
+    await beginGraphIntegrityVersion(
+      conn,
+      publicRepoId,
+      publicVersionId,
+      publicExpectation.digest,
+      true,
+    );
   });
 
   after(async () => {
@@ -139,5 +184,143 @@ describe("MCP slice spillover signatures", () => {
       returns: "Result<i64>",
       generics: ["T"],
     });
+  });
+
+  it("returns one stable missing-handle error through public and workflow boundaries", async () => {
+    const missingHandle = "missing-spillover-handle";
+    const expectedError = {
+      error: {
+        message: `Spillover handle not found: ${missingHandle}`,
+        code: "NOT_FOUND",
+        classification: "not_found",
+        retryable: false,
+      },
+    };
+
+    await assert.rejects(
+      handleSliceSpilloverGet({ repoId, spilloverHandle: missingHandle }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.name, "NotFoundError");
+        assert.equal(
+          (error as Error & { code?: string }).code,
+          "NOT_FOUND",
+        );
+        assert.equal(error.message, expectedError.error.message);
+        return true;
+      },
+    );
+
+    const server = new MCPServer();
+    server.registerTool(
+      "sdl.slice.spillover.get",
+      "Get slice spillover",
+      SliceSpilloverGetRequestSchema,
+      handleSliceSpilloverGet,
+      undefined,
+      undefined,
+      SliceSpilloverGetResponseSchema,
+    );
+    const client = new Client({
+      name: "spillover-test-client",
+      version: "1.0.0",
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.getServer().connect(serverTransport),
+    ]);
+
+    try {
+      const catalog = await client.listTools();
+      const advertised = catalog.tools.find(
+        (tool) => tool.name === "sdl.slice.spillover.get",
+      );
+      assert.ok(advertised?.outputSchema);
+      const advertisedProperties = (
+        advertised.outputSchema as {
+          properties?: Record<string, {
+            type?: string;
+            required?: string[];
+          }>;
+        }
+      ).properties;
+      assert.equal(advertisedProperties?.error?.type, "object");
+      assert.deepEqual(advertisedProperties?.error?.required, ["message"]);
+
+      const response = await client.callTool({
+        name: "sdl.slice.spillover.get",
+        arguments: { repoId: publicRepoId, spilloverHandle: missingHandle },
+      });
+      assert.equal(response.isError, true);
+      assert.deepEqual(response.structuredContent, expectedError);
+      assert.equal(
+        SliceSpilloverGetResponseSchema.safeParse(
+          response.structuredContent,
+        ).success,
+        false,
+      );
+
+      const workflowRequest: ParsedWorkflowRequest = {
+        repoId: publicRepoId,
+        onError: "stop",
+        steps: [{
+          fn: "sliceSpilloverGet",
+          action: "slice.spillover.get",
+          args: { repoId: publicRepoId, spilloverHandle: missingHandle },
+        }],
+      };
+      const actionMap: ActionMap = {
+        "slice.spillover.get": {
+          schema: SliceSpilloverGetRequestSchema,
+          handler: async (args) =>
+            handleSliceSpilloverGet(SliceSpilloverGetRequestSchema.parse(args)),
+        },
+      };
+      const workflowConfig: CodeModeConfig = {
+        enabled: true,
+        exclusive: false,
+        maxWorkflowSteps: 20,
+        maxWorkflowTokens: 50_000,
+        maxWorkflowDurationMs: 60_000,
+        ladderValidation: "warn",
+        etagCaching: false,
+      };
+      const executed = await executeWorkflow(
+        workflowRequest,
+        actionMap,
+        workflowConfig,
+      );
+      const [failedStep] = executed.results;
+      assert.equal(failedStep?.status, "error");
+      assert.equal(failedStep?.result, null);
+      assert.deepEqual(failedStep?.error, expectedError.error);
+
+      const workflow = projectToolResultForModelContent(
+        "sdl.workflow",
+        executed,
+        {
+          repoId: publicRepoId,
+          detail: "compact",
+          steps: workflowRequest.steps,
+        },
+      ) as { results: Array<Record<string, unknown>> };
+      assert.deepEqual(workflow.results[0], {
+        fn: "sliceSpilloverGet",
+        status: "error",
+        error: expectedError.error,
+      });
+      const serializedFailure = JSON.stringify(workflow.results[0]);
+      assert.equal(
+        (serializedFailure.match(/Spillover handle not found/g) ?? []).length,
+        1,
+      );
+      assert.equal("failureTrace" in workflow.results[0]!, false);
+      assert.equal("fallbackTools" in workflow.results[0]!, false);
+    } finally {
+      await client.close();
+      await server.getServer().close();
+    }
   });
 });

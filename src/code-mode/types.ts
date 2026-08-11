@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { McpErrorDetail } from "../mcp/errors.js";
 import {
   ProjectionRequestOptionShape,
   withProjectionRequestOptions,
@@ -100,8 +101,8 @@ export interface WorkflowStepResult {
   durationMs: number;
   /** Outcome status */
   status: WorkflowStepStatus;
-  /** Error message if status is "error" */
-  error?: string;
+  /** Error message or canonical typed MCP detail if status is "error" */
+  error?: string | McpErrorDetail;
   /** Suggested fallback action names from catalog when this step failed */
   fallbackTools?: string[];
   /** Failed/skipped prior step that blocked this step under onError:"continue" */

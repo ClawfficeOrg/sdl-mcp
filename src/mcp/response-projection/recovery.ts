@@ -649,3 +649,61 @@ export const _recoveryValidationTesting = {
     return { invalidRecoveryCount };
   },
 };
+
+/**
+ * Build the existing Code Mode paging call for a truncated hot-path response.
+ * The exclusive recovery boundary validates this candidate against the live
+ * retrieve schema before delivery.
+ */
+export function buildHotPathPagingRecovery(
+  requestArgs: Readonly<Record<string, unknown>>,
+  result: Readonly<Record<string, unknown>>,
+): RecoveryActionCall | undefined {
+  const actionArgs = isRecord(requestArgs.args) ? requestArgs.args : requestArgs;
+  const repoId = typeof requestArgs.repoId === "string"
+    ? requestArgs.repoId
+    : typeof actionArgs.repoId === "string"
+      ? actionArgs.repoId
+      : undefined;
+  const identifiersToFind = Array.isArray(actionArgs.identifiersToFind)
+    ? actionArgs.identifiersToFind.filter(
+      (item): item is string => typeof item === "string" && item.length > 0,
+    )
+    : [];
+  const symbolId = typeof actionArgs.symbolId === "string"
+    ? actionArgs.symbolId
+    : undefined;
+  const symbolRef = isRecord(actionArgs.symbolRef)
+    ? actionArgs.symbolRef
+    : undefined;
+  if (!repoId || identifiersToFind.length === 0 || (!symbolId && !symbolRef)) {
+    return undefined;
+  }
+
+  const requestedLines = typeof actionArgs.maxLines === "number"
+    ? Math.trunc(actionArgs.maxLines)
+    : 120;
+  const expectedLines = Math.max(1, Math.min(1_000, requestedLines));
+  const range = isRecord(result.range) ? result.range : {};
+  const nestedEnd = isRecord(range.end) ? range.end : {};
+  const endLine = typeof range.endLine === "number"
+    ? range.endLine
+    : typeof nestedEnd.line === "number"
+      ? nestedEnd.line
+      : undefined;
+
+  return {
+    action: "sdl.retrieve",
+    args: {
+      repoId,
+      op: "codeNeedWindow",
+      args: {
+        ...(symbolId ? { symbolId } : { symbolRef }),
+        reason: "Continue the truncated hot-path result.",
+        expectedLines,
+        identifiersToFind,
+        ...(endLine !== undefined ? { cursor: endLine + 1 } : {}),
+      },
+    },
+  };
+}

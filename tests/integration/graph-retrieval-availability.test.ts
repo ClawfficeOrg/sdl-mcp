@@ -30,6 +30,9 @@ import {
 } from "../../dist/mcp/tools/symbol.js";
 import { SymbolSearchRequestSchema } from "../../dist/mcp/tools.js";
 import { assertGraphRetrievalAvailable } from "../../dist/services/graph-retrieval-availability.js";
+import {
+  projectToolResultForModelContent,
+} from "../../dist/mcp/context-response-projection.js";
 
 describe("graph retrieval availability", { concurrency: 1 }, () => {
   const root = mkdtempSync(join(tmpdir(), "sdl-graph-retrieval-"));
@@ -230,6 +233,21 @@ describe("graph retrieval availability", { concurrency: 1 }, () => {
         actionMap,
       );
       assert.match(JSON.stringify(retrieved), /alpha/);
+      const projected = projectToolResultForModelContent(
+        "sdl.retrieve",
+        retrieved,
+        {
+          repoId,
+          op: "symbolSearch",
+          args: { query: "alpha", semantic: false, limit: 5 },
+          detail: "compact",
+        },
+      );
+      assert.doesNotMatch(
+        JSON.stringify(projected),
+        /GRAPH_RETRIEVAL_UNAVAILABLE|graph retrieval is unavailable/i,
+        repoId,
+      );
     }
   });
 

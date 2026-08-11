@@ -49,11 +49,7 @@ describe("context-response-projection", () => {
     assert.deepEqual(projected, {
       status: "complete",
       taskType: "explain",
-      retrieval: result.retrieval,
       evidence: result.evidence,
-      edges: [],
-      omitted: result.omitted,
-      nextActions: [],
     });
 
     const accounting = projectResultForUsageAccounting(

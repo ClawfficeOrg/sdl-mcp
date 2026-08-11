@@ -1560,11 +1560,14 @@ const CardWithETagSchema = SymbolCardSchema.extend({
 // Wire compaction omits provider metadata that is not present on every card.
 const WireCardWithETagSchema = CardWithETagSchema.extend({
   repoId: z.string().min(1).optional(),
+  exported: z.boolean().optional(),
   signature: SymbolSignatureSchema.extend({
     name: z.string().optional(),
   }).optional(),
   etag: z.string().optional(),
-  version: SymbolCardVersionSchema.optional(),
+  version: SymbolCardVersionSchema.extend({
+    astFingerprint: z.string().optional(),
+  }).optional(),
 });
 
 // Batch card response (when symbolIds/symbolRefs used)
@@ -1836,6 +1839,11 @@ const ProjectedGraphSliceSchema = GraphSliceSchema.pick({
   truncation: ProjectedSliceTruncationSchema.optional(),
 });
 
+const CompactSliceNextActionSchema = z.object({
+  id: z.string(),
+  args: z.record(z.string(), z.unknown()),
+});
+
 export const SliceBuildResponseSchema = z.union([
   z.object({
     sliceHandle: z.string(),
@@ -1879,6 +1887,8 @@ export const SliceBuildResponseSchema = z.union([
       })
       .optional(),
   }),
+  z.object({ nextAction: CompactSliceNextActionSchema }),
+  z.object({ sliceHandle: z.string() }),
   NotModifiedResponseSchema,
   SliceErrorResponseSchema,
 ]);
@@ -1982,8 +1992,9 @@ export const SliceSpilloverGetRequestSchema = withProjectionRequestOptions(z
 
 const StrictSpilloverSymbolCardSchema = SymbolCardSchema.strict();
 const ProjectedSpilloverSymbolCardSchema = SymbolCardSchema.extend({
-  repoId: SymbolCardSchema.shape.repoId.optional(),
-  version: SymbolCardSchema.shape.version.optional(),
+  repoId: WireCardWithETagSchema.shape.repoId,
+  exported: WireCardWithETagSchema.shape.exported,
+  version: WireCardWithETagSchema.shape.version,
 }).strict();
 
 export const SliceSpilloverGetResponseSchema = z.object({
@@ -2759,9 +2770,9 @@ const ContextEvidenceSchema = z.object({
   rung: ContextRungSchema,
   symbolId: z.string(),
   path: z.string(),
-  rank: z.number().int().positive(),
+  rank: z.number().int().positive().optional(),
   tier: z.union([z.literal(0), z.literal(1)]),
-  lanes: z.array(ContextLaneIdSchema),
+  lanes: z.array(ContextLaneIdSchema).optional(),
   content: z.unknown().optional(),
   ref: SessionContentRefSchema.optional(),
   unchanged: z.literal(true).optional(),
@@ -2823,7 +2834,7 @@ const AgentContextPayloadSchema = z.object({
       budget: z.number().int().nonnegative(),
       unavailable: z.number().int().nonnegative().optional(),
     }),
-    highestRanked: z.array(ContextOmittedItemSchema),
+    highestRanked: z.array(ContextOmittedItemSchema).optional(),
   }),
   nextActions: z.array(ContextLogicalActionSchema),
   sessionDelta: ContextSessionDeltaSchema.optional(),

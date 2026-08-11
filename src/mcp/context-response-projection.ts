@@ -632,6 +632,8 @@ function projectWorkflowStepResultForModel(
   const childToolName = typeof fn === "string"
     ? getWorkflowChildAction(fn)
     : "workflow";
+  // Workflow execution projects spillover children before the outer envelope.
+  if (childToolName === "slice.spillover.get") return result;
   const childProjectionRule = getResponseProjectionRule(childToolName);
   const childArgOptions = isRecord(args) ? modelOptionsFromArgs(args) : undefined;
   const fileOp = inferWorkflowFileOp(childToolName, result, args);

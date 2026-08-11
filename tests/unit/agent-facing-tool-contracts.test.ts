@@ -32,7 +32,10 @@ import {
   ValidationError,
   errorToMcpResponse,
 } from "../../dist/mcp/errors.js";
-import { buildValidatedRecoveryAction } from "../../dist/mcp/response-projection/recovery.js";
+import {
+  buildHotPathPagingRecovery,
+  buildValidatedRecoveryAction,
+} from "../../dist/mcp/response-projection/recovery.js";
 import {
   extractRuntimeObservability,
   projectRuntimeValue,
@@ -1400,6 +1403,41 @@ describe("agent-facing SDL tool contracts", () => {
     });
     assert.equal(mismatch.nextAction, undefined);
     assert.equal(mismatch.invalidRecoveryCount, 1);
+  });
+
+  it("builds only schema-shaped hot-path paging recovery", () => {
+    assert.deepEqual(
+      buildHotPathPagingRecovery(
+        {
+          repoId: "repo-a",
+          symbolId: "symbol-a",
+          identifiersToFind: ["alpha"],
+          maxLines: 40,
+        },
+        { range: { startLine: 1, endLine: 40 }, truncated: true },
+      ),
+      {
+        action: "sdl.retrieve",
+        args: {
+          repoId: "repo-a",
+          op: "codeNeedWindow",
+          args: {
+            symbolId: "symbol-a",
+            reason: "Continue the truncated hot-path result.",
+            expectedLines: 40,
+            identifiersToFind: ["alpha"],
+            cursor: 41,
+          },
+        },
+      },
+    );
+    assert.equal(
+      buildHotPathPagingRecovery(
+        { repoId: "repo-a", symbolId: "symbol-a", identifiersToFind: [] },
+        { truncated: true },
+      ),
+      undefined,
+    );
   });
 });
 

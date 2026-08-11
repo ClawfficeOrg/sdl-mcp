@@ -32,6 +32,7 @@ import {
 } from "./types.js";
 import type { ParsedWorkflowRequest } from "./workflow-parser.js";
 import { WorkflowBudgetTracker } from "./workflow-budget.js";
+import { errorToMcpResponse, type McpErrorDetail } from "../mcp/errors.js";
 import { tokenAccumulator } from "../mcp/token-accumulator.js";
 import type {
   EffectiveProjectionRequestOptions,
@@ -549,7 +550,9 @@ export async function executeWorkflow(
       const blocker = findBlockingDependency(step, stepResults);
       if (blocker) {
         const blockedByError =
-          blocker.error ??
+          (typeof blocker.error === "string"
+            ? blocker.error
+            : blocker.error?.message) ??
           blocker.failureTrace?.message ??
           `Step ${blocker.stepIndex} ended with status ${blocker.status}`;
         const message = `Skipped: step ${i} depends on failed step ${blocker.stepIndex} (${blocker.fn}).`;
@@ -900,6 +903,16 @@ export async function executeWorkflow(
           ? meta.fallbacks
           : undefined);
         const errorDetails = failureDetailsFrom(error);
+        // Preserve the canonical public detail for typed domain errors while
+        // retaining Task 7 string errors for validation and unexpected failures.
+        const publicError = errorToMcpResponse(error).error;
+        const workflowError = (
+          publicError !== null
+          && typeof publicError === "object"
+          && typeof (publicError as { code?: unknown }).code === "string"
+        )
+          ? publicError as McpErrorDetail
+          : errorMessage;
         stepResults.push({
           stepIndex: i,
           fn: step.fn,
@@ -907,7 +920,7 @@ export async function executeWorkflow(
           tokens: 0,
           durationMs: stepDuration,
           status: "error",
-          error: errorMessage,
+          error: workflowError,
           ...(fallbackTools ? { fallbackTools } : {}),
           failureTrace: failureTrace({
             stepIndex: i,

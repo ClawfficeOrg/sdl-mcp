@@ -818,3 +818,55 @@ describe("delta paging and PR-risk output schemas", () => {
     });
   });
 });
+
+describe("compact retrieval output schemas", () => {
+  it("accepts compact slice follow-up actions without duplicated handles", () => {
+    const response = requireSchema("SliceBuildResponseSchema");
+    response.parse({
+      nextAction: {
+        id: "slice.spillover.get",
+        args: { sliceHandle: "slice-a" },
+      },
+    });
+  });
+
+  it("accepts compact symbol cards without editing-only fields", () => {
+    const response = requireSchema("SymbolGetCardResponseSchema");
+    response.parse({
+      card: {
+        symbolId: "sym-a",
+        file: "src/a.ts",
+        range: { startLine: 1, startCol: 0, endLine: 2, endCol: 1 },
+        kind: "function",
+        name: "alpha",
+        version: { ledgerVersion: "v1" },
+      },
+    });
+  });
+
+  it("accepts compact context evidence without rank or lane telemetry", () => {
+    const response = requireSchema("AgentContextResponseSchema");
+    response.parse({
+      status: "complete",
+      taskType: "review",
+      retrieval: {
+        level: "hybrid",
+        lanes: [{ id: "exactIdentifier", available: true }],
+      },
+      evidence: [{
+        rung: "card",
+        symbolId: "sym-a",
+        path: "src/a.ts",
+        tier: 0,
+        content: { name: "alpha" },
+      }],
+      edges: [],
+      omitted: {
+        total: 0,
+        byReason: { budget: 0 },
+      },
+      nextActions: [],
+      etag: "etag-a",
+    });
+  });
+});
