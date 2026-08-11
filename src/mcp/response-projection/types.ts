@@ -23,7 +23,15 @@ export type RecoveryPolicy = "none" | "on-truncation";
 
 /** Stable identifiers let registries name behavior without coupling to functions. */
 export type ProjectorId = string;
-export type ObservabilityProfileId = string;
+export type ObservabilityProfileId =
+  | "standard"
+  | "status"
+  | "mutation"
+  | "artifact"
+  | "actionSearch"
+  | "repoStatus"
+  | "usage"
+  | "workflow";
 
 export interface ProjectionProfile {
   readonly projector: ProjectorId;
@@ -47,7 +55,7 @@ export interface ProjectionStats {
   readonly responseHandled: boolean;
   readonly recoveryEmitted: boolean;
   /** Internal-only count; omitted from model-facing payloads. */
-  readonly invalidRecoveryCount?: number;
+  readonly invalidRecoveryCount: number;
 }
 
 /** A fully materialized public recovery call. */
@@ -136,6 +144,14 @@ export interface ProjectionMeasurement {
   readonly rawTokens: number;
   readonly projectedBytes: number;
   readonly projectedTokens: number;
+  readonly invalidRecoveryCount: number;
+}
+
+export interface ProjectionOperationalStats {
+  readonly status?: string;
+  readonly resultStatus?: string;
+  readonly exitCode?: number;
+  readonly durationMs?: number;
 }
 
 export interface ModelProjectionDependencies {

@@ -1027,4 +1027,62 @@ describe("visible tool output", () => {
     assert.match(applyDisplay, /oldValue/);
     assert.match(applyDisplay, /newValue/);
   });
+
+  it("captures exact compact and full envelopes with observability disabled", () => {
+    const canonical = {
+      status: "complete",
+      taskType: "debug",
+      durationMs: 41,
+      exitCode: 0,
+      evidence: [{ symbolId: "symbol:control", rung: "card" }],
+      source: "canonical-source",
+    };
+    const capture = (detail: "compact" | "full") => {
+      const envelope = buildToolResponseEnvelope(
+        canonical,
+        null,
+        "",
+        "sdl.context",
+        { detail },
+      );
+      const structuredJson = JSON.stringify(envelope.structuredContent);
+      return {
+        contentText: envelope.content[0]?.text,
+        structuredJson,
+        structuredBytes: Buffer.byteLength(structuredJson, "utf8"),
+        keyOrder: Object.keys(envelope.structuredContent ?? {}),
+        isError: envelope.isError,
+        recovery: envelope.structuredContent?.nextAction,
+      };
+    };
+
+    const compactJson =
+      '{"status":"complete","taskType":"debug","evidence":[{"symbolId":"symbol:control","rung":"card"}]}';
+    const fullJson =
+      '{"status":"complete","taskType":"debug","durationMs":41,"exitCode":0,"evidence":[{"symbolId":"symbol:control","rung":"card"}],"source":"canonical-source"}';
+
+    assert.deepEqual(capture("compact"), {
+      contentText: "Sdl context\n\nstatus: complete\ntaskType: debug\nevidence: 1 item",
+      structuredJson: compactJson,
+      structuredBytes: Buffer.byteLength(compactJson, "utf8"),
+      keyOrder: ["status", "taskType", "evidence"],
+      isError: undefined,
+      recovery: undefined,
+    });
+    assert.deepEqual(capture("full"), {
+      contentText: "Sdl context\n\nstatus: complete\ntaskType: debug\nevidence: 1 item",
+      structuredJson: fullJson,
+      structuredBytes: Buffer.byteLength(fullJson, "utf8"),
+      keyOrder: [
+        "status",
+        "taskType",
+        "durationMs",
+        "exitCode",
+        "evidence",
+        "source",
+      ],
+      isError: undefined,
+      recovery: undefined,
+    });
+  });
 });

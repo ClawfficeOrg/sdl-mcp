@@ -19,6 +19,10 @@ import { safeJsonParse } from "../util/safeJson.js";
 import { z } from "zod";
 import type { ToolTimingDiagnostics } from "./timing-diagnostics.js";
 import type {
+  ProjectionOperationalStats,
+  ProjectionStats,
+} from "./response-projection/types.js";
+import type {
   ScipFailureDiagnostic,
   ScipGeneratedIndexDiagnostic,
 } from "../scip/diagnostics.js";
@@ -41,6 +45,8 @@ export interface ToolCallEvent {
   tokensUsed?: number;
   tokensSaved?: number;
   diagnostics?: ToolTimingDiagnostics;
+  projection?: ProjectionStats;
+  operationalStats?: Readonly<ProjectionOperationalStats>;
 }
 
 export interface CodeWindowDecisionEvent {
@@ -460,7 +466,20 @@ export function logToolCall(
     taskType: event.taskType,
   });
 
-  try { getObservabilityTap()?.toolCall(event); } catch (err) { logger.warn("observability tap error", { error: err instanceof Error ? err.message : String(err) }); }
+  try {
+    const delivery = getObservabilityTap()?.toolCall(event);
+    if (delivery) {
+      void Promise.resolve(delivery).catch((err) => {
+        logger.warn("observability tap error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  } catch (err) {
+    logger.warn("observability tap error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function logCodeWindowDecision(event: CodeWindowDecisionEvent): void {

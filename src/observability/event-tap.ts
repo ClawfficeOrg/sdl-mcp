@@ -163,7 +163,7 @@ export interface DbLatencyTapEvent {
 }
 
 export interface ObservabilityTap {
-  toolCall(event: ToolCallEvent): void;
+  toolCall(event: ToolCallEvent): void | Promise<void>;
   indexEvent(event: IndexEvent): void;
   semanticSearch(event: SemanticSearchTelemetryEvent): void;
   policyDecision(event: PolicyDecisionEvent): void;

@@ -17,7 +17,7 @@ import {
   runIndexRefreshAdmission,
   runToolDispatch,
 } from "./mcp/dispatch-limiter.js";
-import { logToolCall } from "./mcp/telemetry.js";
+import { logToolCall, type ToolCallEvent } from "./mcp/telemetry.js";
 import {
   buildCompactJsonSchema,
   zodSchemaToJsonSchema,
@@ -55,11 +55,15 @@ import {
   projectResultForUsageAccounting,
   resolveCompatibilityProjectionProfile,
 } from "./mcp/context-response-projection.js";
-import { getProjectionProfile } from "./mcp/response-projection/registry.js";
+import {
+  extractProjectionOperationalStats,
+  getProjectionProfile,
+} from "./mcp/response-projection/registry.js";
 import {
   ModelOutputBoundaryError,
   projectModelResponse,
 } from "./mcp/response-projection/projectors/index.js";
+import { measureProjectionValue } from "./mcp/response-projection/measure.js";
 import type {
   EffectiveProjectionRequestOptions,
   ModelOutputBoundaryErrorCode,
@@ -760,6 +764,33 @@ function combinedEnvelopeTokens(envelope: ToolResponseEnvelope): number {
   return estimateTokens(visibleText) + estimateTokens(structuredText);
 }
 
+type FinalProjectionFlags = Pick<
+  ProjectionStats,
+  "responseHandled" | "recoveryEmitted"
+>;
+
+function attachFinalProjectionStats(
+  sourceEnvelope: ToolResponseEnvelope,
+  finalEnvelope: ToolResponseEnvelope,
+  flags: FinalProjectionFlags,
+): ToolResponseEnvelope {
+  if (!sourceEnvelope.projectionStats) {
+    return finalEnvelope;
+  }
+  const finalMeasurement = measureProjectionValue(
+    finalEnvelope.structuredContent,
+  );
+  return attachProjectionStats(
+    finalEnvelope,
+    Object.freeze({
+      ...sourceEnvelope.projectionStats,
+      projectedBytes: finalMeasurement.bytes,
+      projectedTokens: finalMeasurement.tokens,
+      ...flags,
+    }),
+  );
+}
+
 function responseArtifactEnvelope(
   envelope: ToolResponseEnvelope,
   artifact: object,
@@ -773,16 +804,14 @@ function responseArtifactEnvelope(
     ],
     structuredContent: { ...artifact },
   };
-  return envelope.projectionStats
-    ? attachProjectionStats(
-        artifactEnvelope,
-        Object.freeze({
-          ...envelope.projectionStats,
-          responseHandled: true,
-          recoveryEmitted: true,
-        }),
-      )
-    : artifactEnvelope;
+  return attachFinalProjectionStats(
+    envelope,
+    artifactEnvelope,
+    {
+      responseHandled: true,
+      recoveryEmitted: true,
+    },
+  );
 }
 
 async function enforceProjectedResponseMode(
@@ -824,7 +853,14 @@ async function enforceProjectedResponseMode(
     repoId.length === 0 ||
     !envelope.structuredContent
   ) {
-    return buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true);
+    return attachFinalProjectionStats(
+      envelope,
+      buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true),
+      {
+        responseHandled: true,
+        recoveryEmitted: false,
+      },
+    );
   }
 
   try {
@@ -841,7 +877,14 @@ async function enforceProjectedResponseMode(
       requiresSameSession: sessionId !== undefined,
     });
     if (stored.responseMode !== "handle") {
-      return buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true);
+      return attachFinalProjectionStats(
+        envelope,
+        buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true),
+        {
+          responseHandled: true,
+          recoveryEmitted: false,
+        },
+      );
     }
 
     if (shouldStore) {
@@ -869,18 +912,32 @@ async function enforceProjectedResponseMode(
       },
       nextAction,
     };
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Inline response too large. Retrieve the sanitized response artifact with response.get.",
-        },
-      ],
-      structuredContent,
-      isError: true,
-    };
+    return attachFinalProjectionStats(
+      envelope,
+      {
+        content: [
+          {
+            type: "text",
+            text: "Inline response too large. Retrieve the sanitized response artifact with response.get.",
+          },
+        ],
+        structuredContent,
+        isError: true,
+      },
+      {
+        responseHandled: true,
+        recoveryEmitted: true,
+      },
+    );
   } catch {
-    return buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true);
+    return attachFinalProjectionStats(
+      envelope,
+      buildBoundaryFailureEnvelope("RESPONSE_HANDLING_FAILED", true),
+      {
+        responseHandled: true,
+        recoveryEmitted: false,
+      },
+    );
   }
 }
 
@@ -1209,6 +1266,7 @@ export class MCPServer {
             // audit, and usage. Only the model projection removes private fields.
             const responseProcessingStartedAt = timer.start();
             const canonicalResult = result;
+            const handlerDurationMs = Date.now() - start;
             let tokensUsedForObs: number | undefined;
             let tokensSavedForObs: number | undefined;
             let deliveredTokenCount: number | undefined;
@@ -1415,14 +1473,14 @@ export class MCPServer {
               }
             }
 
-            const toolCallEvent = {
+            const toolCallEvent: ToolCallEvent = {
               tool: toolName,
               request: normalizedArgs as Record<string, unknown>,
               response: responseForDeliveryAudit(
                 canonicalResult as Record<string, unknown>,
                 responseEnvelope,
               ),
-              durationMs: Date.now() - start,
+              durationMs: handlerDurationMs,
               repoId,
               symbolId,
               clientKey: toolContext.clientKey,
@@ -1431,6 +1489,10 @@ export class MCPServer {
               tokensSaved: tokensSavedForObs,
               diagnostics: extractTimingDiagnostics(responseForProjection),
               projection: responseEnvelope.projectionStats,
+              operationalStats: extractProjectionOperationalStats(
+                tool.projectionProfile,
+                canonicalResult,
+              ),
             };
             logToolCall(toolCallEvent, {
               persistAudit: writeReady,
@@ -1448,6 +1510,20 @@ export class MCPServer {
             const responseForLog = includeDiagnostics
               ? attachTimingDiagnostics(errorResponse, timer.snapshot())
               : errorResponse;
+            // Project and finalize the error before observability sees it.
+            const errorEnvelope = buildToolResponseEnvelope(
+              responseForLog,
+              null,
+              "",
+              toolName,
+              normalizedArgs as Record<string, unknown>,
+              responseForLog,
+              true,
+              tool.projectionProfile,
+              projectionOptions,
+              this.responseProjectionBoundaryOverrides,
+            );
+            errorEnvelope.isError = true;
             logToolCall({
               tool: toolName,
               request: normalizedArgs as Record<string, unknown>,
@@ -1458,26 +1534,11 @@ export class MCPServer {
               clientKey: toolContext.clientKey,
               taskType: toolContext.taskType,
               diagnostics: extractTimingDiagnostics(responseForLog),
+              projection: errorEnvelope.projectionStats,
             }, {
               persistAudit: writeReady,
             });
-            // Return projected error content instead of throwing so clients get
-            // the same human-first envelope shape as successful tool calls.
-            return {
-              ...buildToolResponseEnvelope(
-                responseForLog,
-                null,
-                "",
-                toolName,
-                normalizedArgs as Record<string, unknown>,
-                responseForLog,
-                true,
-                tool.projectionProfile,
-                projectionOptions,
-                this.responseProjectionBoundaryOverrides,
-              ),
-              isError: true,
-            };
+            return errorEnvelope;
           }
         } catch (outerError) {
           process.stderr.write(

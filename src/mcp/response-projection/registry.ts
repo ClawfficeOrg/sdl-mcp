@@ -1,4 +1,8 @@
-import type { ProjectionProfile } from "./types.js";
+import type {
+  ObservabilityProfileId,
+  ProjectionOperationalStats,
+  ProjectionProfile,
+} from "./types.js";
 
 /**
  * Canonical actions that can reach a model through the flat MCP, Code Mode,
@@ -70,7 +74,7 @@ function profile(
   budgetClass: ProjectionProfile["budgetClass"],
   largeResponseStrategy: ProjectionProfile["largeResponseStrategy"],
   recoveryPolicy: ProjectionProfile["recoveryPolicy"],
-  observabilityProfile: string,
+  observabilityProfile: ProjectionProfile["observabilityProfile"],
 ): Readonly<ProjectionProfile> {
   return Object.freeze({
     projector,
@@ -298,6 +302,75 @@ export function canonicalActionName(actionOrToolName: string): string {
   return actionOrToolName.startsWith("sdl.")
     ? actionOrToolName.slice("sdl.".length)
     : actionOrToolName;
+}
+
+type ProjectionObservabilityExtractor = (
+  canonicalResult: Readonly<Record<string, unknown>>,
+) => Readonly<ProjectionOperationalStats> | undefined;
+
+function extractNamedOperationScalars(
+  canonicalResult: Readonly<Record<string, unknown>>,
+): Readonly<ProjectionOperationalStats> | undefined {
+  const stats: {
+    status?: string;
+    resultStatus?: string;
+    exitCode?: number;
+    durationMs?: number;
+  } = {};
+  if (typeof canonicalResult.status === "string") {
+    stats.status = canonicalResult.status;
+  }
+  if (typeof canonicalResult.resultStatus === "string") {
+    stats.resultStatus = canonicalResult.resultStatus;
+  }
+  if (
+    typeof canonicalResult.exitCode === "number" &&
+    Number.isFinite(canonicalResult.exitCode)
+  ) {
+    stats.exitCode = canonicalResult.exitCode;
+  }
+  if (
+    typeof canonicalResult.durationMs === "number" &&
+    Number.isFinite(canonicalResult.durationMs)
+  ) {
+    stats.durationMs = canonicalResult.durationMs;
+  }
+  return Object.keys(stats).length > 0 ? Object.freeze(stats) : undefined;
+}
+
+const PROJECTION_OBSERVABILITY_EXTRACTORS = Object.freeze({
+  standard: extractNamedOperationScalars,
+  status: extractNamedOperationScalars,
+  mutation: extractNamedOperationScalars,
+  artifact: extractNamedOperationScalars,
+  actionSearch: extractNamedOperationScalars,
+  repoStatus: extractNamedOperationScalars,
+  usage: extractNamedOperationScalars,
+  workflow: extractNamedOperationScalars,
+}) satisfies Readonly<
+  Record<ObservabilityProfileId, ProjectionObservabilityExtractor>
+>;
+
+/**
+ * Extract only profile-declared, allow-listed scalar operation statistics.
+ * Projectors and model-visible response construction never depend on this data.
+ */
+export function extractProjectionOperationalStats(
+  profile: Readonly<ProjectionProfile>,
+  canonicalResult: unknown,
+): Readonly<ProjectionOperationalStats> | undefined {
+  if (
+    typeof canonicalResult !== "object" ||
+    canonicalResult === null ||
+    Array.isArray(canonicalResult)
+  ) {
+    return undefined;
+  }
+  const extractor =
+    PROJECTION_OBSERVABILITY_EXTRACTORS[
+      profile.observabilityProfile as keyof typeof PROJECTION_OBSERVABILITY_EXTRACTORS
+    ];
+  return extractor?.(canonicalResult as Readonly<Record<string, unknown>>);
 }
 
 const WORKFLOW_ONLY_RECOVERY_ACTIONS = new Set<string>([
