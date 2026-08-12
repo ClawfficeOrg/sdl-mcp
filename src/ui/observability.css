@@ -1344,3 +1344,56 @@ body.layout-interacting {
   background: linear-gradient(135deg, transparent 50%, rgba(0, 240, 255, 0.22) 50%);
   pointer-events: none;
 }
+
+
+/* Tool-output aggregate health */
+[data-panel="toolOutput"] {
+  order: 12;
+  min-height: 0;
+}
+
+.tool-output-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tool-output-content[hidden] {
+  display: none;
+}
+
+.tool-output-empty {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.tool-output-table {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) repeat(9, auto);
+  gap: 4px 10px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.tool-output-table .th {
+  color: var(--dim);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 2px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tool-output-table .td {
+  color: var(--text);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tool-output-table .td-name {
+  color: var(--muted);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

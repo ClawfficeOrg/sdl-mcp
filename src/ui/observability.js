@@ -1,6 +1,8 @@
 // SDL-MCP Observability Dashboard
 // Vanilla ES module — no bundler. Pulls live data via SSE with REST fallback.
 
+import { buildToolOutputViewModel } from "./observability-tool-output.js";
+
 const state = {
   repoId: "sdl-mcp",
   token: "",
@@ -636,6 +638,71 @@ function updatePostIndex(p, audit) {
   }
 }
 
+function updateToolOutput(toolOutput) {
+  const panel = $('[data-panel="toolOutput"]');
+  if (!panel) return;
+
+  const view = buildToolOutputViewModel(toolOutput);
+  const noData = panelField(panel, "noData");
+  const content = panelField(panel, "content");
+  noData.hidden = view.hasData;
+  content.hidden = !view.hasData;
+
+  if (!view.hasData) {
+    setVal(panel, "reduction", "NO DATA");
+    return;
+  }
+
+  const summary = view.summary;
+  setVal(panel, "reduction", `${fmtPct(summary.reductionRatio * 100)} REDUCTION`);
+  setVal(panel, "calls", fmtNum(summary.calls));
+  setVal(panel, "errors", fmtNum(summary.errors));
+  setVal(panel, "handled", `${fmtNum(summary.handledCount)} / ${fmtNum(summary.calls)}`);
+  setVal(panel, "truncated", `${fmtNum(summary.truncatedCount)} / ${fmtNum(summary.calls)}`);
+  setVal(panel, "p50Tokens", fmtNum(summary.p50ProjectedTokens));
+  setVal(panel, "p95Tokens", fmtNum(summary.p95ProjectedTokens));
+  setVal(
+    panel,
+    "detail",
+    `C ${fmtNum(summary.detailCounts.compact)} · S ${fmtNum(summary.detailCounts.standard)} · F ${fmtNum(summary.detailCounts.full)}`,
+  );
+  setVal(
+    panel,
+    "recovery",
+    `${fmtNum(summary.recoveryEmittedCount)} emitted · ${fmtNum(summary.invalidRecoveryCount)} invalid`,
+  );
+
+  const table = panelField(panel, "perTool");
+  const headers = [
+    "TOOL",
+    "CALLS",
+    "P50",
+    "P95",
+    "REDUCE",
+    "HANDLED",
+    "TRUNC",
+    "DETAIL",
+    "ERR",
+    "RECOVERY",
+  ];
+  const cells = headers.map((header) => `<span class="th">${header}</span>`);
+  for (const row of view.rows) {
+    cells.push(
+      `<span class="td td-name" title="${escapeAttr(row.tool)}">${escapeHtml(row.tool)}</span>`,
+      `<span class="td">${fmtNum(row.calls)}</span>`,
+      `<span class="td">${fmtNum(row.p50ProjectedTokens)}</span>`,
+      `<span class="td">${fmtNum(row.p95ProjectedTokens)}</span>`,
+      `<span class="td">${fmtPct(row.reductionRatio * 100)}</span>`,
+      `<span class="td">${fmtNum(row.handledCount)}</span>`,
+      `<span class="td">${fmtNum(row.truncatedCount)}</span>`,
+      `<span class="td">C${fmtNum(row.detailCounts.compact)}/S${fmtNum(row.detailCounts.standard)}/F${fmtNum(row.detailCounts.full)}</span>`,
+      `<span class="td">${fmtNum(row.errors)}</span>`,
+      `<span class="td">${fmtNum(row.recoveryEmittedCount)}/${fmtNum(row.invalidRecoveryCount)}</span>`,
+    );
+  }
+  table.innerHTML = cells.join("");
+}
+
 // -------- Main snapshot apply --------
 function applySnapshot(snap) {
   if (!snap || typeof snap !== "object") return;
@@ -656,6 +723,7 @@ function applySnapshot(snap) {
     updatePpr(snap.ppr);
     updateResources(snap.resources, snap.uptimeMs);
     updateToolVolume(snap.toolVolume);
+    updateToolOutput(snap.toolOutput);
     updatePostIndex(snap.postIndexSession, snap.auditBuffer);
   } catch (err) {
     console.error("[observability] applySnapshot error:", err);

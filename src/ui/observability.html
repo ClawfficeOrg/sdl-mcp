@@ -318,6 +318,37 @@
         <div class="bar-list" data-field="perTool" aria-label="Per-tool calls"></div>
       </section>
 
+      <section class="panel panel-wide" data-panel="toolOutput" aria-label="Tool output">
+        <header class="panel-head">
+          <h2>TOOL OUTPUT</h2>
+          <span class="panel-sub" data-field="reduction">NO DATA</span>
+        </header>
+        <div class="tool-output-empty muted" data-field="noData">No tool-output metrics yet.</div>
+        <div class="tool-output-content" data-field="content" hidden>
+          <div class="kv-row">
+            <span class="kv-key">CALLS</span>
+            <span class="kv-val" data-field="calls">—</span>
+            <span class="kv-key">ERRORS</span>
+            <span class="kv-val" data-field="errors">—</span>
+            <span class="kv-key">HANDLED</span>
+            <span class="kv-val" data-field="handled">—</span>
+            <span class="kv-key">TRUNCATED</span>
+            <span class="kv-val" data-field="truncated">—</span>
+          </div>
+          <div class="kv-row">
+            <span class="kv-key">P50 TOKENS</span>
+            <span class="kv-val" data-field="p50Tokens">—</span>
+            <span class="kv-key">P95 TOKENS</span>
+            <span class="kv-val" data-field="p95Tokens">—</span>
+            <span class="kv-key">DETAIL</span>
+            <span class="kv-val" data-field="detail">—</span>
+            <span class="kv-key">RECOVERY</span>
+            <span class="kv-val" data-field="recovery">—</span>
+          </div>
+          <div class="tool-output-table" data-field="perTool" aria-label="Per-tool output health"></div>
+        </div>
+      </section>
+
       <section class="panel" data-panel="postIndex" aria-label="Post-index sessions">
         <header class="panel-head">
           <h2>POST-INDEX</h2>

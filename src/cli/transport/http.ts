@@ -143,6 +143,7 @@ const OBSERVABILITY_DASHBOARD_HOST = "127.0.0.1";
 const OBSERVABILITY_UI_PATHS = new Set([
   "/ui/observability",
   "/ui/observability.js",
+  "/ui/observability-tool-output.js",
   "/ui/observability.css",
   "/ui/viewer",
 ]);
@@ -631,6 +632,10 @@ function serveUiAsset(pathname: string, res: ServerResponse): boolean {
     },
     "/ui/observability.js": {
       file: "observability.js",
+      type: "application/javascript; charset=utf-8",
+    },
+    "/ui/observability-tool-output.js": {
+      file: "observability-tool-output.js",
       type: "application/javascript; charset=utf-8",
     },
     "/ui/observability.css": {

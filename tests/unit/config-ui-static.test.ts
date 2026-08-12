@@ -29,8 +29,26 @@ describe("config UI static assets", () => {
     assert.match(html, /href="\/ui\/config"/);
   });
 
+  it("declares one tool-output panel and its pure mapper module", async () => {
+    const html = await readUiAsset("observability.html");
+    const js = await readUiAsset("observability.js");
+
+    assert.equal((html.match(/data-panel="toolOutput"/g) ?? []).length, 1);
+    assert.match(html, /src="\/ui\/observability\.js"/);
+    assert.match(js, /from "\.\/observability-tool-output\.js"/);
+  });
+
   it("copies dependency-free UI assets into the built dist directory", async () => {
-    for (const asset of ["admin-shell.css", "config.css", "config.html", "config.js", "observability.html"]) {
+    for (const asset of [
+      "admin-shell.css",
+      "config.css",
+      "config.html",
+      "config.js",
+      "observability.css",
+      "observability.html",
+      "observability.js",
+      "observability-tool-output.js",
+    ]) {
       const built = await readBuiltUiAsset(asset);
       assert.ok(built.length > 0, `missing built asset ${asset}`);
     }
