@@ -110,6 +110,10 @@ jobs:
       - name: Check tool inventory sync
         run: npm run docs:tools:check
 
+      - name: Test tool output contract
+        run: npm run test:tool-output-contract
+
+
       - name: Security audit
         run: npm audit --audit-level=moderate
 

@@ -685,4 +685,20 @@ describe("release regression guards", () => {
       "snapshot writes should expose each transaction boundary",
     );
   });
+  it("runs the focused tool-output contract as a named CI gate", () => {
+    const packageSource = readSource("package.json");
+    const ciSource = readSource(".github/workflows/ci.yml");
+
+    assert.match(
+      packageSource,
+      /"test:tool-output-contract":\s*"[^"]*response-projection-inventory\.test\.ts[^"]*tool-output-doc-contract\.test\.ts[^"]*response-artifact-recovery\.test\.ts[^"]*agent-output-matrix\.test\.ts"/,
+      "package.json should expose the focused output-contract test command",
+    );
+    assert.match(
+      ciSource,
+      /- name:\s*Build all[\s\S]*?- name:\s*Check tool inventory[\s\S]*?- name:\s*Test tool output contract\s*\n\s*run:\s*npm run test:tool-output-contract[\s\S]*?- name:\s*Run tests/,
+      "CI should run the focused output-contract gate after build and inventory checks",
+    );
+  });
+
 });

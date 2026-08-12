@@ -7,6 +7,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import { z, type ZodType } from "zod";
 
+import { auditOutputContractObligations } from "../../scripts/generate-tool-inventory.ts";
+
 import {
   ACTION_DEFINITION_BY_ACTION,
   INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION,
@@ -14,6 +16,7 @@ import {
 } from "../../dist/code-mode/action-catalog.js";
 import { getActiveFnNameMap } from "../../dist/code-mode/manual-generator.js";
 import { projectToolResultForModelContent } from "../../dist/mcp/context-response-projection.js";
+import { OUTPUT_BUDGET_TOKEN_LIMITS } from "../../dist/mcp/response-projection/budgets.js";
 import { buildValidatedRecoveryAction } from "../../dist/mcp/response-projection/recovery.js";
 import {
   PROJECTION_PROFILE_ACTIONS,
@@ -25,6 +28,7 @@ import {
 import { registerTools } from "../../dist/mcp/tools/index.js";
 import {
   AGENT_OUTPUT_CASES,
+  AGENT_OUTPUT_TOKEN_BUDGETS,
   DEFERRED_FAMILY_ASSERTIONS,
 } from "../fixtures/response-projection/agent-output-cases.ts";
 
@@ -883,4 +887,189 @@ describe("response projection inventory", () => {
       assert.ok(entry.reason.trim().length > 0, entry.action);
     }
   });
+  it("audits every public action against the real output-contract inventories", () => {
+    const inventory = JSON.parse(
+      readFileSync(
+        join(process.cwd(), "docs/generated/tool-inventory.json"),
+        "utf8",
+      ),
+    ) as {
+      outputProfiles: Array<{
+        action: string;
+        projector: string;
+        budgetClass: keyof typeof OUTPUT_BUDGET_TOKEN_LIMITS;
+        budgetTokenLimit: number;
+        largeResponseStrategy: string;
+        recoveryPolicy: string;
+        observabilityProfile: string;
+      }>;
+    };
+    const markdown = readFileSync(
+      join(process.cwd(), "docs/generated/tool-inventory.md"),
+      "utf8",
+    );
+    const determinism = JSON.parse(
+      readFileSync(
+        join(process.cwd(), "tests/integration/determinism.fixtures.json"),
+        "utf8",
+      ),
+    ) as {
+      projectionCases: Array<{
+        action: string;
+        detail: string;
+        includeDiagnostics: boolean;
+      }>;
+    };
+
+    const schemaActions = new Set<string>(
+      Object.keys(INTERNAL_TRANSFORM_OUTPUT_SCHEMA_BY_ACTION),
+    );
+    for (const registration of [
+      ...capturePublicToolRegistrations(),
+      ...capturePublicToolRegistrations({ enabled: true, exclusive: true }),
+    ]) {
+      if (exhaustiveOutputSchema(registration)) {
+        schemaActions.add(canonicalFlatAction(registration.name));
+      }
+    }
+
+    const projectorActions = new Set<string>();
+    for (const fixture of AGENT_OUTPUT_CASES) {
+      assert.doesNotThrow(() =>
+        projectToolResultForModelContent(
+          fixture.action,
+          fixture.canonicalResultFactory(),
+          {
+            ...fixture.publicRequest,
+            detail: "compact",
+            includeDiagnostics: false,
+          },
+        )
+      );
+      projectorActions.add(fixture.action);
+    }
+
+    const generatedInventoryActions = new Set(
+      inventory.outputProfiles.map(({ action }) => action),
+    );
+    const documentationActions = new Set(
+      inventory.outputProfiles
+        .filter(({ action }) => markdown.includes(`| \`${action}\` |`))
+        .map(({ action }) => action),
+    );
+    const observabilityExtractorActions = new Set(
+      inventory.outputProfiles
+        .filter(({ observabilityProfile }) => observabilityProfile.length > 0)
+        .map(({ action }) => action),
+    );
+    const budgetStrategyActions = new Set(
+      inventory.outputProfiles
+        .filter(
+          ({ budgetClass, budgetTokenLimit }) =>
+            OUTPUT_BUDGET_TOKEN_LIMITS[budgetClass] === budgetTokenLimit,
+        )
+        .map(({ action }) => action),
+    );
+    const budgetFixtureActions = new Set(
+      inventory.outputProfiles
+        .filter(
+          ({ budgetClass, budgetTokenLimit }) =>
+            AGENT_OUTPUT_TOKEN_BUDGETS[budgetClass] === budgetTokenLimit,
+        )
+        .map(({ action }) => action),
+    );
+    const largeResponseStrategyActions = new Set(
+      inventory.outputProfiles
+        .filter(
+          ({ largeResponseStrategy }) =>
+            largeResponseStrategy === "truncate"
+            || largeResponseStrategy === "artifact",
+        )
+        .map(({ action }) => action),
+    );
+    const recoveryPolicyActions = new Set(
+      inventory.outputProfiles
+        .filter(
+          ({ recoveryPolicy }) =>
+            recoveryPolicy === "none" || recoveryPolicy === "on-truncation",
+        )
+        .map(({ action }) => action),
+    );
+    const compactDeterminismActions = new Set(
+      determinism.projectionCases
+        .filter(
+          ({ detail, includeDiagnostics }) =>
+            detail === "compact" && !includeDiagnostics,
+        )
+        .map(({ action }) => action),
+    );
+    const fullDeterminismActions = new Set(
+      determinism.projectionCases
+        .filter(
+          ({ detail, includeDiagnostics }) =>
+            detail === "full" && !includeDiagnostics,
+        )
+        .map(({ action }) => action),
+    );
+
+    const inventories = {
+      profileRegistryActions: new Set(Object.keys(PROJECTION_PROFILE_REGISTRY)),
+      generatedInventoryActions,
+      fixtureActions: new Set(
+        AGENT_OUTPUT_CASES.map(({ action }) => action),
+      ),
+      compactDeterminismActions,
+      fullDeterminismActions,
+      observabilityExtractorActions,
+      budgetStrategyActions,
+      budgetFixtureActions,
+      largeResponseStrategyActions,
+      recoveryPolicyActions,
+      schemaActions,
+      projectorActions,
+      documentationActions,
+    };
+    const diagnostics = derivePublicActions().flatMap((action) =>
+      auditOutputContractObligations(action, inventories)
+    );
+
+    assert.deepEqual(diagnostics, []);
+  });
+
+  it("reports every missing obligation for a synthetic contributor action", () => {
+    const action = "synthetic.newAction";
+    const empty = new Set<string>();
+    const diagnostics = auditOutputContractObligations(action, {
+      profileRegistryActions: empty,
+      generatedInventoryActions: empty,
+      fixtureActions: empty,
+      compactDeterminismActions: empty,
+      fullDeterminismActions: empty,
+      observabilityExtractorActions: empty,
+      budgetStrategyActions: empty,
+      budgetFixtureActions: empty,
+      largeResponseStrategyActions: empty,
+      recoveryPolicyActions: empty,
+      schemaActions: empty,
+      projectorActions: empty,
+      documentationActions: empty,
+    });
+
+    assert.deepEqual(diagnostics, [
+      "synthetic.newAction: missing profile registry entry",
+      "synthetic.newAction: missing generated inventory row",
+      "synthetic.newAction: missing agent-output fixture",
+      "synthetic.newAction: missing compact determinism entry",
+      "synthetic.newAction: missing full determinism entry",
+      "synthetic.newAction: missing observability extractor",
+      "synthetic.newAction: missing budget strategy",
+      "synthetic.newAction: missing budget fixture",
+      "synthetic.newAction: missing large-response strategy",
+      "synthetic.newAction: missing recovery policy",
+      "synthetic.newAction: missing output schema",
+      "synthetic.newAction: missing projector",
+      "synthetic.newAction: missing documentation row",
+    ]);
+  });
+
 });

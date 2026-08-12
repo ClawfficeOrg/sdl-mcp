@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-31T23:43:58.664Z",
+  "generatedAt": "2026-08-12T03:39:29.280Z",
   "counts": {
     "flatTools": 36,
     "universalTools": 2,
@@ -9,7 +9,8 @@
     "gatewayModeTotal": 6,
     "gatewayLegacyModeTotal": 42,
     "codeModeExclusiveTotal": 7,
-    "allFlatAndCodeModeActions": 43
+    "allFlatAndCodeModeActions": 43,
+    "outputProfiles": 49
   },
   "flatToolNames": [
     "sdl.agent.feedback",
@@ -66,5 +67,448 @@
     "sdl.code",
     "sdl.query",
     "sdl.repo"
+  ],
+  "outputProfiles": [
+    {
+      "action": "action.search",
+      "projector": "status",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "agent.feedback",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "agent.feedback.query",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "buffer.checkpoint",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "buffer.push",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "buffer.status",
+      "projector": "generic",
+      "budgetClass": "small",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "status",
+      "budgetTokenLimit": 500
+    },
+    {
+      "action": "code.getHotPath",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "code.getSkeleton",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "code.needWindow",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "context",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "dataFilter",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "dataMap",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "dataPick",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "dataSort",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "dataTemplate",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "delta.get",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "file",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "file.read",
+      "projector": "runtime",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "file.write",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "index.refresh",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "info",
+      "projector": "generic",
+      "budgetClass": "small",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "status",
+      "budgetTokenLimit": 500
+    },
+    {
+      "action": "manual",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "memory.query",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "memory.remove",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "memory.store",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "memory.surface",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "policy.get",
+      "projector": "generic",
+      "budgetClass": "small",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 500
+    },
+    {
+      "action": "policy.set",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "pr.risk.analyze",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "repo.overview",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "repo.register",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "repo.status",
+      "projector": "repoStatus",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "status",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "repo.unregister",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "response.get",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "retrieve",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "runtime.execute",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "runtime.queryOutput",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "search.edit",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "semantic.enrichment.refresh",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "semantic.enrichment.status",
+      "projector": "generic",
+      "budgetClass": "small",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "status",
+      "budgetTokenLimit": 500
+    },
+    {
+      "action": "slice.build",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "slice.refresh",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "slice.spillover.get",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "symbol.edit",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "mutation",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "symbol.getCard",
+      "projector": "generic",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "symbol.search",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "usage.stats",
+      "projector": "usage",
+      "budgetClass": "compact",
+      "largeResponseStrategy": "truncate",
+      "recoveryPolicy": "none",
+      "observabilityProfile": "usage",
+      "budgetTokenLimit": 1000
+    },
+    {
+      "action": "workflow",
+      "projector": "workflow",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "workflow",
+      "budgetTokenLimit": 2000
+    },
+    {
+      "action": "workflowContinuationGet",
+      "projector": "generic",
+      "budgetClass": "standard",
+      "largeResponseStrategy": "artifact",
+      "recoveryPolicy": "on-truncation",
+      "observabilityProfile": "standard",
+      "budgetTokenLimit": 2000
+    }
   ]
 }
