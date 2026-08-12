@@ -112,6 +112,7 @@ describe("response-projection contracts", () => {
       rawTokens: estimateTokens(canonical),
       projectedBytes: Buffer.byteLength(projectedCanonical, "utf8"),
       projectedTokens: estimateTokens(projectedCanonical),
+      invalidRecoveryCount: 0,
     });
     assert.deepEqual(input, original);
   });
