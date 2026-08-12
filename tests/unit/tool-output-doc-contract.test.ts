@@ -50,6 +50,24 @@ function readInventoryRows(): readonly OutputProfileInventoryRow[] {
 }
 
 describe("tool output documentation contract", () => {
+  it("pins generated inventory outputs to LF across platform checkouts", () => {
+    const attributes = new Set(
+      readFileSync(join(process.cwd(), ".gitattributes"), "utf8").split(
+        /\r?\n/u,
+      ),
+    );
+
+    for (const path of [
+      "/docs/generated/tool-inventory.json",
+      "/docs/generated/tool-inventory.md",
+    ]) {
+      assert.ok(
+        attributes.has(`${path} text eol=lf`),
+        `${path} must remain LF-stable for byte-exact inventory checks`,
+      );
+    }
+  });
+
   it("extracts literal registrations through supported AST call forms", () => {
     const source = `
       function registerTools(server: unknown): void {

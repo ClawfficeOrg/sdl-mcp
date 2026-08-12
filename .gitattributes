@@ -1,5 +1,9 @@
 /.gitattributes text eol=lf
 
+# Keep generated inventory docs byte-stable for exact cross-platform checks.
+/docs/generated/tool-inventory.json text eol=lf
+/docs/generated/tool-inventory.md text eol=lf
+
 # Git LFS tracking for large model files
 models/**/*.onnx filter=lfs diff=lfs merge=lfs -text
 
