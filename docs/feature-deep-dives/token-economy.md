@@ -129,6 +129,14 @@ Session-scoped features intentionally vary by delivery history. Determinism fixt
 
 ---
 
+## Projection measurements
+
+Compact-default responses preserve decision-relevant fields and send large material behind validated handles. The usage dashboard compares raw-to-projected response size, reports the profile budget, and shows the number of handles, truncations, and recoveries.
+
+Inspect `p50`, `p95`, and reduction by action and profile before changing a budget. Inspect handle, truncation, and recovery counts together: a lower projected size is not a win if callers repeatedly need to recover omitted material. The profile registry owns the response class; the canonical budget map owns its token limit.
+
+Operational measurements do not belong in default model context because they vary by call and weaken prompt-cache reuse. Use `includeDiagnostics: true` only for diagnosis, or inspect persisted observability data outside the ordinary response path.
+
 ## Related Docs
 
 - [Code Mode](./code-mode.md)

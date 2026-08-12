@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- **Model-facing tool-output contract**: Added deterministic profile projection for compact, standard, and full responses, explicit diagnostic opt-in, combined response budgets, sanitized artifact handles, and validated recovery. Large reads and results return handles when their projected payload exceeds the inline budget.
+
+### Changed
+
+- **Output-contract migration**: Replace repo.status `detail:"minimal"` with `detail:"compact"`; minimal is invalid. Omitted `file.read` `responseMode` now parses as `auto` instead of former `inline`. Small reads remain inline, and large reads may return handles. Use `detail:"full"` when compact omits a semantic field and `includeDiagnostics: true` only for diagnosis.
+
 ## [0.13.3] - 2026-08-08
 
 ### Added

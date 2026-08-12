@@ -13,6 +13,7 @@ Use this page to choose the shortest path to the SDL-MCP documentation you need.
 
 - [MCP Tools Reference](./mcp-tools-reference.md): canonical MCP request, response, and workflow guidance.
 - [Generated Tool Inventory](./generated/tool-inventory.md): current registered tools and mode counts.
+- [Tool Output Contract](./tool-output-contract.md): model-facing response profiles, budgets, recovery, and diagnostics.
 - [Code Mode](./feature-deep-dives/code-mode.md): compact discovery, retrieval, file, and workflow surfaces.
 - [Agent Workflows](./agent-workflows.md): practical retrieval and editing workflows.
 - [CLI Tool Access](./feature-deep-dives/cli-tool-access.md): direct action aliases, output formats, and scripting guidance.

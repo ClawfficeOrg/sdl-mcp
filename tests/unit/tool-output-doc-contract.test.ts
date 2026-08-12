@@ -305,4 +305,99 @@ describe("tool output documentation contract", () => {
       );
     }
   });
+
+  it("keeps each tool-output documentation responsibility in its owner file", () => {
+    const guide = readFileSync(
+      join(process.cwd(), "docs/tool-output-contract.md"),
+      "utf8",
+    );
+    for (const marker of [
+      "## Compact response",
+      "## Full response",
+      "## Diagnostic response",
+      "## Handled response",
+      "## Error response",
+      "## Author checklist",
+      "Action: `sdl.repo.status`",
+      "Action: `sdl.context`",
+      "\"detail\": \"compact\"",
+      "\"detail\": \"full\"",
+      "\"includeDiagnostics\": true",
+      "CONTEXT_BUDGET_TOO_SMALL",
+      "\"isError\": true",
+      "minimumTokens",
+      "profile checklist",
+      "budget owner",
+      "recovery validation",
+      "dual-channel rule",
+      "observability separation",
+      "determinism fixture",
+    ]) {
+      assert.ok(guide.includes(marker), `missing guide marker: ${marker}`);
+    }
+
+    assert.ok(!guide.includes("49 profile rows"), "guide must not hard-code profile counts");
+    assert.ok(!guide.includes("(500 tokens)"), "guide must not hard-code budget totals");
+    assert.ok(!guide.includes("(1,000 tokens)"), "guide must not hard-code budget totals");
+    assert.ok(!guide.includes("(2,000 tokens)"), "guide must not hard-code budget totals");
+
+    const docsHub = readFileSync(join(process.cwd(), "docs/README.md"), "utf8");
+    assert.ok(
+      docsHub.includes("[Tool Output Contract](./tool-output-contract.md)"),
+      "missing Tool Output Contract link in documentation hub",
+    );
+
+    const hygiene = readFileSync(
+      join(process.cwd(), "docs/prompt-cache-hygiene.md"),
+      "utf8",
+    );
+    for (const marker of [
+      "One ModelProjection boundary",
+      "both MCP content and structured content",
+      "stable key order",
+      "combined budgets",
+      "fails closed",
+      "sanitizes artifacts",
+      "validates recovery",
+      "Diagnostic fixture exclusions",
+    ]) {
+      assert.ok(hygiene.includes(marker), `missing hygiene marker: ${marker}`);
+    }
+
+    const tokenEconomy = readFileSync(
+      join(process.cwd(), "docs/feature-deep-dives/token-economy.md"),
+      "utf8",
+    );
+    for (const marker of [
+      "Compact-default responses",
+      "raw-to-projected",
+      "p50",
+      "p95",
+      "handle, truncation, and recovery",
+    ]) {
+      assert.ok(tokenEconomy.includes(marker), `missing token-economy marker: ${marker}`);
+    }
+
+    const agents = readFileSync(join(process.cwd(), "AGENTS.md"), "utf8");
+    for (const marker of [
+      "Default `compact`, `standard`, and `full` responses never contain",
+      "`includeDiagnostics: true` may expose only exact profile-allowlisted",
+      "explicit per-call prompt-cache opt-out",
+    ]) {
+      assert.ok(agents.includes(marker), `missing AGENTS marker: ${marker}`);
+    }
+
+    const changelog = readFileSync(join(process.cwd(), "CHANGELOG.md"), "utf8");
+    const unreleased = changelog.indexOf("## Unreleased");
+    const released = changelog.indexOf("## [0.13.3]");
+    assert.ok(unreleased >= 0 && unreleased < released, "Unreleased section must precede 0.13.3");
+    for (const marker of [
+      "Replace repo.status `detail:\"minimal\"` with `detail:\"compact\"`",
+      "Omitted `file.read` `responseMode` now parses as `auto` instead of former `inline`",
+      "Small reads remain inline",
+      "large reads may return handles",
+    ]) {
+      assert.ok(changelog.includes(marker), `missing changelog migration marker: ${marker}`);
+    }
+  });
 });

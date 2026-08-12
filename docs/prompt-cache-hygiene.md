@@ -70,3 +70,15 @@ The fresh-process leg is the load-bearing one. Most ordering bugs are invisible 
 ## Reference
 
 Anthropic's prompt caching documentation, including the prefix hierarchy, invalidation rules, and pricing: https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+
+## Model projection boundary
+
+One ModelProjection boundary projects both MCP content and structured content. It applies a stable key order and enforces combined budgets after projection, so one channel cannot evade the response limit.
+
+Projection fails closed for malformed output, unrecognized profiles, unsafe recovery, and artifact sanitization failures. SDL-MCP validates recovery actions before it returns them and sanitizes artifacts before model access.
+
+Diagnostics remain separate from normal model context. `includeDiagnostics: true` is an explicit per-call prompt-cache opt-out; default compact, standard, and full output stays content-shaped and cache-stable. Diagnostic fixture exclusions must identify the allowlisted volatile field and explain why no deterministic substitute exists.
+
+## Contributor checks
+
+When a projected response changes, add compact, full, and error coverage; validate each recovery path; regenerate the output-profile inventory; and update the determinism fixture. Keep intentional session-scoped exclusions narrow and documented.
