@@ -778,7 +778,7 @@ export function registerCodeModeTools(
     CONTEXT_DESCRIPTION,
     AgentContextRequestSchema,
     async (rawArgs: unknown, context?: ToolContext) =>
-      handleAgentContext(rawArgs, context),
+      handleAgentContext(rawArgs, context, services.contextEngine),
     buildCompactJsonSchema(AgentContextRequestSchema),
     undefined,
     AgentContextOutputSchema,

@@ -13,6 +13,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 
+import { IndexRefreshRequestSchema } from "../../dist/mcp/tools.js";
+
 // ── #7: Precise mode effectiveMax ────────────────────────────────────
 
 // ── #6: memory.store upsert semantics ────────────────────────────────
@@ -124,13 +126,14 @@ describe("index.refresh async mode schema", () => {
     );
   });
 
-  it("request schema accepts includeDiagnostics flag", async () => {
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync("src/mcp/tools.ts", "utf8");
-    assert.ok(
-      src.includes("includeDiagnostics: z.boolean().optional()"),
-      "IndexRefreshRequestSchema should have includeDiagnostics boolean field",
-    );
+  it("request schema accepts includeDiagnostics flag", () => {
+    const parsed = IndexRefreshRequestSchema.parse({
+      repoId: "repo",
+      mode: "incremental",
+      includeDiagnostics: true,
+    });
+
+    assert.strictEqual(parsed.includeDiagnostics, true);
   });
 
   it("response schema includes operationId and message", async () => {

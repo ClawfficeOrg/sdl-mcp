@@ -76,6 +76,8 @@ describe("Policy Engine - Priority Evaluation", () => {
     t.mock.module("../../dist/db/ladybug.js", {
       namedExports: {
         getLadybugConn: async () => conn,
+        getLadybugDbPath: () => null,
+        isLadybugAvailable: () => true,
         withWriteConn: async (callback: (writeConn: object) => Promise<void>) => callback(conn),
       },
     });

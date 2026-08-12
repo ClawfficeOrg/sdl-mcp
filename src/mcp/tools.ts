@@ -4652,16 +4652,12 @@ const ProjectedSearchEditPreviewResponseSchema =
 const ProjectedPRRiskCompactResponseSchema = z
   .object({
     summary: PRRiskSummarySchema,
-    analysis: z
-      .object({
-        fromVersion: z.string(),
-        toVersion: z.string(),
-        riskScore: z.number(),
-        riskLevel: z.enum(["low", "medium", "high", "critical"]),
-        changedSymbolsCount: z.number().int().nonnegative(),
-        blastRadiusCount: z.number().int().nonnegative(),
-      })
-      .strict(),
+    analysis: PRRiskAnalysisSchema.pick({
+      fromVersion: true,
+      toVersion: true,
+      topRisk: true,
+      preflight: true,
+    }).strict(),
     escalationRequired: z.boolean(),
     policyDecision: PolicyDecisionSummarySchema.optional(),
     truncationWarning: z.string().optional(),
@@ -4714,36 +4710,233 @@ const ProjectedResponseMetadataSchema =
     handle: z.string().optional(),
   }).strict();
 
-const ProjectedResponseGetCompactSchema = ResponseGetResponseSchema.omit({
-  metadata: true,
-  range: true,
+function isProjectedResponseContent(
+  value: unknown,
+  activePath = new WeakSet<object>(),
+): boolean {
+  if (
+    value === null
+    || typeof value === "string"
+    || typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value !== "object" || activePath.has(value)) {
+    return false;
+  }
+  activePath.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.every(
+        (item) => isProjectedResponseContent(item, activePath),
+      );
+    }
+    const prototype = Object.getPrototypeOf(value) as unknown;
+    if (prototype !== null && prototype !== Object.prototype) {
+      return false;
+    }
+    const record = value as Record<string, unknown>;
+    return Object.keys(record).every(
+      (key) =>
+        !key.startsWith("__")
+        && isProjectedResponseContent(record[key], activePath),
+    );
+  } finally {
+    activePath.delete(value);
+  }
+}
+
+const ProjectedResponseContentSchema = z.custom<unknown>(
+  isProjectedResponseContent,
+  { message: "Recovered content contains a reserved or non-JSON value" },
+);
+
+const ProjectedResponseGetBaseSchema = ResponseGetResponseSchema.pick({
+  handle: true,
+  contentKind: true,
 })
   .extend({
+    // The advertised field remains an opaque JSON value; the exhaustive
+    // validator recursively rejects private/non-JSON content without exposing
+    // another arbitrary-record schema alongside dataPick.
+    content: ProjectedResponseContentSchema,
     metadata: ProjectedResponseMetadataSchema,
-    range: z
-      .object({
-        offsetBytes: z.number().int().nonnegative(),
-        returnedBytes: z.number().int().nonnegative(),
-      })
-      .strict(),
   })
   .strict();
 
-const ProjectedResponseGetFullSchema = ResponseGetResponseSchema.omit({
-  metadata: true,
-  range: true,
-})
-  .extend({
-    metadata: ProjectedResponseMetadataSchema,
-    range: z
-      .object({
-        offsetBytes: z.number().int().nonnegative(),
-        returnedBytes: z.number().int().nonnegative(),
-        totalBytes: z.number().int().nonnegative(),
-      })
-      .strict(),
+const ProjectedResponseGetCompactRangeSchema = z
+  .object({
+    offsetBytes: z.number().int().nonnegative(),
+    returnedBytes: z.number().int().nonnegative(),
   })
   .strict();
+
+const ProjectedResponseGetFullRangeSchema =
+  ProjectedResponseGetCompactRangeSchema.extend({
+    totalBytes: z.number().int().nonnegative(),
+  }).strict();
+
+const ProjectedResponseGetPaginationSchema = z
+  .object({
+    offset: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+    returned: z.number().int().nonnegative(),
+    hasMore: z.boolean(),
+    nextOffset: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const ProjectedResponseGetRequestSchema = z
+  .object({
+    repoId: z.string().min(1).max(MAX_REPO_ID_LENGTH).optional(),
+    handle: z.string().min(1).max(256).regex(/^[A-Za-z0-9_-]+$/),
+    view: z.literal("model"),
+    cursor: z.object({ offsetBytes: z.number().int().nonnegative() }).strict(),
+    full: z.boolean(),
+    maxBytes: z.number().int().positive().max(MAX_RESPONSE_EXCERPT_BYTES),
+    maxTokens: z.number().int().positive().max(250_000).optional(),
+    offsetBytes: z.number().int().nonnegative(),
+    jsonPath: z.string().min(1).max(200).optional(),
+    raw: z.boolean(),
+    offset: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().max(1000).optional(),
+    detail: z.enum(["compact", "standard", "full"]).optional(),
+    includeDiagnostics: z.boolean().optional(),
+  })
+  .strict();
+
+const ProjectedResponseGetNextActionSchema = z
+  .object({
+    action: z.literal("response.get"),
+    args: ProjectedResponseGetRequestSchema,
+  })
+  .strict();
+
+function buildProjectedResponseGetSchema(
+  range: z.ZodType,
+  truncatedWhenComplete: z.ZodType | undefined,
+): z.ZodType {
+  const completeSchema = ProjectedResponseGetBaseSchema.extend({
+    full: z.boolean(),
+    complete: z.literal(true),
+    ...(truncatedWhenComplete === undefined
+      ? {}
+      : { truncated: truncatedWhenComplete }),
+    range: range.optional(),
+    pagination: ProjectedResponseGetPaginationSchema.optional(),
+  }).strict();
+  const incompleteSchema = ProjectedResponseGetBaseSchema.extend({
+    full: z.literal(false),
+    complete: z.literal(false),
+    truncated: z.literal(true),
+    range,
+    pagination: ProjectedResponseGetPaginationSchema.optional(),
+    nextAction: ProjectedResponseGetNextActionSchema,
+  }).strict();
+
+  return z
+    .discriminatedUnion("complete", [completeSchema, incompleteSchema])
+    .superRefine((value, context) => {
+      const issue = (message: string): void => {
+        context.addIssue({ code: "custom", message });
+      };
+      if (value.full && (value.range !== undefined || value.pagination !== undefined)) {
+        issue("A full response cannot include bounded paging fields");
+      }
+      if (value.complete && !value.full && value.range === undefined) {
+        issue("A bounded complete response requires a byte range");
+      }
+      if (value.pagination !== undefined && value.range === undefined) {
+        issue("A paged response requires a byte range");
+      }
+      if (
+        value.complete
+        && value.pagination !== undefined
+        && (
+          value.pagination.hasMore
+          || value.pagination.nextOffset !== undefined
+        )
+      ) {
+        issue("Complete response pagination must be terminal");
+      }
+      if (value.pagination !== undefined) {
+        const paginationEnd =
+          value.pagination.offset + value.pagination.returned;
+        if (
+          value.pagination.returned > value.pagination.limit
+          || paginationEnd > value.pagination.total
+          || value.pagination.hasMore !== (paginationEnd < value.pagination.total)
+          || (
+            value.pagination.hasMore
+              ? value.pagination.nextOffset !== paginationEnd
+              : value.pagination.nextOffset !== undefined
+          )
+        ) {
+          issue("Pagination fields must describe one coherent result page");
+        }
+      }
+      if (value.complete || value.nextAction === undefined) {
+        return;
+      }
+
+      const continuation = value.nextAction.args;
+      if (continuation.handle !== value.handle) {
+        issue("The continuation handle must match the response handle");
+      }
+      if (
+        continuation.full
+        || continuation.raw
+        || continuation.offsetBytes !== 0
+      ) {
+        issue("An incomplete response continuation must remain bounded and projected");
+      }
+      if (value.pagination === undefined) {
+        const boundedRange = value.range as {
+          offsetBytes: number;
+          returnedBytes: number;
+        };
+        const nextOffset =
+          boundedRange.offsetBytes + boundedRange.returnedBytes;
+        if (continuation.cursor.offsetBytes !== nextOffset) {
+          issue("The continuation cursor must follow the returned byte range");
+        }
+        if (continuation.offset !== undefined || continuation.limit !== undefined) {
+          issue("A byte continuation cannot include array pagination arguments");
+        }
+        return;
+      }
+
+      const pagination = value.pagination;
+      if (
+        !pagination.hasMore
+        || pagination.nextOffset === undefined
+        || pagination.nextOffset !== pagination.offset + pagination.returned
+      ) {
+        issue("Incomplete pagination must expose a coherent next offset");
+      }
+      if (
+        continuation.cursor.offsetBytes !== 0
+        || continuation.offset !== pagination.nextOffset
+        || continuation.limit !== pagination.limit
+      ) {
+        issue("The continuation arguments must match the pagination state");
+      }
+    });
+}
+
+const ProjectedResponseGetCompactSchema = buildProjectedResponseGetSchema(
+  ProjectedResponseGetCompactRangeSchema,
+  undefined,
+);
+
+const ProjectedResponseGetFullSchema = buildProjectedResponseGetSchema(
+  ProjectedResponseGetFullRangeSchema,
+  z.literal(false),
+);
 
 const ProjectedContextCompactResponseSchema = z
   .object({
@@ -4811,9 +5004,16 @@ const ProjectedUsageStatsResponseSchema = UsageStatsResponseSchema.omit({
   })
   .strict();
 
+const ProjectedDeltaGetCompactResponseSchema = DeltaGetResponseSchema.extend({
+  delta: DeltaPackSchema.extend({
+    blastRadius: DeltaPackSchema.shape.blastRadius.optional(),
+  }).strict(),
+}).strict();
+
 const PROJECTED_SUCCESS_SCHEMA_BY_ACTION: Readonly<
   Record<string, readonly z.ZodType[]>
 > = Object.freeze({
+  "delta.get": [ProjectedDeltaGetCompactResponseSchema],
   "symbol.edit": [ProjectedSymbolEditPreviewResponseSchema],
   "pr.risk.analyze": [ProjectedPRRiskCompactResponseSchema],
   "code.getSkeleton": [ProjectedCodeSkeletonCompactResponseSchema],
@@ -4997,7 +5197,14 @@ export function withProjectionSuccessOutputSchema(
     ...projectedSchemas.map((schema) =>
       strictCanonicalPublicSuccessSchema(action, schema),
     ),
-    strictCanonicalPublicSuccessSchema(action, canonicalSchema),
+    // response.get is byte-faithful recovery. Its explicit projected schemas
+    // are the exhaustive public validators; re-adding the canonical unknown
+    // content arm here would manufacture a second arbitrary-record contract.
+    // delta.get's projected schema is the canonical schema with only compact's
+    // optional empty blast radius, so it validates compact and full itself.
+    ...(action === "response.get" || action === "delta.get"
+      ? []
+      : [strictCanonicalPublicSuccessSchema(action, canonicalSchema)]),
   ];
   return successSchemas.length === 1
     ? successSchemas[0]

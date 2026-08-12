@@ -146,3 +146,8 @@ export type ContextEngineV2Result =
   | ContextRecoveryError
   | ContextRetrievalBackendError
   | ContextBudgetError;
+
+/** Minimal context-building contract used for production defaults and test injection. */
+export interface ContextEngine {
+  buildContext(request: ContextV2Request): Promise<ContextEngineV2Result>;
+}

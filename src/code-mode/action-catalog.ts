@@ -1617,11 +1617,17 @@ export function buildCatalog(opts?: {
   });
 }
 
-/** Return the complete Code Mode action inventory for startup policy checks. */
+/** Return the complete response-projection inventory for startup policy checks. */
 export function getProjectionCatalogActions(): readonly string[] {
-  return buildCatalog({ memoryVisible: true, infoVisible: true }).map(
-    (entry) => entry.action,
-  );
+  return [
+    ...buildCatalog({ memoryVisible: true, infoVisible: true }).map(
+      (entry) => entry.action,
+    ),
+    "query",
+    "code",
+    "repo",
+    "agent",
+  ];
 }
 
 // Keep compact schemas one level deep so recursive detail is always opt-in.

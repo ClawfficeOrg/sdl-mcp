@@ -813,6 +813,29 @@ describe("agent-facing SDL tool contracts", () => {
       fromVersion: "v1",
       toVersion: "v2",
     });
+    const canonicalProjection = projectToolResultForModelContent(
+      "pr.risk.analyze",
+      {
+        summary: empty.summary,
+        analysis: {
+          repoId: "r",
+          fromVersion: "v1",
+          toVersion: "v2",
+          riskScore: 0,
+          riskLevel: "low",
+          changedSymbolsCount: 0,
+          blastRadiusCount: 0,
+        },
+        escalationRequired: false,
+      },
+      { detail: "compact" },
+    );
+    const handlerCompactProjection = projectToolResultForModelContent(
+      "pr.risk.analyze",
+      empty,
+      { detail: "compact" },
+    );
+    assert.deepEqual(canonicalProjection, handlerCompactProjection);
 
     const low = compactPRRiskResponse({
       summary: { riskScore: 31, riskLevel: "low", changedCount: 1 },

@@ -1,12 +1,14 @@
 import { copyFile, cp, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
+import { copyFileWithTransientRetry } from "./copy-file-with-retry.mjs";
+
 const root = process.cwd();
 const targetDir = resolve(root, "dist", "ui", "vendor");
 
 async function copyOne(from, to) {
   await mkdir(dirname(to), { recursive: true });
-  await copyFile(from, to);
+  await copyFileWithTransientRetry(copyFile, from, to);
 }
 
 await copyOne(

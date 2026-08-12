@@ -32,6 +32,7 @@ import { wasteLedger } from "./mcp/waste-ledger.js";
 import { renderUserNotificationLine } from "./mcp/savings-meter.js";
 import { formatToolCallForUser } from "./mcp/tool-call-formatter.js";
 import type { LiveIndexCoordinator } from "./live-index/types.js";
+import type { ContextEngine } from "./context/types.js";
 import type {
   CodeModeConfig,
   GatewayConfig,
@@ -1965,6 +1966,7 @@ export interface MCPServerServices {
   liveIndex?: LiveIndexCoordinator;
   gatewayConfig?: GatewayConfig;
   codeModeConfig?: CodeModeConfig;
+  contextEngine?: ContextEngine;
   getStartupReadiness?: () => StartupReadinessSnapshot;
 }
 
@@ -1983,7 +1985,10 @@ export async function createMCPServer(
   });
   registerTools(
     server,
-    { liveIndex: services.liveIndex },
+    {
+      liveIndex: services.liveIndex,
+      contextEngine: services.contextEngine,
+    },
     services.gatewayConfig,
     services.codeModeConfig,
   );

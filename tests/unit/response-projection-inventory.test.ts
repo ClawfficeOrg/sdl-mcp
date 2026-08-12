@@ -25,6 +25,11 @@ import {
   assertProjectionProfileInventory,
   assertWorkflowProjectionBindings,
 } from "../../dist/mcp/response-projection/registry.js";
+import {
+  DeltaGetResponseSchema,
+  ResponseGetResponseSchema,
+  withProjectionSuccessOutputSchema,
+} from "../../dist/mcp/tools.js";
 import { registerTools } from "../../dist/mcp/tools/index.js";
 import {
   AGENT_OUTPUT_CASES,
@@ -167,9 +172,11 @@ function injectObjectSentinel(value: unknown, path: ObjectPath): unknown {
 }
 
 function outputSchemaStats(schema: ZodType): {
+  readonly arbitraryRecordNodes: number;
   readonly genericErrorArms: number;
   readonly nodes: number;
 } {
+  let arbitraryRecordNodes = 0;
   let genericErrorArms = 0;
   let nodes = 0;
   const visit = (current: ZodType): void => {
@@ -201,6 +208,7 @@ function outputSchemaStats(schema: ZodType): {
       return;
     }
     if (current instanceof z.ZodRecord) {
+      arbitraryRecordNodes++;
       visit(current.def.keyType as ZodType);
       visit(current.def.valueType as ZodType);
       return;
@@ -216,7 +224,7 @@ function outputSchemaStats(schema: ZodType): {
     }
   };
   visit(schema);
-  return { genericErrorArms, nodes };
+  return { arbitraryRecordNodes, genericErrorArms, nodes };
 }
 
 function derivePublicActions(): readonly string[] {
@@ -234,13 +242,22 @@ function derivePublicActions(): readonly string[] {
 describe("response projection inventory", () => {
   it("has exactly one complete profile for every advertised canonical action", () => {
     const publicActions = derivePublicActions();
+    const advertisedActions = [
+      ...publicActions,
+      "query",
+      "code",
+      "repo",
+      "agent",
+    ].sort();
     const profileActions = Object.keys(PROJECTION_PROFILE_REGISTRY).sort();
 
-    assert.doesNotThrow(() => assertProjectionProfileInventory(publicActions));
-    assert.deepEqual(profileActions, publicActions);
-    assert.deepEqual([...PROJECTION_PROFILE_ACTIONS].sort(), publicActions);
+    assert.doesNotThrow(() =>
+      assertProjectionProfileInventory(advertisedActions),
+    );
+    assert.deepEqual(profileActions, advertisedActions);
+    assert.deepEqual([...PROJECTION_PROFILE_ACTIONS].sort(), advertisedActions);
 
-    for (const action of publicActions) {
+    for (const action of advertisedActions) {
       assert.deepEqual(
         Object.keys(
           PROJECTION_PROFILE_REGISTRY[
@@ -427,6 +444,238 @@ describe("response projection inventory", () => {
     }
   });
 
+  it("rejects arbitrary response content schemas and incoherent continuations", () => {
+    const registrations = capturePublicToolRegistrations();
+    const responseRegistration = registrations.find(
+      ({ name }) => name === "sdl.response.get",
+    );
+    const workflowRegistration = capturePublicToolRegistrations({
+      enabled: true,
+      exclusive: true,
+    }).find(({ name }) => name === "sdl.workflow");
+    assert.ok(responseRegistration);
+    assert.ok(workflowRegistration);
+    const responseSchema = exhaustiveOutputSchema(responseRegistration);
+    const workflowSchema = exhaustiveOutputSchema(workflowRegistration);
+    assert.ok(responseSchema);
+    assert.ok(workflowSchema);
+
+    const failures: string[] = [];
+    const responseSuccessSchema = withProjectionSuccessOutputSchema(
+      "response.get",
+      ResponseGetResponseSchema,
+    );
+    if (outputSchemaStats(responseSuccessSchema).arbitraryRecordNodes !== 0) {
+      failures.push("response.get added an arbitrary-record success schema node");
+    }
+
+    const fixture = AGENT_OUTPUT_CASES.find(
+      ({ action }) => action === "response.get",
+    );
+    assert.ok(fixture);
+    const projected = projectToolResultForModelContent(
+      fixture.action,
+      fixture.canonicalResultFactory(),
+      { ...fixture.publicRequest, detail: "compact", includeDiagnostics: false },
+    ) as {
+      handle: string;
+      full: false;
+      complete: false;
+      truncated: true;
+      range: { offsetBytes: number; returnedBytes: number };
+      pagination: {
+        offset: number;
+        limit: number;
+        total: number;
+        returned: number;
+        hasMore: boolean;
+        nextOffset?: number;
+      };
+      nextAction: {
+        action: "response.get";
+        args: {
+          handle: string;
+          cursor: { offsetBytes: number };
+          full: boolean;
+          raw: boolean;
+          offset?: number;
+          limit?: number;
+        };
+      };
+    };
+    assert.deepEqual(responseSchema.parse(projected), projected);
+
+    const sharedChild = { value: "shared" };
+    const sharedAlias = {
+      ...projected,
+      content: { left: sharedChild, right: sharedChild },
+    };
+    assert.deepEqual(responseSchema.parse(sharedAlias), sharedAlias);
+    assert.deepEqual(
+      workflowSchema.parse({
+        results: [{ fn: "responseGet", result: sharedAlias }],
+      }),
+      { results: [{ fn: "responseGet", result: sharedAlias }] },
+    );
+
+    const selfCycle: Record<string, unknown> = {};
+    selfCycle.self = selfCycle;
+    const mutualCycleA: Record<string, unknown> = {};
+    const mutualCycleB: Record<string, unknown> = {};
+    mutualCycleA.other = mutualCycleB;
+    mutualCycleB.other = mutualCycleA;
+    for (const cyclicContent of [selfCycle, mutualCycleA]) {
+      const cyclic = { ...projected, content: cyclicContent };
+      assert.equal(responseSchema.safeParse(cyclic).success, false);
+      assert.equal(
+        workflowSchema.safeParse({
+          results: [{ fn: "responseGet", result: cyclic }],
+        }).success,
+        false,
+      );
+    }
+
+    const {
+      truncated: _truncated,
+      nextAction: _nextAction,
+      pagination: projectedPagination,
+      ...completeBase
+    } = projected;
+    const {
+      nextOffset: _nextOffset,
+      ...terminalPagination
+    } = projectedPagination;
+    const terminalComplete = {
+      ...completeBase,
+      complete: true as const,
+      pagination: {
+        ...terminalPagination,
+        offset: 1,
+        returned: 1,
+        hasMore: false,
+      },
+    };
+    assert.deepEqual(responseSchema.parse(terminalComplete), terminalComplete);
+
+    const {
+      range: _missingRange,
+      pagination: _missingPagination,
+      ...completeWithoutRange
+    } = terminalComplete;
+    const malformedComplete = [
+      completeWithoutRange,
+      {
+        ...terminalComplete,
+        pagination: {
+          ...terminalComplete.pagination,
+          hasMore: true,
+        },
+      },
+      {
+        ...terminalComplete,
+        pagination: {
+          ...terminalComplete.pagination,
+          nextOffset: 2,
+        },
+      },
+    ];
+    for (const [index, invalid] of malformedComplete.entries()) {
+      if (responseSchema.safeParse(invalid).success) {
+        failures.push(`response.get accepted malformed complete result ${index}`);
+      }
+      if (
+        workflowSchema.safeParse({
+          results: [{ fn: "responseGet", result: invalid }],
+        }).success
+      ) {
+        failures.push(`workflow accepted malformed complete responseGet child ${index}`);
+      }
+    }
+
+    const malformed = [
+      {
+        ...projected,
+        nextAction: {
+          ...projected.nextAction,
+          args: { ...projected.nextAction.args, handle: "response-other" },
+        },
+      },
+      {
+        ...projected,
+        nextAction: {
+          ...projected.nextAction,
+          args: { ...projected.nextAction.args, full: true },
+        },
+      },
+      {
+        ...projected,
+        nextAction: {
+          ...projected.nextAction,
+          args: { ...projected.nextAction.args, raw: true },
+        },
+      },
+      {
+        ...projected,
+        nextAction: {
+          ...projected.nextAction,
+          args: { ...projected.nextAction.args, offsetBytes: 1 },
+        },
+      },
+      {
+        ...projected,
+        nextAction: {
+          ...projected.nextAction,
+          args: {
+            ...projected.nextAction.args,
+            cursor: { offsetBytes: 1 },
+          },
+        },
+      },
+      {
+        ...projected,
+        pagination: { ...projected.pagination, hasMore: false },
+      },
+      {
+        ...projected,
+        pagination: { ...projected.pagination, nextOffset: 2 },
+      },
+    ];
+
+    for (const [index, invalid] of malformed.entries()) {
+      if (responseSchema.safeParse(invalid).success) {
+        failures.push(`response.get accepted malformed continuation ${index}`);
+      }
+      if (
+        workflowSchema.safeParse({
+          results: [{ fn: "responseGet", result: invalid }],
+        }).success
+      ) {
+        failures.push(`workflow accepted malformed responseGet child ${index}`);
+      }
+    }
+
+    const nonPaged = {
+      ...projected,
+      pagination: undefined,
+      nextAction: {
+        ...projected.nextAction,
+        args: {
+          ...projected.nextAction.args,
+          cursor: {
+            offsetBytes:
+              projected.range.offsetBytes + projected.range.returnedBytes - 1,
+          },
+          offset: undefined,
+          limit: undefined,
+        },
+      },
+    };
+    if (responseSchema.safeParse(nonPaged).success) {
+      failures.push("response.get accepted a mismatched byte cursor");
+    }
+    assert.deepEqual(failures, []);
+  });
+
   it("accepts every fixture request through the active public schema", () => {
     const failures: string[] = [];
     for (const fixture of AGENT_OUTPUT_CASES) {
@@ -443,6 +692,21 @@ describe("response projection inventory", () => {
       }
     }
     assert.deepEqual(failures, []);
+  });
+
+  it("accepts the canonical full delta through its deduplicated public schema", () => {
+    const fixture = AGENT_OUTPUT_CASES.find(({ action }) => action === "delta.get");
+    assert.ok(fixture);
+    const projected = projectToolResultForModelContent(
+      fixture.action,
+      fixture.canonicalResultFactory(),
+      { ...fixture.publicRequest, detail: "full", includeDiagnostics: false },
+    );
+    const schema = withProjectionSuccessOutputSchema(
+      "delta.get",
+      DeltaGetResponseSchema,
+    );
+    assert.deepEqual(schema.parse(projected), projected);
   });
 
   it("accepts every projected compact/full fixture without stripping fields", () => {

@@ -584,7 +584,7 @@ describe("sdl.retrieve", () => {
       projected,
       /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.search|policy\.set)/,
     );
-    assert.match(projected, /sdl\.retrieve/);
+    assert.doesNotMatch(projected, /sdl\.retrieve/);
     assert.match(projected, /sdl\.workflow/);
   });
 
@@ -688,42 +688,35 @@ describe("sdl.retrieve", () => {
         handlers.set(name, handler);
       },
     };
-    const actionMap = {
-      "code.needWindow": {
-        schema: z.object({ repoId: z.string(), symbolId: z.string() }).passthrough(),
-        handler: async () => ({
-          padding: "x".repeat(5_000),
-          recovery: [
-            {
-              fallbackRationale: "Use sdl.symbol.search to recover.",
-              nextBestAction: {
-                tool: "sdl.code.getSkeleton",
-                args: { repoId: "repo", symbolId: "sym" },
-              },
-              nextCalls: [
-                {
-                  tool: "sdl.code.getHotPath",
-                  args: { repoId: "repo", symbolId: "sym" },
-                },
-              ],
-            },
-          ],
-        }),
+    const recovery = Array.from({ length: 20 }, () => ({
+      fallbackRationale: "Use sdl.symbol.search to recover.",
+      nextBestAction: {
+        tool: "sdl.code.getSkeleton",
+        args: { repoId: "repo", symbolId: "sym" },
       },
-    };
+      nextCalls: [
+        {
+          tool: "sdl.code.getHotPath",
+          args: { repoId: "repo", symbolId: "sym" },
+        },
+      ],
+    }));
 
     registerCodeModeTools(
       fakeServer as never,
       {},
       { ...createTestConfig(), exclusive: true },
-      actionMap as never,
+      {} as never,
     );
     const result = await handlers.get("sdl.workflow")?.({
       repoId: "repo",
       steps: [
         {
-          fn: "codeNeedWindow",
-          args: { symbolId: "sym" },
+          fn: "dataPick",
+          args: {
+            input: { recovery },
+            fields: { recovery: "recovery" },
+          },
           maxResponseTokens: 50,
         },
         {
@@ -736,38 +729,32 @@ describe("sdl.retrieve", () => {
         },
       ],
     });
-    const projected = JSON.stringify(result);
-
-    assert.doesNotMatch(
-      projected,
-      /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.search|policy\.set)/,
-    );
     const continuationData = (
       result as {
         results: Array<{ result?: { data?: unknown } }>;
       }
     ).results[1]?.result?.data;
+    assert.doesNotMatch(
+      JSON.stringify(continuationData),
+      /sdl\.(?:code\.(?:getSkeleton|getHotPath)|symbol\.search|policy\.set)/,
+    );
     assert.deepEqual(continuationData, [
       {
         fallbackRationale: 'Use sdl.retrieve op:"symbolSearch" to recover.',
-      nextBestAction: {
-        tool: "sdl.retrieve",
-        args: {
-          repoId: "repo",
-          op: "codeSkeleton",
-          args: { symbolId: "sym" },
-        },
-      },
-      nextCalls: [
-        {
-          tool: "sdl.retrieve",
+        nextBestAction: {
+          tool: "sdl.workflow",
           args: {
             repoId: "repo",
-            op: "codeHotPath",
-            args: { symbolId: "sym" },
+            steps: [
+              {
+                fn: "codeSkeleton",
+                args: { symbolId: "sym", refsMode: "auto" },
+              },
+            ],
+            onError: "continue",
+            includeTelemetry: false,
           },
         },
-        ],
       },
     ]);
   });
@@ -782,16 +769,22 @@ describe("sdl.retrieve", () => {
       ],
     }, "repo");
 
-    assert.strictEqual(result.nextBestAction, inherited);
+    assert.equal(result.nextBestAction, undefined);
     assert.deepEqual(result.nextCalls[0], {
-      tool: "sdl.retrieve",
+      tool: "sdl.workflow",
       args: {
         repoId: "repo",
-        op: "codeSkeleton",
-        args: { symbolId: "sym" },
+        steps: [
+          {
+            fn: "codeSkeleton",
+            args: { symbolId: "sym", refsMode: "auto" },
+          },
+        ],
+        onError: "continue",
+        includeTelemetry: false,
       },
     });
-    assert.strictEqual(result.nextCalls[1], inherited);
+    assert.equal(result.nextCalls.length, 1);
   });
 
   it("registers sdl.retrieve as a top-level Code Mode tool", () => {

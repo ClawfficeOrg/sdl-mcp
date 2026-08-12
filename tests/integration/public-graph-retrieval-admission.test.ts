@@ -209,7 +209,7 @@ async function seedRepo(
   const fileId = `${repoId}:src/alpha.ts`;
   const versionId = `${repoId}:v1`;
   const symbol = {
-    symbolId: `${repoId}:alpha`,
+    symbolId: `${repoId}:symbol:alpha`,
     repoId,
     fileId,
     kind: "function",
@@ -386,7 +386,7 @@ async function seedVerifiedEmptyManifestRepo(repoId: string): Promise<void> {
 }
 
 function centralCalls(repoId: string): PublicCall[] {
-  const symbolId = `${repoId}:alpha`;
+  const symbolId = `${repoId}:symbol:alpha`;
   const fromVersion = `${repoId}:v0`;
   const toVersion = `${repoId}:v1`;
   const codeWindowArgs = {
@@ -544,6 +544,7 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
   };
 
   before(async () => {
+
     mkdirSync(DB_DIR, { recursive: true });
     writeFileSync(
       join(TEST_ROOT, "alpha.ts"),
@@ -599,6 +600,42 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
     await seedRepoWithoutVersion("empty");
 
     server = await createMCPServer({
+      contextEngine: {
+        async buildContext(request) {
+          return {
+            status: "complete",
+            taskType: request.taskType,
+            retrieval: {
+              level: "lexical",
+              lanes: [{
+                id: "exactIdentifier",
+                available: true,
+                coveragePermille: 1000,
+              }],
+            },
+            evidence: [{
+              symbolId: `${request.repoId}:symbol:alpha`,
+              path: "src/alpha.ts",
+              rung: "card",
+              rank: 1,
+              tier: 0,
+              lanes: ["exactIdentifier"],
+              content: {
+                kind: "function",
+                name: "alpha",
+                summary: "Returns one",
+              },
+            }],
+            edges: [],
+            omitted: {
+              total: 0,
+              byReason: { budget: 0 },
+              highestRanked: [],
+            },
+            nextActions: [],
+          };
+        },
+      },
       gatewayConfig: {
         enabled: true,
         emitLegacyTools: true,
@@ -836,7 +873,11 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
           ],
         },
       })) as { isError?: boolean; structuredContent?: { results?: unknown[] } };
-      assert.notEqual(validResponse.isError, true, repoId);
+      assert.notEqual(
+        validResponse.isError,
+        true,
+        `${repoId} ${JSON.stringify(validResponse.structuredContent)}`,
+      );
       assert.deepEqual(
         validResponse.structuredContent?.results,
         [{ fn: "symbolSearch", status: "skipped" }],
@@ -1070,7 +1111,7 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
       now: new Date("2026-07-21T12:00:00.000Z"),
     });
     const repoId = "verified";
-    const symbolId = `${repoId}:alpha`;
+    const symbolId = `${repoId}:symbol:alpha`;
     const fromVersion = `${repoId}:v0`;
     const toVersion = `${repoId}:v1`;
     const calls: PublicCall[] = [
@@ -1404,7 +1445,7 @@ describe("public graph retrieval admission", { concurrency: 1 }, () => {
           op,
           repoId: "verified",
           planHandle,
-          symbolId: "verified:alpha",
+          symbolId: "verified:symbol:alpha",
           reason: "Inspect planned alpha edit",
           expectedLines: 20,
           identifiersToFind: ["alpha"],

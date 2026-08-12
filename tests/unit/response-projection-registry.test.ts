@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { ACTION_DEFINITION_BY_ACTION } from "../../dist/code-mode/action-catalog.js";
+import { registerGatewayTools } from "../../dist/gateway/index.js";
+import { MCPServer } from "../../dist/server.js";
 import {
   COMPATIBILITY_WORKFLOW_CHILD_ACTIONS,
   CUSTOM_RESPONSE_PROJECTION_ACTIONS,
@@ -24,6 +26,30 @@ import {
 } from "../../dist/mcp/tools/symbol-utils.js";
 
 describe("response projection registry", () => {
+  it("covers and registers every composite gateway explicitly", () => {
+    const expectedProfile = {
+      projector: "generic",
+      defaultDetail: "compact",
+      budgetClass: "standard",
+      largeResponseStrategy: "artifact",
+      recoveryPolicy: "on-truncation",
+      observabilityProfile: "standard",
+    } as const;
+
+    for (const name of ["sdl.query", "sdl.code", "sdl.repo", "sdl.agent"]) {
+      assert.deepEqual(getProjectionProfile(name), expectedProfile, name);
+    }
+
+    const server = new MCPServer();
+    assert.doesNotThrow(() =>
+      registerGatewayTools(server, {}, {
+        enabled: true,
+        emitLegacyTools: false,
+        toolNameFormat: "canonical",
+      }),
+    );
+  });
+
   it("covers the exact actions with custom projection behavior", () => {
     assert.deepEqual(CUSTOM_RESPONSE_PROJECTION_ACTIONS, [
       "action.search",

@@ -7,6 +7,7 @@ import {
   stableContextValue,
 } from "../../context/serialize.js";
 import type {
+  ContextEngine,
   ContextEngineV2Result,
   ContextPayload,
   ContextV2Request,
@@ -37,7 +38,7 @@ import {
 const BYTES_PER_TOKEN = 4;
 const SYMBOL_ID_PATTERN = /^[a-f0-9]{64}$/i;
 const MIN_RAW_TOKENS_PER_CONTEXT_RESULT = 300;
-const contextEngineV2 = new ContextEngineV2();
+const defaultContextEngine: ContextEngine = new ContextEngineV2();
 
 interface EvidenceSourceCandidates {
   symbolIds: Set<string>;
@@ -350,10 +351,11 @@ function toEngineRequest(
 export async function handleAgentContext(
   args: unknown,
   context?: ToolContext,
+  contextEngine: ContextEngine = defaultContextEngine,
 ): Promise<AgentContextResponse> {
   try {
     const request = AgentContextRequestSchema.parse(args);
-    const result = await contextEngineV2.buildContext(toEngineRequest(request));
+    const result = await contextEngine.buildContext(toEngineRequest(request));
     if (!isContextPayload(result)) return result;
 
     const canonical = canonicalizeContextPayload(result);

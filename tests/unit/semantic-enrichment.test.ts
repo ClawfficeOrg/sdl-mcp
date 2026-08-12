@@ -260,7 +260,7 @@ describe("semantic enrichment bridge core", () => {
     assert.equal("precisionScore" in run, false);
   });
 
-  it("projects semantic score availability identically in compact and full modes", () => {
+  it("keeps full run precision semantics while compact status exposes latestRun", () => {
     const projectRun = Reflect.get(semanticTools, "projectSemanticEnrichmentRun");
     assert.equal(typeof projectRun, "function");
     if (typeof projectRun !== "function") return;
@@ -299,38 +299,42 @@ describe("semantic enrichment bridge core", () => {
       installPolicy: "never" as const,
       selections: [],
       lastRuns: fullRuns,
-    } as unknown as Parameters<typeof semanticTools.compactSemanticEnrichmentStatusForAgent>[0];
+    } as unknown as Parameters<
+      typeof semanticTools.compactSemanticEnrichmentStatusForAgent
+    >[0];
     const compact = semanticTools.compactSemanticEnrichmentStatusForAgent(
       projectedStatus,
       runs.length,
-    ) as { lastRuns: Array<Record<string, unknown>> };
+    ) as { latestRun: Record<string, unknown> };
 
     assert.equal("precisionScore" in fullRuns[0], false);
     assert.equal("precisionBasis" in fullRuns[0], false);
     assert.equal(fullRuns[0].precisionMeasurement, "unavailable");
-    assert.equal(compact.lastRuns[0].precisionMeasurement, "unavailable");
-    assert.equal("precisionScore" in compact.lastRuns[0], false);
-    assert.equal("precisionBasis" in compact.lastRuns[0], false);
+    assert.equal(compact.latestRun.precisionMeasurement, undefined);
+    assert.equal("precisionScore" in compact.latestRun, false);
+    assert.equal("precisionBasis" in compact.latestRun, false);
+    assert.equal("lastRuns" in compact, false);
 
     for (const index of [1, 2]) {
       assert.equal(fullRuns[index].precisionMeasurement, "measured");
       assert.equal(fullRuns[index].precisionBasis, "operational-composite");
-      assert.equal(compact.lastRuns[index].precisionScore, fullRuns[index].precisionScore);
-      assert.equal(compact.lastRuns[index].precisionMeasurement, fullRuns[index].precisionMeasurement);
-      assert.equal(compact.lastRuns[index].precisionBasis, fullRuns[index].precisionBasis);
     }
     assert.equal(fullRuns[1].precisionScore, 0);
     assert.equal(fullRuns.some((run) => run.precisionScore === null), false);
-    assert.equal(compact.lastRuns.some((run) => run.precisionScore === null), false);
+    assert.equal(compact.latestRun.precisionScore === null, false);
 
     const measuredFullKeys = Object.keys(fullRuns[1]);
-    assert.ok(measuredFullKeys.indexOf("precisionScore") < measuredFullKeys.indexOf("precisionMeasurement"));
-    assert.ok(measuredFullKeys.indexOf("precisionMeasurement") < measuredFullKeys.indexOf("precisionBasis"));
-    assert.ok(measuredFullKeys.indexOf("precisionBasis") < measuredFullKeys.indexOf("cacheHit"));
-    const measuredCompactKeys = Object.keys(compact.lastRuns[1]);
-    assert.equal(
-      measuredCompactKeys.indexOf("precisionBasis"),
-      measuredCompactKeys.indexOf("precisionMeasurement") + 1,
+    assert.ok(
+      measuredFullKeys.indexOf("precisionScore")
+        < measuredFullKeys.indexOf("precisionMeasurement"),
+    );
+    assert.ok(
+      measuredFullKeys.indexOf("precisionMeasurement")
+        < measuredFullKeys.indexOf("precisionBasis"),
+    );
+    assert.ok(
+      measuredFullKeys.indexOf("precisionBasis")
+        < measuredFullKeys.indexOf("cacheHit"),
     );
 
     assert.equal(
@@ -340,7 +344,10 @@ describe("semantic enrichment bridge core", () => {
     assert.equal(
       JSON.stringify(compact),
       JSON.stringify(
-        semanticTools.compactSemanticEnrichmentStatusForAgent(projectedStatus, runs.length),
+        semanticTools.compactSemanticEnrichmentStatusForAgent(
+          projectedStatus,
+          runs.length,
+        ),
       ),
     );
   });

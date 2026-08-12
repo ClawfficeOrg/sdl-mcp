@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,26 +21,16 @@ import { CentralityWorkerTimeoutError } from "../../dist/graph/centrality-worker
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const TEST_DB_PATH = join(
-  tmpdir(),
-  ".lbug-cluster-orchestrator-unit-test-db.lbug",
-);
+const TEST_DB_ROOT = mkdtempSync(join(tmpdir(), "sdl-cluster-orchestrator-"));
+const TEST_DB_PATH = join(TEST_DB_ROOT, "graph.lbug");
 
-function removeLadybugDbFiles(dbPath: string): void {
-  for (const p of [
-    dbPath,
-    `${dbPath}.wal`,
-    `${dbPath}.shadow`,
-    `${dbPath}.lock`,
-    `${dbPath}.sdl-lineage.json`,
-  ]) {
-    if (existsSync(p)) rmSync(p, { recursive: true, force: true });
-  }
+function removeOwnedTestDbRoot(): void {
+  rmSync(TEST_DB_ROOT, { recursive: true, force: true });
 }
 
 async function resetDb(): Promise<void> {
   await closeLadybugDb();
-  removeLadybugDbFiles(TEST_DB_PATH);
+  removeOwnedTestDbRoot();
   mkdirSync(dirname(TEST_DB_PATH), { recursive: true });
   await initLadybugDb(TEST_DB_PATH);
 }
@@ -109,7 +99,7 @@ describe("cluster-orchestrator.computeAndStoreClustersAndProcesses", () => {
 
   after(async () => {
     await closeLadybugDb();
-    removeLadybugDbFiles(TEST_DB_PATH);
+    removeOwnedTestDbRoot();
   });
 
   it("exports computeAndStoreClustersAndProcesses", () => {
@@ -665,11 +655,10 @@ describe("cluster-orchestrator.computeAndStoreClustersAndProcesses", () => {
   });
 
   it("survives stable refreshes while cluster/process FTS indexes are active", () => {
-    const childDbPath = join(
-      tmpdir(),
-      `.lbug-cluster-orchestrator-fts-${process.pid}-${Date.now()}.lbug`,
+    const childDbRoot = mkdtempSync(
+      join(tmpdir(), "sdl-cluster-orchestrator-fts-"),
     );
-    removeLadybugDbFiles(childDbPath);
+    const childDbPath = join(childDbRoot, "graph.lbug");
     const script = `
       import { closeLadybugDb, getLadybugConn, initLadybugDb } from "./dist/db/ladybug.js";
       import * as ladybugDb from "./dist/db/ladybug-queries.js";
@@ -824,7 +813,7 @@ describe("cluster-orchestrator.computeAndStoreClustersAndProcesses", () => {
       assert.match(result.stdout, /"clusterVersionId":"v1"/);
       assert.match(result.stdout, /"processVersionId":"v1"/);
     } finally {
-      removeLadybugDbFiles(childDbPath);
+      rmSync(childDbRoot, { recursive: true, force: true });
     }
   });
 

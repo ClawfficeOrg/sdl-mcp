@@ -42,7 +42,10 @@ describe("tool response envelope model projection", () => {
       ],
     });
     const text = firstText(envelope);
-    assert.match(text, /workflow -> 1 steps \(1 ok\)/);
+    assert.match(
+      text,
+      /workflow -> total=1 ok=1 error=0 skipped=0 budgetExceeded=0 truncated=false/,
+    );
     assert.doesNotMatch(text, /tokens/);
     assert.doesNotMatch(text, /etagCache/);
   });
@@ -139,7 +142,7 @@ describe("tool response envelope model projection", () => {
     assert.equal(child[0]?.result?._packedStats, undefined);
   });
 
-  it("uses stepIndex when preserving workflow child diagnostics", () => {
+  it("omits raw child diagnostics while preserving allowlisted evidence by stepIndex", () => {
     const envelope = buildToolResponseEnvelope(
       {
         results: [
@@ -170,11 +173,11 @@ describe("tool response envelope model projection", () => {
     );
 
     const children = envelope.structuredContent?.results as Array<{ result?: Record<string, unknown> }>;
-    assert.deepEqual(children[0]?.result?.diagnostics, { timings: { totalMs: 5 } });
+    assert.equal(children[0]?.result?.diagnostics, undefined);
     assert.deepEqual(children[0]?.result?.retrievalEvidence, { fusionLatencyMs: 3 });
   });
 
-  it("preserves nested workflow child diagnostics when requested by the child step", () => {
+  it("omits raw child diagnostics while preserving requested retrieval evidence", () => {
     const envelope = buildToolResponseEnvelope(
       {
         results: [
@@ -213,7 +216,7 @@ describe("tool response envelope model projection", () => {
     );
 
     const children = envelope.structuredContent?.results as Array<{ result?: Record<string, unknown> }>;
-    assert.deepEqual(children[0]?.result?.diagnostics, { timings: { totalMs: 5 } });
+    assert.equal(children[0]?.result?.diagnostics, undefined);
     assert.deepEqual(children[0]?.result?.retrievalEvidence, { fusionLatencyMs: 3 });
     assert.equal(children[1]?.result?.diagnostics, undefined);
     assert.equal(children[1]?.result?.retrievalEvidence, undefined);
@@ -262,7 +265,10 @@ describe("tool response envelope model projection", () => {
     );
 
     const text = firstText(envelope);
-    assert.match(text, /workflow -> 1 steps \(1 ok\)/);
+    assert.match(
+      text,
+      /workflow -> total=1 ok=1 error=0 skipped=0 budgetExceeded=0 truncated=false/,
+    );
     assert.doesNotMatch(text, /tokens/);
     assert.doesNotMatch(text, /etagCache/);
   });

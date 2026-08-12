@@ -28,10 +28,12 @@ import {
 } from "./schemas.js";
 import { buildGatewayWireSchema } from "./thin-schemas.js";
 import type { ActionAvailability } from "../code-mode/action-catalog.js";
+import type { ContextEngine } from "../context/types.js";
 
 export type ToolServices = {
   liveIndex?: LiveIndexCoordinator;
   actionAvailability?: ActionAvailability;
+  contextEngine?: ContextEngine;
 };
 
 /**

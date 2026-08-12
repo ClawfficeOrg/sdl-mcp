@@ -45,16 +45,20 @@ describe("errorToMcpResponse", () => {
 
   it("should preserve nextBestAction from policy denials", () => {
     const error = createPolicyDenial("too many lines", "requestSkeleton", {
-      symbolId: "sym-1",
-      repoId: "repo-1",
-    } as any);
+      requestSkeleton: {
+        symbolId: "sym-1",
+        repoId: "repo-1",
+      },
+    });
     const response = errorToMcpResponse(error) as ErrorResponse;
     assert.strictEqual(response.error?.message, "too many lines");
     assert.strictEqual(response.error?.code, ErrorCode.POLICY_ERROR);
     assert.strictEqual(response.error?.nextBestAction, "requestSkeleton");
     assert.deepStrictEqual(response.error?.requiredFieldsForNext, {
-      symbolId: "sym-1",
-      repoId: "repo-1",
+      requestSkeleton: {
+        symbolId: "sym-1",
+        repoId: "repo-1",
+      },
     });
   });
 
@@ -79,8 +83,15 @@ describe("errorToMcpResponse", () => {
     assert.deepStrictEqual(response.error?.fallbackTools, ["sdl.repo.status"]);
     assert.deepStrictEqual(response.error?.nextCalls, [
       {
-        action: "response.get",
-        args: { repoId: "repo-1", handle: "response-1" },
+        action: "sdl.response.get",
+        args: {
+          repoId: "repo-1",
+          handle: "response-1",
+          full: false,
+          offsetBytes: 0,
+          maxBytes: 8_192,
+          raw: false,
+        },
       },
     ]);
     assert.deepStrictEqual(response.error?.candidates, [{ symbolId: "sym-1" }]);

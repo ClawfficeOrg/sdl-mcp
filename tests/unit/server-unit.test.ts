@@ -13,6 +13,18 @@ import {
 import { SDL_MCP_SERVER_INSTRUCTIONS } from "../../dist/mcp/server-instructions.js";
 import { getPackageVersion } from "../../dist/util/package-info.js";
 
+const SYNTHETIC_PROJECTION_PROFILE = Object.freeze({
+  projector: "generic",
+  observabilityProfile: "standard",
+  defaultDetail: "compact",
+  budgetClass: "compact",
+  largeResponseStrategy: "truncate",
+  recoveryPolicy: "none",
+} as const);
+
+// Synthetic tools exercise server mechanics without widening the production registry.
+const resolveSyntheticProjectionProfile = () => SYNTHETIC_PROJECTION_PROFILE;
+
 /**
  * Tests for src/server.ts — MCPServer class.
  * Verifies tool registration, gatewayMode property, clearTools, and
@@ -24,7 +36,9 @@ describe("MCPServer", () => {
   let server: MCPServer;
 
   beforeEach(() => {
-    server = new MCPServer();
+    server = new MCPServer({
+      resolveProjectionProfile: resolveSyntheticProjectionProfile,
+    });
   });
 
   describe("metadata-only dispatch bypass", () => {

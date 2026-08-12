@@ -298,6 +298,27 @@ export const WorkflowOutputSchema = z
     totalTokens: z.number().nonnegative().optional(),
     truncated: z.literal(true).optional(),
     trace: WorkflowTraceOutputSchema.optional(),
+    dryRun: z
+      .object({
+        valid: z.boolean(),
+        validation: z.array(
+          z
+            .object({
+              stepIndex: z.number().int().nonnegative(),
+              fn: z.string(),
+              action: z.string(),
+              valid: z.boolean(),
+              issues: z.array(z.string()),
+              pendingSchemaValidation: z.boolean().optional(),
+              fixHint: z.string().optional(),
+            })
+            .strict(),
+        ),
+        stepCount: z.number().int().nonnegative(),
+        budgetLimits: WorkflowBudgetSchema.strict(),
+      })
+      .strict()
+      .optional(),
     diagnostics: z
       .object({
         timings: z

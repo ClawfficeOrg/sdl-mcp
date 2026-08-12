@@ -34,6 +34,24 @@ export function projectChangeAnalysisValue(
   projectCompatibilityValue: ModelValueProjectionDelegate,
 ): unknown {
   const projected = projectCompatibilityValue(input);
+
+  if (
+    input.options.detail === "compact" &&
+    (input.action === "pr.risk.analyze" ||
+      input.action === "sdl.pr.risk.analyze") &&
+    isRecord(projected) &&
+    isRecord(projected.analysis)
+  ) {
+    // The summary is the single compact home for scores and counts. Normalize
+    // canonical and already-compacted handler results to the same projection.
+    const analysis = { ...projected.analysis };
+    delete analysis.riskScore;
+    delete analysis.riskLevel;
+    delete analysis.changedSymbolsCount;
+    delete analysis.blastRadiusCount;
+    return { ...projected, analysis };
+  }
+
   if (
     (input.action !== "delta.get" && input.action !== "sdl.delta.get") ||
     typeof projected !== "object" ||

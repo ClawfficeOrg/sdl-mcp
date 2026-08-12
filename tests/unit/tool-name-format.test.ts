@@ -7,6 +7,18 @@ import { z } from "zod";
 
 import { createMCPServer, MCPServer } from "../../dist/server.js";
 
+const SYNTHETIC_PROJECTION_PROFILE = Object.freeze({
+  projector: "generic",
+  observabilityProfile: "standard",
+  defaultDetail: "compact",
+  budgetClass: "compact",
+  largeResponseStrategy: "truncate",
+  recoveryPolicy: "none",
+} as const);
+
+// Synthetic tools exercise server mechanics without widening the production registry.
+const resolveSyntheticProjectionProfile = () => SYNTHETIC_PROJECTION_PROFILE;
+
 async function connect(server: MCPServer): Promise<Client> {
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -22,7 +34,10 @@ async function connect(server: MCPServer): Promise<Client> {
 
 describe("MCPServer tool name formats", () => {
   it("advertises OpenAI-safe aliases and dispatches them to canonical tools", async () => {
-    const server = new MCPServer({ toolNameFormat: "openai" });
+    const server = new MCPServer({
+      toolNameFormat: "openai",
+      resolveProjectionProfile: resolveSyntheticProjectionProfile,
+    });
     let calls = 0;
     server.registerTool(
       "sdl.test.status",
@@ -52,7 +67,10 @@ describe("MCPServer tool name formats", () => {
   });
 
   it("rejects OpenAI-safe alias collisions", () => {
-    const server = new MCPServer({ toolNameFormat: "openai" });
+    const server = new MCPServer({
+      toolNameFormat: "openai",
+      resolveProjectionProfile: resolveSyntheticProjectionProfile,
+    });
     server.registerTool(
       "sdl_test_status",
       "safe test tool",
