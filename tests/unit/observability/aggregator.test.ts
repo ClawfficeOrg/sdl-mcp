@@ -4,9 +4,43 @@ import assert from "node:assert/strict";
 import {
   Aggregator,
   DEFAULT_AGGREGATOR_OPTIONS,
+  percentile,
 } from "../../../dist/observability/aggregator.js";
 
 const REPO = "sdl-mcp";
+
+
+type ToolProjection = NonNullable<
+  Parameters<Aggregator["recordToolCall"]>[0]["projection"]
+>;
+
+function toolProjection(
+  overrides: Partial<ToolProjection>,
+  observabilityProfile: "standard" | "usage" = "standard",
+): ToolProjection {
+  return {
+    profile: {
+      projector: "test",
+      observabilityProfile,
+      defaultDetail: "compact",
+      budgetClass: "small",
+      largeResponseStrategy: "truncate",
+      recoveryPolicy: "none",
+    },
+    effectiveDetail: "compact",
+    diagnosticsIncluded: false,
+    rawBytes: 0,
+    rawTokens: 0,
+    projectedBytes: 0,
+    projectedTokens: 0,
+    removedFieldCount: 0,
+    truncated: false,
+    responseHandled: false,
+    recoveryEmitted: false,
+    invalidRecoveryCount: 0,
+    ...overrides,
+  };
+}
 
 describe("Aggregator", () => {
   it("starts with a fresh schema-versioned snapshot", () => {
@@ -506,5 +540,180 @@ describe("Aggregator", () => {
     assert.equal(predictiveContext.hitRatePct, 40);
     assert.equal(predictiveContext.wasteRatePct, 25);
     assert.equal(predictiveContext.topStrategies[0]?.strategy, "search-cards");
+  });
+
+  it("aggregates bounded, versioned tool-output metrics without retaining payloads", () => {
+    const agg = new Aggregator(DEFAULT_AGGREGATOR_OPTIONS);
+    const fixtures = [
+      ["sdl.context", false, toolProjection({
+        rawBytes: 1000, rawTokens: 400, projectedBytes: 400,
+        projectedTokens: 160, removedFieldCount: 3,
+      })],
+      ["sdl.context", false, toolProjection({
+        rawBytes: 2000, rawTokens: 800, projectedBytes: 1000,
+        projectedTokens: 400, removedFieldCount: 2, effectiveDetail: "full",
+        truncated: true, responseHandled: true, recoveryEmitted: true,
+      })],
+      ["sdl.context", true, toolProjection({
+        projectedBytes: 50, projectedTokens: 20, removedFieldCount: 1,
+        responseHandled: true, invalidRecoveryCount: 2,
+      })],
+      ["sdl.manual", false, toolProjection({
+        rawBytes: 500, rawTokens: 200, projectedBytes: 100,
+        projectedTokens: 40,
+      }, "usage")],
+      ["sdl.manual", false, toolProjection({
+        rawBytes: 600, rawTokens: 240, projectedBytes: 300,
+        projectedTokens: 120, removedFieldCount: 4, effectiveDetail: "full",
+        truncated: true,
+      }, "usage")],
+    ] as const;
+
+    for (const [tool, errored, projection] of fixtures) {
+      agg.recordToolCall({
+        tool,
+        request: { args: "request-secret", path: "C:\\secret\\source.ts" },
+        response: {
+          canonicalResult: "canonical-secret",
+          stdout: "stdout-secret",
+          stderr: "stderr-secret",
+          source: "source-secret",
+          handle: "handle-secret",
+          diagnostics: { arbitrary: "diagnostic-secret" },
+        },
+        durationMs: 10,
+        errored,
+        projection,
+      });
+    }
+
+    const snapshot = agg.getSnapshot(REPO);
+    assert.equal(snapshot.schemaVersion, 1);
+    assert.equal(snapshot.toolOutput.schemaVersion, 1);
+    assert.deepEqual(snapshot.toolOutput.overall, {
+      calls: 5,
+      errors: 1,
+      rawBytesTotal: 4100,
+      projectedBytesTotal: 1850,
+      rawTokensTotal: 1640,
+      projectedTokensTotal: 740,
+      reductionRatio: 2250 / 4100,
+      removedFieldTotal: 10,
+      handledCount: 2,
+      handledRate: 2 / 5,
+      truncatedCount: 2,
+      truncatedRate: 2 / 5,
+      detailCounts: { compact: 3, standard: 0, full: 2 },
+      profileCounts: { standard: 3, usage: 2 },
+      recoveryEmittedCount: 1,
+      invalidRecoveryCount: 2,
+      p50ProjectedBytes: 300,
+      p95ProjectedBytes: 1000,
+      maxProjectedBytes: 1000,
+      p50ProjectedTokens: 120,
+      p95ProjectedTokens: 400,
+      maxProjectedTokens: 400,
+    });
+    assert.deepEqual(snapshot.toolOutput.perTool.map(({ tool }) => tool), [
+      "sdl.context",
+      "sdl.manual",
+    ]);
+    const context = snapshot.toolOutput.perTool[0];
+    assert.ok(context);
+    assert.equal(context.calls, 3);
+    assert.equal(context.errors, 1);
+    assert.equal(context.rawBytesTotal, 3000);
+    assert.equal(context.projectedBytesTotal, 1450);
+    assert.equal(context.reductionRatio, 1550 / 3000);
+    assert.equal(context.p50ProjectedBytes, 400);
+    assert.equal(context.p95ProjectedBytes, 1000);
+    assert.equal(context.maxProjectedBytes, 1000);
+    assert.equal(context.rawTokensTotal, 1200);
+    assert.equal(context.projectedTokensTotal, 580);
+    assert.equal(context.removedFieldTotal, 6);
+    assert.equal(context.handledCount, 2);
+    assert.equal(context.handledRate, 2 / 3);
+    assert.equal(context.truncatedCount, 1);
+    assert.equal(context.truncatedRate, 1 / 3);
+    assert.deepEqual(context.detailCounts, {
+      compact: 2,
+      standard: 0,
+      full: 1,
+    });
+    assert.deepEqual(context.profileCounts, { standard: 3 });
+    assert.equal(context.recoveryEmittedCount, 1);
+    assert.equal(context.invalidRecoveryCount, 2);
+    assert.equal(context.p50ProjectedTokens, 160);
+    assert.equal(context.p95ProjectedTokens, 400);
+    assert.equal(context.maxProjectedTokens, 400);
+    const manual = snapshot.toolOutput.perTool[1];
+    assert.deepEqual(manual, {
+      tool: "sdl.manual",
+      calls: 2,
+      errors: 0,
+      rawBytesTotal: 1100,
+      projectedBytesTotal: 400,
+      rawTokensTotal: 440,
+      projectedTokensTotal: 160,
+      reductionRatio: 700 / 1100,
+      removedFieldTotal: 4,
+      handledCount: 0,
+      handledRate: 0,
+      truncatedCount: 1,
+      truncatedRate: 0.5,
+      detailCounts: { compact: 1, standard: 0, full: 1 },
+      profileCounts: { usage: 2 },
+      recoveryEmittedCount: 0,
+      invalidRecoveryCount: 0,
+      p50ProjectedBytes: 300,
+      p95ProjectedBytes: 300,
+      maxProjectedBytes: 300,
+      p50ProjectedTokens: 120,
+      p95ProjectedTokens: 120,
+      maxProjectedTokens: 120,
+    });
+    assert.equal(JSON.stringify(snapshot).includes("secret"), false);
+  });
+
+  it("uses deterministic odd/even percentiles and a zero-raw reduction branch", () => {
+    assert.equal(percentile([9, 1, 5], 0.5), 5);
+    assert.equal(percentile([4, 1, 3, 2], 0.5), 3);
+
+    const agg = new Aggregator(DEFAULT_AGGREGATOR_OPTIONS);
+    agg.recordToolCall({
+      tool: "sdl.zero",
+      request: {},
+      response: {},
+      durationMs: 1,
+      projection: toolProjection({
+        effectiveDetail: "standard",
+        projectedBytes: 7,
+        projectedTokens: 3,
+      }),
+    });
+    assert.equal(agg.getSnapshot(REPO).toolOutput.overall.reductionRatio, 0);
+  });
+
+  it("includes tool-output byte and token samples in timeseries", () => {
+    const agg = new Aggregator(DEFAULT_AGGREGATOR_OPTIONS);
+    agg.recordToolCall({
+      tool: "sdl.context",
+      request: {},
+      response: {},
+      durationMs: 1,
+      projection: toolProjection({
+        rawBytes: 90,
+        rawTokens: 30,
+        projectedBytes: 30,
+        projectedTokens: 10,
+        removedFieldCount: 1,
+      }),
+    });
+
+    const { series } = agg.getTimeseries(REPO, "15m");
+    assert.equal(series.toolOutputRawBytes?.[0]?.rawBytes, 90);
+    assert.equal(series.toolOutputProjectedBytes?.[0]?.projectedBytes, 30);
+    assert.equal(series.toolOutputRawTokens?.[0]?.rawTokens, 30);
+    assert.equal(series.toolOutputProjectedTokens?.[0]?.projectedTokens, 10);
   });
 });

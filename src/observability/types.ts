@@ -478,6 +478,50 @@ export interface PredictiveContextMetrics {
   topStrategies: PredictiveContextStrategyMetrics[];
 }
 
+
+export interface ToolOutputMetricSummary {
+  /** Calls with final projection measurements. */
+  calls: number;
+  errors: number;
+  rawBytesTotal: number;
+  projectedBytesTotal: number;
+  rawTokensTotal: number;
+  projectedTokensTotal: number;
+  /**
+   * Fraction of raw bytes removed by projection. Returns 0 when rawBytesTotal
+   * is 0, including the defensive case where projected output is non-empty.
+   */
+  reductionRatio: number;
+  removedFieldTotal: number;
+  handledCount: number;
+  handledRate: number;
+  truncatedCount: number;
+  truncatedRate: number;
+  detailCounts: Partial<
+    Record<"summary" | "compact" | "standard" | "full", number>
+  >;
+  profileCounts: Record<string, number>;
+  recoveryEmittedCount: number;
+  invalidRecoveryCount: number;
+  p50ProjectedBytes: number;
+  p95ProjectedBytes: number;
+  maxProjectedBytes: number;
+  p50ProjectedTokens: number;
+  p95ProjectedTokens: number;
+  maxProjectedTokens: number;
+}
+
+export interface ToolOutputToolSummary extends ToolOutputMetricSummary {
+  tool: string;
+}
+
+export interface ToolOutputSnapshot {
+  schemaVersion: 1;
+  overall: ToolOutputMetricSummary;
+  /** Stable lexical order by tool name. */
+  perTool: ToolOutputToolSummary[];
+}
+
 export interface ObservabilitySnapshot {
   schemaVersion: 1;
   /** ISO 8601 timestamp at which the snapshot was generated. */
@@ -505,6 +549,7 @@ export interface ObservabilitySnapshot {
   toolVolume: ToolVolume;
   auditBuffer: AuditBufferMetrics;
   postIndexSession: PostIndexSessionMetrics;
+  toolOutput: ToolOutputSnapshot;
 }
 
 /* -------------------------------------------------------------------------- */

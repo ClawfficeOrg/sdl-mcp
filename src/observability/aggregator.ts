@@ -58,6 +58,8 @@ import type {
   TokenSavingsSource,
   TokenSavingsToolMetrics,
   TokenEfficiencyMetrics,
+  ToolOutputMetricSummary,
+  ToolOutputSnapshot,
   ToolVolume,
 } from "./types.js";
 import { TOKEN_SAVINGS_SOURCES } from "./types.js";
@@ -169,9 +171,216 @@ interface ToolLatencyBucket {
   phases: Map<string, LatencyPhaseBucket>;
 }
 
+
+type ToolOutputProjection = NonNullable<ToolCallEvent["projection"]>;
+
+interface ToolOutputBucket {
+  calls: number;
+  errors: number;
+  rawBytesTotal: number;
+  projectedBytesTotal: number;
+  rawTokensTotal: number;
+  projectedTokensTotal: number;
+  removedFieldTotal: number;
+  handledCount: number;
+  truncatedCount: number;
+  detailCounts: Map<string, number>;
+  profileCounts: Map<string, number>;
+  recoveryEmittedCount: number;
+  invalidRecoveryCount: number;
+  projectedBytes: number[];
+  projectedTokens: number[];
+}
+
+interface ToolOutputTimeseriesRec {
+  rawBytes: number;
+  projectedBytes: number;
+  rawTokens: number;
+  projectedTokens: number;
+}
+
+interface ToolOutputAccumulator {
+  overall: ToolOutputBucket;
+  perTool: Map<string, ToolOutputBucket>;
+  short: RingBuffer<ToolOutputTimeseriesRec>;
+  long: RingBuffer<ToolOutputTimeseriesRec>;
+}
+
+const toolOutputAccumulators = new WeakMap<object, ToolOutputAccumulator>();
+
+function newToolOutputBucket(): ToolOutputBucket {
+  return {
+    calls: 0,
+    errors: 0,
+    rawBytesTotal: 0,
+    projectedBytesTotal: 0,
+    rawTokensTotal: 0,
+    projectedTokensTotal: 0,
+    removedFieldTotal: 0,
+    handledCount: 0,
+    truncatedCount: 0,
+    detailCounts: new Map([
+      ["compact", 0],
+      ["standard", 0],
+      ["full", 0],
+    ]),
+    profileCounts: new Map(),
+    recoveryEmittedCount: 0,
+    invalidRecoveryCount: 0,
+    projectedBytes: [],
+    projectedTokens: [],
+  };
+}
+
+function getToolOutputAccumulator(
+  owner: object,
+  opts: AggregatorOptions,
+): ToolOutputAccumulator {
+  let accumulator = toolOutputAccumulators.get(owner);
+  if (accumulator === undefined) {
+    accumulator = {
+      overall: newToolOutputBucket(),
+      perTool: new Map(),
+      short: new RingBuffer(opts.shortCapacity),
+      long: new RingBuffer(opts.longCapacity),
+    };
+    toolOutputAccumulators.set(owner, accumulator);
+  }
+  return accumulator;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Aggregator                                                                  */
 /* -------------------------------------------------------------------------- */
+
+
+function safeProjectionNumber(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function incrementCount(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function addToolOutputMetric(
+  bucket: ToolOutputBucket,
+  projection: ToolOutputProjection,
+  errored: boolean,
+): ToolOutputTimeseriesRec {
+  const sample = {
+    rawBytes: safeProjectionNumber(projection.rawBytes),
+    projectedBytes: safeProjectionNumber(projection.projectedBytes),
+    rawTokens: safeProjectionNumber(projection.rawTokens),
+    projectedTokens: safeProjectionNumber(projection.projectedTokens),
+  };
+  bucket.calls += 1;
+  if (errored) bucket.errors += 1;
+  bucket.rawBytesTotal += sample.rawBytes;
+  bucket.projectedBytesTotal += sample.projectedBytes;
+  bucket.rawTokensTotal += sample.rawTokens;
+  bucket.projectedTokensTotal += sample.projectedTokens;
+  bucket.removedFieldTotal += safeProjectionNumber(projection.removedFieldCount);
+  if (projection.responseHandled) bucket.handledCount += 1;
+  if (projection.truncated) bucket.truncatedCount += 1;
+  incrementCount(bucket.detailCounts, projection.effectiveDetail);
+  incrementCount(
+    bucket.profileCounts,
+    projection.profile.observabilityProfile,
+  );
+  if (projection.recoveryEmitted) bucket.recoveryEmittedCount += 1;
+  bucket.invalidRecoveryCount += safeProjectionNumber(
+    projection.invalidRecoveryCount,
+  );
+  pushBoundedSorted(
+    bucket.projectedBytes,
+    sample.projectedBytes,
+    LATENCY_WINDOW_SIZE,
+  );
+  pushBoundedSorted(
+    bucket.projectedTokens,
+    sample.projectedTokens,
+    LATENCY_WINDOW_SIZE,
+  );
+  return sample;
+}
+
+function recordToolOutputMetric(
+  accumulator: ToolOutputAccumulator,
+  tool: string,
+  errored: boolean,
+  projection: ToolOutputProjection,
+): void {
+  let toolBucket = accumulator.perTool.get(tool);
+  if (toolBucket === undefined) {
+    toolBucket = newToolOutputBucket();
+    accumulator.perTool.set(tool, toolBucket);
+  }
+  const sample = addToolOutputMetric(
+    accumulator.overall,
+    projection,
+    errored,
+  );
+  addToolOutputMetric(toolBucket, projection, errored);
+  accumulator.short.push(sample);
+  accumulator.long.push(sample);
+}
+
+function sortedCountRecord(map: Map<string, number>): Record<string, number> {
+  return Object.fromEntries(
+    [...map.entries()].sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function summarizeToolOutput(bucket: ToolOutputBucket): ToolOutputMetricSummary {
+  const reducedBytes = Math.max(
+    0,
+    bucket.rawBytesTotal - bucket.projectedBytesTotal,
+  );
+  return {
+    calls: bucket.calls,
+    errors: bucket.errors,
+    rawBytesTotal: bucket.rawBytesTotal,
+    projectedBytesTotal: bucket.projectedBytesTotal,
+    rawTokensTotal: bucket.rawTokensTotal,
+    projectedTokensTotal: bucket.projectedTokensTotal,
+    reductionRatio:
+      bucket.rawBytesTotal === 0 ? 0 : reducedBytes / bucket.rawBytesTotal,
+    removedFieldTotal: bucket.removedFieldTotal,
+    handledCount: bucket.handledCount,
+    handledRate: bucket.calls === 0 ? 0 : bucket.handledCount / bucket.calls,
+    truncatedCount: bucket.truncatedCount,
+    truncatedRate:
+      bucket.calls === 0 ? 0 : bucket.truncatedCount / bucket.calls,
+    detailCounts: sortedCountRecord(bucket.detailCounts),
+    profileCounts: sortedCountRecord(bucket.profileCounts),
+    recoveryEmittedCount: bucket.recoveryEmittedCount,
+    invalidRecoveryCount: bucket.invalidRecoveryCount,
+    p50ProjectedBytes: percentile(bucket.projectedBytes, 0.5),
+    p95ProjectedBytes: percentile(bucket.projectedBytes, 0.95),
+    maxProjectedBytes:
+      bucket.projectedBytes.length === 0
+        ? 0
+        : Math.max(...bucket.projectedBytes),
+    p50ProjectedTokens: percentile(bucket.projectedTokens, 0.5),
+    p95ProjectedTokens: percentile(bucket.projectedTokens, 0.95),
+    maxProjectedTokens:
+      bucket.projectedTokens.length === 0
+        ? 0
+        : Math.max(...bucket.projectedTokens),
+  };
+}
+
+function computeToolOutputSnapshot(
+  accumulator: ToolOutputAccumulator,
+): ToolOutputSnapshot {
+  return {
+    schemaVersion: 1,
+    overall: summarizeToolOutput(accumulator.overall),
+    perTool: [...accumulator.perTool.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([tool, bucket]) => ({ tool, ...summarizeToolOutput(bucket) })),
+  };
+}
 
 export interface AggregatorOptions {
   shortWindowMs: number;
@@ -530,6 +739,15 @@ export class Aggregator {
     this.latencyLong.push(dur);
     this.errorRateShort.push({ errors: errored ? 1 : 0, total: 1 });
     this.errorRateLong.push({ errors: errored ? 1 : 0, total: 1 });
+
+    if (event.projection !== undefined) {
+      recordToolOutputMetric(
+        getToolOutputAccumulator(this, this.opts),
+        tool,
+        errored,
+        event.projection,
+      );
+    }
 
     if (
       typeof event.tokensUsed === "number" &&
@@ -1218,6 +1436,9 @@ export class Aggregator {
     const toolVolume = this.computeToolVolume();
     const auditBuffer = this.computeAuditBuffer();
     const postIndexSession = this.computePostIndexSession();
+    const toolOutput = computeToolOutputSnapshot(
+      getToolOutputAccumulator(this, this.opts),
+    );
 
     const bottleneck = classifyBottleneck({
       cpuPctAvg: resources.cpuPctAvg,
@@ -1258,6 +1479,7 @@ export class Aggregator {
       toolVolume,
       auditBuffer,
       postIndexSession,
+      toolOutput,
     };
   }
 
@@ -1273,6 +1495,7 @@ export class Aggregator {
           this.opts.longWindowMs / Math.max(1, this.opts.longCapacity),
         );
 
+    const toolOutput = getToolOutputAccumulator(this, this.opts);
     const series: Record<string, TimeseriesPoint[]> = {
       cacheHitRate: ringToHitRateSeries(
         useShort ? this.cacheHitRateShort : this.cacheHitRateLong,
@@ -1303,6 +1526,22 @@ export class Aggregator {
       tokensSavedPerMin: ringToScalarSeries(
         useShort ? this.tokensSavedShort : this.tokensSavedLong,
         "tokensSavedPerMin",
+      ),
+      toolOutputRawBytes: ringToToolOutputSeries(
+        useShort ? toolOutput.short : toolOutput.long,
+        "rawBytes",
+      ),
+      toolOutputProjectedBytes: ringToToolOutputSeries(
+        useShort ? toolOutput.short : toolOutput.long,
+        "projectedBytes",
+      ),
+      toolOutputRawTokens: ringToToolOutputSeries(
+        useShort ? toolOutput.short : toolOutput.long,
+        "rawTokens",
+      ),
+      toolOutputProjectedTokens: ringToToolOutputSeries(
+        useShort ? toolOutput.short : toolOutput.long,
+        "projectedTokens",
       ),
       cpuPct: ringToResourceSeries(
         useShort ? this.resourcesShort : this.resourcesLong,
@@ -1858,6 +2097,16 @@ function ringToScalarSeries(
   key: string,
 ): TimeseriesPoint[] {
   return ring.snapshot().map((e) => ({ t: e.t, [key]: e.v }));
+}
+
+function ringToToolOutputSeries(
+  ring: RingBuffer<ToolOutputTimeseriesRec>,
+  key: keyof ToolOutputTimeseriesRec,
+): TimeseriesPoint[] {
+  return ring.snapshot().map((entry) => ({
+    t: entry.t,
+    [key]: entry.v[key],
+  }));
 }
 
 function ringToResourceSeries(
