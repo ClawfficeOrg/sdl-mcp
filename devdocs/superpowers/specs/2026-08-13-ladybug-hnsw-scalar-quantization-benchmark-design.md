@@ -116,7 +116,7 @@ Each candidate receives a fresh disposable database in each repetition. Reversin
 
 ## Named retrieval-quality evaluation
 
-For each candidate in each repetition, run the existing SDL-MCP named semantic-retrieval cases against that candidate's validated full-graph clone through an isolated SDL-MCP runtime before closing or deleting the clone. Preserve the production retrieval pipeline, query settings, and non-vector graph state; change only the candidate HNSW definition.
+For each candidate in each repetition, finish ANN measurement, strictly close the benchmark-owned connection and Database handle, then run the existing SDL-MCP named semantic-retrieval cases against that same validated full-graph family through an isolated child-process SDL-MCP runtime. Require the child process to close strictly before measuring durable family size or continuing cleanup. Preserve the production retrieval pipeline, query settings, and non-vector graph state; change only the candidate HNSW definition. Never open the same family through two independent Database owners concurrently.
 
 The implementation plan must identify the exact existing harness and case set before code changes. If the harness cannot safely target a disposable database without adding a production quantization setting, add a benchmark-only injected index definition or benchmark adapter. Do not expose an unproven public configuration field to make the experiment convenient.
 
