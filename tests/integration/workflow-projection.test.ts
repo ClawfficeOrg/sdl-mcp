@@ -146,6 +146,82 @@ describe("workflow projection", () => {
     });
   });
 
+  it("pipes canonical runtime status while omitting minimal success output", async () => {
+    let received: unknown;
+    const actions: ActionMap = {
+      "runtime.execute": {
+        schema: z.object({ outputMode: z.literal("minimal") }),
+        handler: async () => ({
+          status: "success",
+          exitCode: 0,
+          signal: null,
+          durationMs: 5,
+          stdoutSummary: "",
+          stderrSummary: "",
+          artifactHandle: null,
+          truncation: {
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            totalStdoutBytes: 0,
+            totalStderrBytes: 0,
+          },
+        }),
+      },
+      "test.echo": {
+        schema: z.object({ value: z.string() }),
+        handler: async (args) => {
+          received = (args as { value: string }).value;
+          return { received };
+        },
+      },
+    };
+    const request: ParsedWorkflowRequest = {
+      repoId: "repo",
+      onError: "stop",
+      steps: [
+        {
+          fn: "runtimeExecute",
+          action: "runtime.execute",
+          args: { outputMode: "minimal" },
+          internal: false,
+          projectionOptions: { detail: "compact", includeDiagnostics: false },
+        },
+        {
+          fn: "testEcho",
+          action: "test.echo",
+          args: { value: "$0.status" },
+          internal: false,
+          projectionOptions: { detail: "compact", includeDiagnostics: false },
+        },
+      ],
+    };
+
+    const executed = await executeWorkflow(
+      request,
+      actions,
+      config,
+      undefined,
+      undefined,
+      (fn, value, args) =>
+        projectWorkflowChildResultForModel(
+          fn,
+          value,
+          { detail: "compact" },
+          args,
+        ),
+    );
+    const projected = projectWorkflow(executed, {
+      repoId: "repo",
+      detail: "compact",
+      steps: request.steps,
+    });
+    const steps = projected.results as Array<Record<string, unknown>>;
+
+    assert.equal(received, "success");
+    assert.deepEqual(steps[0], { fn: "runtimeExecute" });
+    assert.deepEqual(steps[1].result, { received: "success" });
+  });
+
   it("deduplicates validation, handler, partial, skipped, and budget failures", () => {
     const cases = [
       failureFixture("error", { fn: "validationFixture" }),

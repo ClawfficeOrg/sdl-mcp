@@ -142,6 +142,26 @@ function recovery(
   }).nextAction;
 }
 
+/**
+ * A workflow's step envelope already communicates success by omitting a failure
+ * status. Keep direct runtime results intact, but expose only explicitly
+ * requested runtime output inside successful workflow steps.
+ */
+function projectWorkflowSuccessResult(
+  fn: unknown,
+  result: unknown,
+): unknown {
+  if (
+    typeof fn !== "string"
+    || getWorkflowChildAction(fn) !== "runtime.execute"
+    || !isRecord(result)
+  ) {
+    return result;
+  }
+  const { status: _status, ...requestedOutput } = result;
+  return Object.keys(requestedOutput).length > 0 ? requestedOutput : undefined;
+}
+
 function compactStep(
   input: ModelProjectionInput,
   raw: unknown,
@@ -201,7 +221,10 @@ function compactStep(
   }
   out.fn = raw.fn;
   if (status !== "ok") out.status = status;
-  if (status === "ok" && "result" in visible) out.result = result;
+  if (status === "ok" && "result" in visible) {
+    const successResult = projectWorkflowSuccessResult(raw.fn, result);
+    if (successResult !== undefined) out.result = successResult;
+  }
   const error = status === "ok" ? undefined : errorValue(raw);
   if (error !== undefined) out.error = error;
   if (status !== "ok" && typeof raw.blockedByStep === "number") {

@@ -7,6 +7,7 @@ import { createActionMap, type ActionMap } from "../gateway/router.js";
 import {
   AgentContextOutputSchema,
   AgentContextRequestSchema,
+  WorkflowRuntimeExecuteResponseSchema,
   withProjectionSuccessOutputSchema,
 } from "../mcp/tools.js";
 import { handleAgentContext } from "../mcp/tools/context.js";
@@ -670,7 +671,9 @@ export function registerCodeModeTools(
               action,
               ACTION_SEARCH_OUTPUT_SCHEMA,
             )
-          : publicSuccessOutputSchemaByAction.get(action);
+          : action === "runtime.execute"
+            ? WorkflowRuntimeExecuteResponseSchema
+            : publicSuccessOutputSchemaByAction.get(action);
       return outputSchema === undefined ? [] : [[fn, outputSchema] as const];
     }),
     ...Object.entries(INTERNAL_TRANSFORM_SUCCESS_OUTPUT_SCHEMA_BY_ACTION),

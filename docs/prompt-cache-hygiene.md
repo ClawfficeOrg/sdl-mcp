@@ -79,6 +79,8 @@ Projection fails closed for malformed output, unrecognized profiles, unsafe reco
 
 Diagnostics remain separate from normal model context. `includeDiagnostics: true` is an explicit per-call prompt-cache opt-out; default compact, standard, and full output stays content-shaped and cache-stable. Diagnostic fixture exclusions must identify the allowlisted volatile field and explain why no deterministic substitute exists.
 
+Successful workflow steps omit `status`; the absence of an error is the success signal. A successful minimal `runtimeExecute` step also omits `result`, while non-minimal modes expose only the requested runtime data and bounded recovery metadata. Failed steps retain `status: "error"` and `error`. Canonical executor results keep status, exit code, and accounting fields for `$N` references; directly called `runtime.execute` responses retain their own status because they have no workflow envelope.
+
 ## Contributor checks
 
 When a projected response changes, add compact, full, and error coverage; validate each recovery path; regenerate the output-profile inventory; and update the determinism fixture. Keep intentional session-scoped exclusions narrow and documented.

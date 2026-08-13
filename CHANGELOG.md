@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Output-contract migration**: Replace repo.status `detail:"minimal"` with `detail:"compact"`; minimal is invalid. Omitted `file.read` `responseMode` now parses as `auto` instead of former `inline`. Small reads remain inline, and large reads may return handles. Use `detail:"full"` when compact omits a semantic field and `includeDiagnostics: true` only for diagnosis.
+- **Workflow success projection**: Successful workflow steps no longer repeat a success status. Minimal runtime steps omit their empty result, non-minimal runtime steps return only requested output, and failures keep explicit error status and details. Canonical results remain unchanged for workflow piping and accounting; direct runtime calls retain status.
 
 ## [0.13.3] - 2026-08-08
 

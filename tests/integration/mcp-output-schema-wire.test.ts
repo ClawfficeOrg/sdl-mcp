@@ -655,6 +655,61 @@ describe("MCP output-schema wire contracts", { concurrency: false }, () => {
     assert.ok(results?.some((result) => result.status === "error"));
   });
 
+  it("omits redundant success metadata from runtimeExecute workflow output", async () => {
+    const minimal = (await client.callTool({
+      name: "sdl.workflow",
+      arguments: {
+        repoId: REPO_ID,
+        steps: [{
+          fn: "runtimeExecute",
+          args: {
+            runtime: "node",
+            args: ["-e", "process.stdout.write('minimal-hidden')"],
+            outputMode: "minimal",
+            persistOutput: false,
+          },
+        }],
+      },
+    })) as ToolEnvelope;
+    const summary = (await client.callTool({
+      name: "sdl.workflow",
+      arguments: {
+        repoId: REPO_ID,
+        steps: [{
+          fn: "runtimeExecute",
+          args: {
+            runtime: "node",
+            args: ["-e", "process.stdout.write('summary-visible')"],
+            outputMode: "summary",
+            persistOutput: false,
+          },
+        }],
+      },
+    })) as ToolEnvelope;
+    const minimalStep = (
+      minimal.structuredContent as { results?: Array<Record<string, unknown>> }
+    )?.results?.[0];
+    const summaryStep = (
+      summary.structuredContent as { results?: Array<Record<string, unknown>> }
+    )?.results?.[0];
+
+    assert.notEqual(
+      minimal.isError,
+      true,
+      JSON.stringify(minimal.structuredContent),
+    );
+    assert.deepEqual(minimalStep, { fn: "runtimeExecute" });
+    assert.notEqual(
+      summary.isError,
+      true,
+      JSON.stringify(summary.structuredContent),
+    );
+    assert.equal(summaryStep?.status, undefined);
+    assert.deepEqual(summaryStep?.result, {
+      stdoutSummary: "summary-visible",
+    });
+  });
+
   it("returns the exact static no-op checkpoint payload through the SDK wire", async () => {
     const expected = {
       repoId: REPO_ID,

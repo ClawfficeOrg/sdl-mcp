@@ -4691,11 +4691,65 @@ const ProjectedCodeHotPathCompactResponseSchema = z
   })
   .strict();
 
-const ProjectedRuntimeExecuteResponseSchema = z
+const RuntimeProjectedExcerptSchema = z.union([
+  RuntimeExecuteExcerptSchema.strict(),
+  z.string(),
+]);
+const RuntimeProjectedPreviewSchema = z
   .object({
-    status: z.enum(["success", "failure", "timeout", "cancelled", "denied"]),
+    stdoutSummary: z.string().optional(),
+    stderrSummary: z.string().optional(),
+    excerpts: z.array(RuntimeProjectedExcerptSchema).optional(),
+    message: z.string().optional(),
   })
   .strict();
+const RuntimeProjectedHandlingErrorSchema = z
+  .object({
+    code: z.enum([
+      "RUNTIME_OUTPUT_CAPTURE_INCOMPLETE",
+      "RUNTIME_OUTPUT_RECOVERY_UNAVAILABLE",
+    ]),
+    message: z.string(),
+    retryable: z.literal(false),
+  })
+  .strict();
+
+/**
+ * Successful runtime output as embedded in a workflow step. The workflow
+ * envelope already signals success, so only caller-requested output and
+ * recovery metadata remain.
+ */
+export const WorkflowRuntimeExecuteResponseSchema = z
+  .object({
+    stdoutSummary: z.string().optional(),
+    stderrSummary: z.string().optional(),
+    excerpts: z.array(RuntimeProjectedExcerptSchema).optional(),
+    preview: RuntimeProjectedPreviewSchema.optional(),
+    artifactHandle: z.string().optional(),
+    nextAction: z
+      .object({
+        action: z.literal("runtime.queryOutput"),
+        args: z.record(z.string(), z.unknown()),
+      })
+      .strict()
+      .optional(),
+    incompleteCapture: z
+      .object({
+        stdoutTruncated: z.boolean(),
+        stderrTruncated: z.boolean(),
+        recoverable: z.literal(false),
+      })
+      .strict()
+      .optional(),
+    handlingError: RuntimeProjectedHandlingErrorSchema.optional(),
+    durationMs: z.number().nonnegative().optional(),
+  })
+  .strict();
+
+const ProjectedRuntimeExecuteResponseSchema =
+  WorkflowRuntimeExecuteResponseSchema.extend({
+    status: z.enum(["success", "failure", "timeout", "cancelled", "denied"]),
+  }).strict();
 
 const ProjectedRuntimeQueryCompactResponseSchema =
   RuntimeQueryOutputResponseSchema.pick({
