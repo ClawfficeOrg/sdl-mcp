@@ -61,7 +61,7 @@ The query-quality matrix contains five candidates:
 | SQ16 | `sq16` | false |
 | SQ16 plus rerank | `sq16` | true |
 
-The rerank flag is an optional CREATE_VECTOR_INDEX argument with a default of false. LadybugDB persists it in the index definition and consults it during queries. It does not create a different HNSW graph, but a fair compatibility test still creates all five physical definitions per repetition. Therefore each repetition performs five physical builds. Build comparisons aggregate by quantization mode: full precision, SQ8, and SQ16. Duplicate SQ8/SQ16 build observations from rerank variants are reported but are not treated as independent evidence that reranking changes construction cost.
+The rerank flag is an optional CREATE_VECTOR_INDEX argument with a default of false. LadybugDB persists it in the index definition and consults it during queries. It does not create a different HNSW graph, but a fair compatibility test still creates all five physical definitions per repetition. Therefore each repetition performs five physical builds. After recommendation step 2 selects one rerank state for each quantization mode, that mode's build value is the median of exactly the selected definition's two repetition build times. The other rerank definition's two builds remain compatibility and diagnostic observations; never pool all four or average rerank states when applying the 10-percent adoption boundary.
 
 ## Sampling, validation, and ground truth
 
@@ -103,7 +103,7 @@ Record the following per candidate and per repetition:
 
 For NDCG@10, assign relevance 11-r to the item at exact rank r, producing gains 10 through 1; any item outside exact top-10 has relevance 0. For predicted position i, compute DCG as the sum of (2^relevance - 1) / log2(i + 1), with one-based i. IDCG is the same calculation over the exact stable order. NDCG is DCG divided by IDCG. The exact symbol-ID tie-breaker defines IDCG deterministically.
 
-Aggregate metrics retain individual observations. Timing summaries use medians across repetitions. Recall and named-case eligibility gates evaluate each repetition independently using the first timed ANN pass and the paired full-precision candidate. Pooled quality values are summary-only and never change eligibility.
+Aggregate metrics retain individual observations. Timing summaries use medians across repetitions. Recall eligibility evaluates each repetition independently from the first timed ANN pass against the paired full-precision candidate. Named-case eligibility evaluates the separate isolated SDL-MCP harness results against static expectations and the paired full-precision harness run. Pooled quality values are summary-only and never change eligibility.
 
 ## Order-bias control
 
