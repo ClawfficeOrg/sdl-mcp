@@ -20,10 +20,22 @@ Quantization changes HNSW construction and candidate generation. Full-precision 
 
 A quantized candidate is eligible only if it satisfies both quality gates:
 
-1. Its mean recall@10 is no more than 0.5 percentage points below the matching full-precision baseline.
-2. It causes no regression in SDL-MCP's named semantic-retrieval quality cases.
+1. In each repetition, its mean recall@10 is no more than 0.5 percentage points below the full-precision result from that same repetition.
+2. It causes no regression in SDL-MCP's named semantic-retrieval quality cases in either repetition.
 
-Build speed, checkpoint-inclusive time, database size, memory, and query latency cannot compensate for failing either quality gate. If multiple candidates pass, prefer the simpler and lower-cost candidate. If none pass, retain full precision.
+For repetition r, define recall loss as fullPrecisionRecall_r minus candidateRecall_r. The candidate passes only when recall loss is less than or equal to 0.005 in both repetitions. Compare unrounded floating-point means; round only display values. Report the pooled mean across the same 200 queries and two repetitions as a stability summary, but do not claim that repeating the same queries creates 400 independent semantic samples.
+
+Query latency is a viability gate: reject a candidate only when its median p95 is both more than 10 percent and more than 2 milliseconds slower than full precision. This combined rule avoids treating timer noise on very short queries as material.
+
+Apply this deterministic recommendation hierarchy:
+
+1. Reject every candidate that fails recall, named-case, compatibility, or query-latency gates.
+2. Prefer reranking off when both rerank states for one quantization mode pass. Use reranking on only when reranking off fails a quality gate or reranking improves mean NDCG@10 by at least 0.005 without failing the latency gate.
+3. A quantized mode must improve median forced-checkpoint-inclusive build time by at least 10 percent relative to full precision; otherwise retain full precision because two repetitions cannot establish a smaller difference reliably.
+4. Among remaining quantized modes, choose the lowest median build time when the difference is at least 10 percent. If build times are within 10 percent, choose the smaller durable database family when its advantage is at least 10 percent. If both are within 10 percent, prefer SQ16 for greater numerical fidelity.
+5. If evidence is incomplete, contradictory, or inside all declared noise bands, retain full precision.
+
+Build speed, database size, and memory cannot compensate for failing a quality gate.
 
 ## Source corpus and isolation
 
@@ -33,7 +45,9 @@ The benchmark extends the existing `scripts/benchmark-hnsw-efc.ts` validated-clo
 
 Before copying, the benchmark must use the existing LadybugDB family-copy protocol and its source-family validation. If a consistent validated clone cannot be established while the source is active, the run must stop with recovery guidance rather than fall back to an unsafe file copy.
 
-All candidates use the same source-vector snapshot, vector count, vector hash, query sample, metric (`cosine`), `efc=200`, and installed `@ladybugdb/core@0.19.0` runtime.
+Each fresh clone initially contains the production full-precision index. Before measuring a candidate, drop that cloned index, record the drop duration, run an explicit successful CHECKPOINT outside the build timer, record the checkpoint duration, and verify from the catalog that the target index is absent. Only then start the CREATE_VECTOR_INDEX timer. This prevents the candidate's forced create checkpoint from absorbing the previous index drop's uncheckpointed WAL and internal-table changes.
+
+All candidates use the same source-vector snapshot, vector count, vector hash, query sample, metric (cosine), efc=200, query-time efs=200, and installed @ladybugdb/core@0.19.0 runtime.
 
 ## Candidate matrix
 
@@ -47,31 +61,47 @@ The query-quality matrix contains five candidates:
 | SQ16 | `sq16` | false |
 | SQ16 plus rerank | `sq16` | true |
 
-Build comparisons aggregate by physical quantization mode: full precision, SQ8, and SQ16. Rerank-enabled candidates remain separate physical builds because the setting is stored in the index definition, but the report must not claim their duplicate build measurements prove reranking changes construction cost.
+The rerank flag is an optional CREATE_VECTOR_INDEX argument with a default of false. LadybugDB persists it in the index definition and consults it during queries. It does not create a different HNSW graph, but a fair compatibility test still creates all five physical definitions per repetition. Therefore each repetition performs five physical builds. Build comparisons aggregate by quantization mode: full precision, SQ8, and SQ16. Duplicate SQ8/SQ16 build observations from rerank variants are reported but are not treated as independent evidence that reranking changes construction cost.
 
-## Sampling and ground truth
+## Sampling, validation, and ground truth
 
-Select 200 non-null Jina vectors deterministically by hashing each stable symbol ID and taking the first 200 by hash and then symbol ID. Exclude the query symbol itself from results.
+Validate every source row before sampling: the stable symbol ID must be unique and non-empty; the vector must contain exactly 768 finite IEEE-754 values and have a finite, non-zero norm. Reject the run on any invalid row rather than silently changing the corpus.
 
-Compute exact cosine top-10 neighbors once per query from the disposable snapshot before candidate construction, using stable symbol ID as the final tie-breaker. Reuse that exact ground truth for every candidate and repetition.
+For query sampling, compute SHA-256 over the UTF-8 bytes of each stable symbol ID. Sort by digest bytes and then by UTF-8 symbol ID bytes, and take the first 200 non-null validated vectors.
 
-Two hundred queries yield 2,000 top-10 truth positions. A 0.5-percentage-point difference therefore corresponds to ten neighbor matches, avoiding a threshold dominated by a single result.
+Build the corpus hash in stable symbol-ID byte order. Feed SHA-256 a versioned binary stream containing, for each row, the unsigned 32-bit little-endian UTF-8 ID length, ID bytes, unsigned 32-bit little-endian dimension, and each exact loaded vector value encoded as IEEE-754 Float64 little-endian. Record the hash algorithm and stream version.
 
-The evidence artifact records the sampling algorithm, ordered query IDs, source-vector count, and a deterministic hash of the ordered source vector identities and exact stored values so later runs can prove corpus equivalence.
+Compute exact cosine top-10 neighbors once per query from the disposable snapshot before candidate construction. Exclude the query stable ID before ordering and LIMIT 10. Order equal cosine scores by stable symbol ID bytes. Reuse that exact ground truth for every candidate and repetition.
+
+Two hundred queries yield 2,000 top-10 truth positions per repetition. A 0.5-percentage-point boundary equals ten matches within each paired repetition. The second repetition evaluates build and runtime stability over the same semantic sample; it does not double the number of independent queries.
+
+The evidence artifact records the ordered query IDs, source-vector count, validation result, and corpus hash.
+
+## ANN query protocol
+
+Use the same deterministic ordered 200-query list for every candidate. Set efs=200 explicitly. Request k=11 from QUERY_VECTOR_INDEX, remove exactly the query stable ID, and truncate to the first 10 remaining results. Fail the query if ten results do not remain. This prevents self-matches from reducing the evaluated result set to nine.
+
+After index creation, run one untimed warm-up pass over all 200 queries in the same order. Then run three timed passes in that order, recording all 600 invocation latencies and per-query results. Recall and NDCG use the first timed pass for the paired quality gate; the other passes measure query latency and verify byte-stable result IDs. A result-ID disagreement across timed passes is an instability failure.
+
+LadybugDB applies full-precision reranking to the approximate candidate set before its final resize to k. Reranking cannot recover a true neighbor absent from that candidate set, so all five candidates must use identical k, efs, warm-up, and query ordering.
 
 ## Metrics
 
 Record the following per candidate and per repetition:
 
-- `CREATE_VECTOR_INDEX` wall time, explicitly labeled as including LadybugDB's forced checkpoint.
-- Any separately observable load or setup time, without subtracting unmeasured checkpoint work from the build duration.
-- Disposable database-family size after the index is durable and closed.
-- Peak RSS only if it can be isolated reliably. Otherwise record it as unavailable with a reason.
+- DROP_VECTOR_INDEX wall time before the pre-build checkpoint.
+- Explicit pre-build CHECKPOINT wall time.
+- CREATE_VECTOR_INDEX wall time after the clean checkpoint boundary, explicitly labeled as including LadybugDB's forced create checkpoint.
+- Any separately observable clone/load/setup time.
+- Disposable database-family size after the index is durable and strictly closed.
+- Peak RSS only if measured in a candidate-isolated child process. Otherwise record it as unavailable with a reason.
 - Recall@10 against exact cosine ground truth.
-- NDCG@10 using the exact top-10 order as graded relevance and stable tie-breaking.
-- Query latency p50 and p95 after a bounded warm-up identical for all candidates.
+- NDCG@10 defined below.
+- Query latency p50 and p95 over the 600 timed invocations.
 - Named SDL-MCP semantic-retrieval quality-case results.
 - Cleanup outcome and any retained diagnostic path.
+
+For NDCG@10, assign relevance 11-r to the item at exact rank r, producing gains 10 through 1; any item outside exact top-10 has relevance 0. For predicted position i, compute DCG as the sum of (2^relevance - 1) / log2(i + 1), with one-based i. IDCG is the same calculation over the exact stable order. NDCG is DCG divided by IDCG. The exact symbol-ID tie-breaker defines IDCG deterministically.
 
 Aggregate metrics retain individual observations. Timing summaries use medians across repetitions; quality gates evaluate the combined deterministic query observations and also report each repetition so instability remains visible.
 
@@ -86,11 +116,11 @@ Each candidate receives a fresh disposable database in each repetition. Reversin
 
 ## Named retrieval-quality evaluation
 
-For each candidate, run the existing SDL-MCP named semantic-retrieval cases against that candidate's validated full-graph clone through an isolated SDL-MCP runtime. Preserve the production retrieval pipeline, query settings, and non-vector graph state; change only the candidate HNSW definition.
+For each candidate in each repetition, run the existing SDL-MCP named semantic-retrieval cases against that candidate's validated full-graph clone through an isolated SDL-MCP runtime before closing or deleting the clone. Preserve the production retrieval pipeline, query settings, and non-vector graph state; change only the candidate HNSW definition.
 
 The implementation plan must identify the exact existing harness and case set before code changes. If the harness cannot safely target a disposable database without adding a production quantization setting, add a benchmark-only injected index definition or benchmark adapter. Do not expose an unproven public configuration field to make the experiment convenient.
 
-Record case-level expected and actual identifiers/ranks. A missing expected symbol, a newly failed case, or a worse existing pass criterion is a regression even when aggregate recall passes.
+Record case-level expected and actual identifiers/ranks. A missing expected symbol, a newly failed case, or a worse existing pass criterion is a regression even when aggregate recall passes. Artifact finalization and successful cleanup occur only after these named-case results have been recorded.
 
 ## Code boundaries
 
@@ -126,28 +156,25 @@ Update the benchmark and HNSW troubleshooting documentation with the command, me
 
 ## Evidence artifact
 
-Write one JSON artifact only after validating its required fields. It contains:
+Use an explicit operator-selected output path outside the active database directory and reject an existing output path unless the operator explicitly selects a different path. Evidence uses a versioned discriminated schema:
 
-- schema version and benchmark implementation commit
-- timestamp as artifact metadata, not model-facing MCP output
-- OS, architecture, Node version, LadybugDB package version, and relevant hardware information when available
-- redacted source identity, vector dimension/count/hash, sampling details, and query IDs
-- exact candidate parameters and execution order
-- all individual measurements and aggregate summaries
-- recall and named-case gate decisions with reasons
-- retained or deleted disposable-family status
-- command exit status and terminal error when incomplete
+- complete: all candidates, repetitions, ANN queries, named cases, aggregates, gates, and recommendation are present.
+- incomplete: the completed subset, failure phase, terminal error, retained paths, and cleanup state are present; it contains no adoption recommendation.
 
-Use an explicit operator-selected output path. Do not write evidence into the active database directory.
+Both forms contain the benchmark implementation commit, timestamp, OS, architecture, Node and LadybugDB versions, hardware data when available, redacted source identity, corpus validation/hash, ordered query IDs, candidate parameters/order, measurements, and cleanup state.
+
+Write JSON to a uniquely named sibling temporary file, flush and close it, then atomically rename it to the selected output path. On a recoverable failure after option parsing, make a best-effort atomic write of a schema-valid incomplete artifact. Failure to write either form remains a non-zero terminal error and requires all disposable families to be retained.
+
+For a successful run, first strictly close every disposable family and atomically write a complete artifact with cleanup state pending. Then delete only validated descendants of the benchmark-owned temporary root and atomically replace the artifact with cleanup state deleted. If that final update fails, the prior complete artifact remains valid with cleanup pending, and the command exits non-zero with an explicit cleanup/evidence warning.
 
 ## Failure and cleanup behavior
 
 - Never mutate the source database.
 - Create each disposable family beneath a benchmark-owned temporary root.
-- After a fully successful run and durable evidence write, strictly close and delete disposable families.
-- On any build, query, validation, evidence-write, or strict-close failure, retain affected disposable families and print their exact paths for diagnosis.
-- If evidence writing fails, do not delete the databases that produced the unrecorded results.
-- A partial run must exit non-zero and must not produce an adoption recommendation.
+- Record the resolved root and require every recursive deletion target to be a resolved descendant owned by that run.
+- After a fully successful run, strict close, complete evidence persistence, and descendant validation, delete disposable families.
+- On any build, query, named-case, validation, initial evidence-write, or strict-close failure, retain affected disposable families and print their exact paths.
+- A partial run exits non-zero, emits a validated incomplete artifact when possible, and contains no adoption recommendation.
 - Unsupported scalar-quantization syntax in the installed driver is a failed compatibility smoke test, not permission to change the runtime or silently fall back.
 
 ## Test-driven implementation
@@ -156,14 +183,17 @@ Write and observe failing tests before implementation for:
 
 - accepted full/SQ8/SQ16 index definitions
 - invalid quantization and rerank combinations
-- exact `CREATE_VECTOR_INDEX` SQL for full precision, SQ8, SQ8 plus rerank, SQ16, and SQ16 plus rerank
+- exact CREATE_VECTOR_INDEX SQL for full precision, SQ8, SQ8 plus rerank, SQ16, and SQ16 plus rerank
 - unchanged legacy SQL when optional arguments are absent
-- candidate expansion and reverse ordering
-- deterministic sampling and corpus hashing
-- recall@10 and NDCG@10 calculations
-- the 0.5-percentage-point gate boundary
-- evidence validation and serialization
-- cleanup after success and retention after failure
+- candidate expansion, five physical definitions, and reverse ordering
+- explicit drop, pre-build checkpoint, absence verification, and timer boundaries
+- canonical source validation, sampling, and corpus hashing
+- k+1 self-exclusion and fixed efs query behavior
+- recall@10 and the specified NDCG@10 calculation
+- the paired 0.5-percentage-point gate boundary without display rounding
+- deterministic recommendation hierarchy and noise bands
+- complete and incomplete evidence validation and atomic serialization
+- cleanup after success, failure retention, and descendant-only deletion
 
 Add a small real-LadybugDB integration smoke test that creates and queries SQ8 and SQ16 indexes with reranking both off and on through the installed 0.19.0 driver. Run this before the expensive real-graph benchmark.
 
@@ -174,8 +204,8 @@ Add a small real-LadybugDB integration smoke test that creates and queries SQ8 a
 3. Run the focused unit tests.
 4. Run the real-LadybugDB scalar-quantization smoke test.
 5. Run the repository build, script typecheck, main typecheck where affected, and lint for changed production source.
-6. Run the real-graph benchmark and verify a complete evidence artifact.
-7. Run the named semantic-retrieval quality harness for every candidate.
+6. Run the real-graph benchmark. Within each candidate run, complete ANN measurements and named semantic-retrieval cases before strict close.
+7. Verify the complete evidence artifact, paired gates, recommendation hierarchy, and cleanup receipt.
 8. Request LadybugDB-specialist review of the implementation and evidence.
 9. Recommend SQ8, SQ16, or full precision strictly from the declared gates.
 
