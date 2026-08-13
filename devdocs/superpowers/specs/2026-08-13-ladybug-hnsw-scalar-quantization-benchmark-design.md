@@ -30,7 +30,7 @@ Query latency is a viability gate: reject a candidate only when its median p95 i
 Apply this deterministic recommendation hierarchy:
 
 1. Reject every candidate that fails recall, named-case, compatibility, or query-latency gates.
-2. Prefer reranking off when both rerank states for one quantization mode pass. Use reranking on only when reranking off fails a quality gate or reranking improves mean NDCG@10 by at least 0.005 without failing the latency gate.
+2. Prefer reranking off when both rerank states for one quantization mode pass. Use reranking on only when reranking off fails any eligibility gate and reranking on passes all eligibility gates, or when reranking improves mean NDCG@10 by at least 0.005 without failing the latency gate.
 3. A quantized mode must improve median forced-checkpoint-inclusive build time by at least 10 percent relative to full precision; otherwise retain full precision because two repetitions cannot establish a smaller difference reliably.
 4. Among remaining quantized modes, choose the lowest median build time when the difference is at least 10 percent. If build times are within 10 percent, choose the smaller durable database family when its advantage is at least 10 percent. If both are within 10 percent, prefer SQ16 for greater numerical fidelity.
 5. If evidence is incomplete, contradictory, or inside all declared noise bands, retain full precision.
@@ -65,9 +65,9 @@ The rerank flag is an optional CREATE_VECTOR_INDEX argument with a default of fa
 
 ## Sampling, validation, and ground truth
 
-Validate every source row before sampling: the stable symbol ID must be unique and non-empty; the vector must contain exactly 768 finite IEEE-754 values and have a finite, non-zero norm. Reject the run on any invalid row rather than silently changing the corpus.
+Null Jina embeddings are permitted and excluded from the candidate corpus. Record the total Symbol row count, excluded-null count, and non-null vector count. For every non-null Jina-vector row, require a unique non-empty stable symbol ID, exactly 768 finite IEEE-754 values, and a finite non-zero norm. Reject the run on any invalid non-null row rather than silently changing the corpus.
 
-For query sampling, compute SHA-256 over the UTF-8 bytes of each stable symbol ID. Sort by digest bytes and then by UTF-8 symbol ID bytes, and take the first 200 non-null validated vectors.
+For query sampling, compute SHA-256 over the UTF-8 bytes of each validated non-null vector's stable symbol ID. Sort by digest bytes and then by UTF-8 symbol ID bytes, and take the first 200 vectors.
 
 Build the corpus hash in stable symbol-ID byte order. Feed SHA-256 a versioned binary stream containing, for each row, the unsigned 32-bit little-endian UTF-8 ID length, ID bytes, unsigned 32-bit little-endian dimension, and each exact loaded vector value encoded as IEEE-754 Float64 little-endian. Record the hash algorithm and stream version.
 
@@ -103,7 +103,7 @@ Record the following per candidate and per repetition:
 
 For NDCG@10, assign relevance 11-r to the item at exact rank r, producing gains 10 through 1; any item outside exact top-10 has relevance 0. For predicted position i, compute DCG as the sum of (2^relevance - 1) / log2(i + 1), with one-based i. IDCG is the same calculation over the exact stable order. NDCG is DCG divided by IDCG. The exact symbol-ID tie-breaker defines IDCG deterministically.
 
-Aggregate metrics retain individual observations. Timing summaries use medians across repetitions; quality gates evaluate the combined deterministic query observations and also report each repetition so instability remains visible.
+Aggregate metrics retain individual observations. Timing summaries use medians across repetitions. Recall and named-case eligibility gates evaluate each repetition independently using the first timed ANN pass and the paired full-precision candidate. Pooled quality values are summary-only and never change eligibility.
 
 ## Order-bias control
 
@@ -120,7 +120,7 @@ For each candidate in each repetition, run the existing SDL-MCP named semantic-r
 
 The implementation plan must identify the exact existing harness and case set before code changes. If the harness cannot safely target a disposable database without adding a production quantization setting, add a benchmark-only injected index definition or benchmark adapter. Do not expose an unproven public configuration field to make the experiment convenient.
 
-Record case-level expected and actual identifiers/ranks. A missing expected symbol, a newly failed case, or a worse existing pass criterion is a regression even when aggregate recall passes. Artifact finalization and successful cleanup occur only after these named-case results have been recorded.
+Apply both static and paired comparators. The full-precision candidate must pass every harness-defined static expectation in each repetition; otherwise the entire experiment is inconclusive and produces no adoption recommendation. Each quantized candidate must pass the same static expectations and, for every expected identifier exposed by the ordered result, return it at a numeric rank no worse than the paired full-precision run. Treat a missing identifier as infinite rank. When a case has only a boolean harness predicate, require both full precision and the quantized candidate to pass it. Record all expected and actual identifiers/ranks and both comparator outcomes. Artifact finalization and successful cleanup occur only after these named-case results have been recorded.
 
 ## Code boundaries
 
@@ -163,9 +163,9 @@ Use an explicit operator-selected output path outside the active database direct
 
 Both forms contain the benchmark implementation commit, timestamp, OS, architecture, Node and LadybugDB versions, hardware data when available, redacted source identity, corpus validation/hash, ordered query IDs, candidate parameters/order, measurements, and cleanup state.
 
-Write JSON to a uniquely named sibling temporary file, flush and close it, then atomically rename it to the selected output path. On a recoverable failure after option parsing, make a best-effort atomic write of a schema-valid incomplete artifact. Failure to write either form remains a non-zero terminal error and requires all disposable families to be retained.
+Write JSON to a uniquely named sibling temporary file, flush and close it, then atomically rename it to the selected output path. On a recoverable failure after option parsing and before validated deletion begins, make a best-effort atomic write of a schema-valid incomplete artifact. Failure to write either form before deletion remains a non-zero terminal error and requires all disposable families to be retained.
 
-For a successful run, first strictly close every disposable family and atomically write a complete artifact with cleanup state pending. Then delete only validated descendants of the benchmark-owned temporary root and atomically replace the artifact with cleanup state deleted. If that final update fails, the prior complete artifact remains valid with cleanup pending, and the command exits non-zero with an explicit cleanup/evidence warning.
+For a successful benchmark, first strictly close every disposable family and atomically write a complete, recommendation-bearing artifact with cleanup state pending. That durable complete artifact is the deletion authorization boundary. Then delete only validated descendants of the benchmark-owned temporary root and atomically replace the artifact with cleanup state deleted. The final replacement is a cleanup receipt, not benchmark evidence finalization. If it fails after deletion, the prior complete artifact and recommendation remain valid with cleanup pending; the command exits non-zero with an explicit receipt-update warning, but the run is not reclassified as partial and the already deleted families cannot be retained.
 
 ## Failure and cleanup behavior
 
@@ -174,7 +174,8 @@ For a successful run, first strictly close every disposable family and atomicall
 - Record the resolved root and require every recursive deletion target to be a resolved descendant owned by that run.
 - After a fully successful run, strict close, complete evidence persistence, and descendant validation, delete disposable families.
 - On any build, query, named-case, validation, initial evidence-write, or strict-close failure, retain affected disposable families and print their exact paths.
-- A partial run exits non-zero, emits a validated incomplete artifact when possible, and contains no adoption recommendation.
+- A pre-deletion partial run exits non-zero, emits a validated incomplete artifact when possible, retains its families, and contains no adoption recommendation.
+- A post-deletion cleanup-receipt update failure is the sole exception: it exits non-zero while preserving the already durable complete recommendation artifact with cleanup pending.
 - Unsupported scalar-quantization syntax in the installed driver is a failed compatibility smoke test, not permission to change the runtime or silently fall back.
 
 ## Test-driven implementation
