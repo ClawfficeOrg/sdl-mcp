@@ -14,6 +14,8 @@ Use `repo.unregister` only for runtime registrations. It requires `confirmRepoId
 
 `sdl.repo.status` reports graph integrity under `derivedState`. The `graphIntegrityRevision` field identifies the current persisted graph revision, while `graphIntegrityVerifiedRevision` identifies the last revision that an independent verification snapshot published successfully. Equal values with `graphIntegrityState: "verified"` prove the current revision.
 
+`structuralStale` covers clusters, processes, and graph algorithms; `semanticStale` covers summaries and embeddings. The legacy `stale` field is their aggregate. Semantic-only staleness does not block structural or code retrieval: continue with available retrieval lanes and do not run incremental indexing solely because `summariesDirty` or `embeddingsDirty` is set.
+
 The `verifying` and `failed` states can remain graph-readable when the current Version has a valid manifest and revision metadata. They do not claim that the latest revision is verified. Continue normal graph reads during `verifying`; SDL-MCP recovers lost verifier wakeups without an agent-triggered refresh. After a permanent failure, `nextBestAction` stops refresh retry loops and directs the operator to a stopped `index --force --safe-rebuild` recovery.
 
 Graph-backed retrieval remains fail-closed when it is unavailable, including when an `indexRefresh` step appeared earlier in the same `sdl.workflow`. A recovery action is not authorization: request explicit user approval in the current turn before running a refresh in a separate workflow, then wait only when the task depends on the resulting graph state.

@@ -63,8 +63,13 @@ function derivedState(value: unknown): ModelRecord | undefined {
   if (!isRecord(value)) return undefined;
   const integrity = stringValue(value.graphIntegrityState);
   const graphBlocked = integrity !== undefined && integrity !== "verified";
+  const structuralStale = value.structuralStale === true;
+  const semanticStale = value.semanticStale === true;
+  const includeGuidance = graphBlocked || structuralStale || semanticStale;
   const projected = {
     ...(graphBlocked && value.stale === true ? { stale: true } : {}),
+    ...(structuralStale ? { structuralStale: true } : {}),
+    ...(semanticStale ? { semanticStale: true } : {}),
     ...(value.clustersDirty === true ? { clustersDirty: true } : {}),
     ...(value.processesDirty === true ? { processesDirty: true } : {}),
     ...(value.algorithmsDirty === true ? { algorithmsDirty: true } : {}),
@@ -72,7 +77,7 @@ function derivedState(value: unknown): ModelRecord | undefined {
     ...(value.embeddingsDirty === true ? { embeddingsDirty: true } : {}),
     ...(stringValue(value.lastError) ? { lastError: value.lastError } : {}),
     ...(integrity ? { graphIntegrityState: integrity } : {}),
-    ...(graphBlocked && stringValue(value.nextBestAction)
+    ...(includeGuidance && stringValue(value.nextBestAction)
       ? { nextBestAction: value.nextBestAction }
       : {}),
   };

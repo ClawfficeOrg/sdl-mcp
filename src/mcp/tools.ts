@@ -804,15 +804,16 @@ const RepoStatusRawResponseSchema = z.object({
     .optional(),
   memories: z.array(SurfacedMemorySchema).optional(),
   /**
-   * Derived-state freshness. When `stale` is true, at least one of the
-   * downstream computations (clusters, processes, graph algorithms,
-   * semantic summaries/embeddings) lagged behind the latest index, usually
-   * because a previous post-index derived computation was interrupted or
-   * failed. See `nextBestAction` for the recovery command.
+   * Derived-state freshness. `structuralStale` covers clusters, processes,
+   * and graph algorithms; `semanticStale` covers summaries and embeddings.
+   * The legacy `stale` field is their aggregate. Semantic-only staleness does
+   * not block structural/code retrieval and must not prompt an index refresh.
    */
   derivedState: z
     .object({
       stale: z.boolean(),
+      structuralStale: z.boolean(),
+      semanticStale: z.boolean(),
       clustersDirty: z.boolean(),
       processesDirty: z.boolean(),
       algorithmsDirty: z.boolean(),
@@ -879,6 +880,8 @@ const RepoStatusCompactResponseSchema = z.object({
   derivedState: z
     .object({
       stale: z.boolean().optional(),
+      structuralStale: z.boolean().optional(),
+      semanticStale: z.boolean().optional(),
       clustersDirty: z.boolean().optional(),
       processesDirty: z.boolean().optional(),
       algorithmsDirty: z.boolean().optional(),

@@ -53,17 +53,22 @@ export class IndexError extends Error {
   }
 }
 
+export const PARSER_PROVENANCE_RECOVERY_GUIDANCE =
+  "Reindex only if AST/provenance-dependent behavior is required; otherwise use a file-based fallback.";
+
+const PARSER_PROVENANCE_RECOVERY_ACTION = "fileFallback";
+
 export class ParserAdapterContractError extends IndexError {
   override readonly code: ErrorCode =
     ErrorCode.PARSER_ADAPTER_CONTRACT_ERROR;
-  readonly recoveryAction = "rebuild";
+  readonly recoveryAction = PARSER_PROVENANCE_RECOVERY_ACTION;
 
   constructor(
     readonly repoRelativePath: string,
     readonly requiredContract: string,
   ) {
     super(
-      `Parser adapter contract ${requiredContract} is unavailable for ${repoRelativePath}; rebuild required`,
+      `Parser adapter contract ${requiredContract} is unavailable for ${repoRelativePath}. ${PARSER_PROVENANCE_RECOVERY_GUIDANCE}`,
     );
     this.name = "ParserAdapterContractError";
   }
@@ -211,7 +216,7 @@ export class ScipSymbolMatchError extends Error {
 
 export class ParserProvenanceIncompleteError extends IndexError {
   readonly code = ErrorCode.PARSER_PROVENANCE_INCOMPLETE;
-  readonly recoveryAction = "rebuild";
+  readonly recoveryAction = PARSER_PROVENANCE_RECOVERY_ACTION;
   readonly details: Record<string, string>;
   constructor(
     readonly repoRelativePath: string,
@@ -222,7 +227,7 @@ export class ParserProvenanceIncompleteError extends IndexError {
         repoRelativePath +
         "; required contract " +
         requiredContract +
-        ". Rebuild parser provenance.",
+        `. ${PARSER_PROVENANCE_RECOVERY_GUIDANCE}`,
     );
     this.name = "ParserProvenanceIncompleteError";
     this.details = {
@@ -235,7 +240,7 @@ export class ParserProvenanceIncompleteError extends IndexError {
 
 export class ParserFileStateMissingError extends IndexError {
   readonly code = ErrorCode.PARSER_FILE_STATE_MISSING;
-  readonly recoveryAction = "rebuild";
+  readonly recoveryAction = PARSER_PROVENANCE_RECOVERY_ACTION;
   readonly details: Record<string, string>;
   constructor(
     readonly repoRelativePath: string,
@@ -246,7 +251,7 @@ export class ParserFileStateMissingError extends IndexError {
         repoRelativePath +
         "; required contract " +
         requiredContract +
-        ". Rebuild parser provenance.",
+        `. ${PARSER_PROVENANCE_RECOVERY_GUIDANCE}`,
     );
     this.name = "ParserFileStateMissingError";
     this.details = {
@@ -259,7 +264,7 @@ export class ParserFileStateMissingError extends IndexError {
 
 export class ParserEngineUnavailableError extends IndexError {
   readonly code = ErrorCode.PARSER_ENGINE_UNAVAILABLE;
-  readonly recoveryAction = "rebuild";
+  readonly recoveryAction = PARSER_PROVENANCE_RECOVERY_ACTION;
   readonly details: Record<string, string>;
   constructor(
     readonly repoRelativePath: string,
@@ -270,7 +275,7 @@ export class ParserEngineUnavailableError extends IndexError {
         repoRelativePath +
         "; required contract " +
         requiredContract +
-        ". Rebuild parser provenance.",
+        `. ${PARSER_PROVENANCE_RECOVERY_GUIDANCE}`,
     );
     this.name = "ParserEngineUnavailableError";
     this.details = {
@@ -283,7 +288,7 @@ export class ParserEngineUnavailableError extends IndexError {
 
 export class ParserContractMismatchError extends IndexError {
   readonly code = ErrorCode.PARSER_CONTRACT_MISMATCH;
-  readonly recoveryAction = "rebuild";
+  readonly recoveryAction = PARSER_PROVENANCE_RECOVERY_ACTION;
   readonly details: Record<string, string>;
   constructor(
     readonly repoRelativePath: string,
@@ -294,7 +299,7 @@ export class ParserContractMismatchError extends IndexError {
         repoRelativePath +
         "; required contract " +
         requiredContract +
-        ". Rebuild parser provenance.",
+        `. ${PARSER_PROVENANCE_RECOVERY_GUIDANCE}`,
     );
     this.name = "ParserContractMismatchError";
     this.details = {
@@ -307,7 +312,7 @@ export class ParserContractMismatchError extends IndexError {
 
 export class ParserSymbolRemapError extends IndexError {
   readonly code = ErrorCode.PARSER_SYMBOL_REMAP;
-  readonly recoveryAction = "rebuild";
+  readonly recoveryAction = PARSER_PROVENANCE_RECOVERY_ACTION;
   readonly details: Record<string, string>;
   constructor(
     readonly repoRelativePath: string,
@@ -318,7 +323,7 @@ export class ParserSymbolRemapError extends IndexError {
         repoRelativePath +
         "; required contract " +
         requiredContract +
-        ". Rebuild parser provenance.",
+        `. ${PARSER_PROVENANCE_RECOVERY_GUIDANCE}`,
     );
     this.name = "ParserSymbolRemapError";
     this.details = {

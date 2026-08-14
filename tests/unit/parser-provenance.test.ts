@@ -112,7 +112,10 @@ test("plugin adapter keys include every identity component", () => {
         error.code === "PARSER_ADAPTER_CONTRACT_ERROR" &&
         error.repoRelativePath === "src/example.custom" &&
         error.requiredContract === baseline.adapterKey &&
-        error.recoveryAction === "rebuild",
+        error.recoveryAction === "fileFallback" &&
+        /Reindex only if AST\/provenance-dependent behavior is required; otherwise use a file-based fallback\./.test(
+          error.message,
+        ),
     );
   }
 });

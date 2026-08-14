@@ -884,7 +884,6 @@ export async function handleRepoStatus(
     if (!rootAvailable && derivedState) {
       derivedState = {
         ...derivedState,
-        stale: true,
         nextBestAction: rootRecoveryAction,
       };
     }

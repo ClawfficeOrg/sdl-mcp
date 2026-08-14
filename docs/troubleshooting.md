@@ -137,15 +137,20 @@ For derived refresh diagnosis, inspect:
 sdl-mcp tool repo.status --repo-id <repo-id>
 ```
 
-Check `derivedState.stale`, the dirty flags, `derivedState.lastError`, and
-`derivedState.nextBestAction`. For stale graph-derived state from an interrupted
-run, the normal recovery is `sdl.index.refresh` with `mode: "incremental"`; use
-a stopped `index --force --safe-rebuild` if stale graph flags remain.
-Semantic-only dirty flags are not enqueued into startup recovery and remain
-deferred until semantic refresh work clears them. Increase
+Check `derivedState.structuralStale`, `derivedState.semanticStale`, the dirty
+flags, `derivedState.lastError`, and `derivedState.nextBestAction`. The legacy
+`derivedState.stale` field is the aggregate of both readiness classes. For stale
+graph-derived state from an interrupted run, reindex only when current structural
+graph behavior is required and after explicit user approval in the current turn.
+Semantic-only dirty flags are not enqueued into graph startup recovery. Continue
+with available retrieval lanes while semantic refresh work clears them. Increase
 `SDL_DERIVED_REFRESH_TIMEOUT_MS` only when startup recovery is legitimately
 long-running. If it repeatedly times out at the same phase, treat that as an
 indexing or LadybugDB contention issue first.
+
+For parser-provenance recovery, reindex only if AST/provenance-dependent behavior
+is required; otherwise use a file-based fallback. Parser-provenance errors expose
+this default as `recoveryAction: "fileFallback"`.
 
 For tool dispatch stalls, inspect the warning fields in the log. When
 `indexingActive` is `true`, SDL-MCP intentionally narrows foreground tool

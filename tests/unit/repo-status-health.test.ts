@@ -184,6 +184,8 @@ describe("repo status health fields", () => {
       lastIndexedAt: new Date().toISOString(),
       derivedState: {
         stale: false,
+        structuralStale: false,
+        semanticStale: false,
         clustersDirty: false,
         processesDirty: false,
         algorithmsDirty: false,
@@ -207,6 +209,8 @@ describe("repo status health fields", () => {
     assert.strictEqual(parsed.liveIndexStatus, undefined);
     assert.strictEqual(parsed.serverInfo, undefined);
     assert.strictEqual(parsed.derivedState?.stale, false);
+    assert.strictEqual(parsed.derivedState?.structuralStale, false);
+    assert.strictEqual(parsed.derivedState?.semanticStale, false);
     assert.strictEqual(
       parsed.derivedState?.graphIntegrityState,
       "verified",
@@ -233,6 +237,8 @@ describe("repo status health fields", () => {
       healthAvailable: false,
       derivedState: {
         stale: false,
+        structuralStale: false,
+        semanticStale: false,
         clustersDirty: false,
         processesDirty: false,
         algorithmsDirty: false,
@@ -411,6 +417,8 @@ describe("repo status root availability", { concurrency: 1 }, () => {
 
     const roots = new Map([
       ["available", availableRoot],
+      ["semantic-dirty", availableRoot],
+      ["both-dirty-error", availableRoot],
       ["missing", missingRoot],
       ["configured-missing", configuredMissingRoot],
       ["file-root", fileRoot],
@@ -455,6 +463,8 @@ describe("repo status root availability", { concurrency: 1 }, () => {
     });
     for (const repoId of [
       "available",
+      "semantic-dirty",
+      "both-dirty-error",
       "missing",
       "configured-missing",
       "file-root",
@@ -466,6 +476,20 @@ describe("repo status root availability", { concurrency: 1 }, () => {
         "a".repeat(64),
       );
     }
+    await derivedState.markDerivedStateDirty(
+      "semantic-dirty",
+      "semantic-dirty-v1",
+      { summaries: true, embeddings: true },
+    );
+    await derivedState.markDerivedStateDirty(
+      "both-dirty-error",
+      "both-dirty-error-v1",
+      { algorithms: true, embeddings: true },
+    );
+    await derivedState.recordDerivedStateError(
+      "both-dirty-error",
+      "semantic worker failed",
+    );
     await withWriteConn(async (conn) => {
       for (const repoId of ["integrity-verifying", "integrity-failed"]) {
         await derivedState.beginGraphIntegrityVersion(
@@ -517,6 +541,52 @@ describe("repo status root availability", { concurrency: 1 }, () => {
     }
   });
 
+  it("keeps semantic-only staleness non-blocking", async () => {
+    const { handleRepoStatus } = await import("../../dist/mcp/tools/repo.js");
+    const status = await handleRepoStatus({
+      repoId: "semantic-dirty",
+      detail: "standard",
+    });
+
+    assert.strictEqual(status.derivedState?.stale, true);
+    assert.strictEqual(
+      status.derivedState?.stale,
+      Boolean(
+        status.derivedState?.structuralStale ||
+        status.derivedState?.semanticStale,
+      ),
+    );
+    assert.strictEqual(status.derivedState?.structuralStale, false);
+    assert.strictEqual(status.derivedState?.semanticStale, true);
+    assert.match(
+      status.derivedState?.nextBestAction ?? "",
+      /Continue with available retrieval lanes/,
+    );
+    assert.doesNotMatch(
+      status.derivedState?.nextBestAction ?? "",
+      /Run sdl\.index\.refresh|Run incremental indexing/,
+    );
+  });
+
+  it("keeps shared derived-state errors scope-neutral", async () => {
+    const { handleRepoStatus } = await import("../../dist/mcp/tools/repo.js");
+    const status = await handleRepoStatus({
+      repoId: "both-dirty-error",
+      detail: "standard",
+    });
+
+    assert.strictEqual(status.derivedState?.structuralStale, true);
+    assert.strictEqual(status.derivedState?.semanticStale, true);
+    assert.match(
+      status.derivedState?.nextBestAction ?? "",
+      /Derived-state recomputation reported an error/,
+    );
+    assert.doesNotMatch(
+      status.derivedState?.nextBestAction ?? "",
+      /Structural derived-state recomputation failed/,
+    );
+  });
+
   it("makes missing-root recovery override persisted graph advice", async () => {
     const { handleRepoStatus } = await import("../../dist/mcp/tools/repo.js");
     const status = await handleRepoStatus({
@@ -527,7 +597,14 @@ describe("repo status root availability", { concurrency: 1 }, () => {
     assert.strictEqual(status.rootAvailability.status, "missing");
     assert.match(status.rootAvailability.nextBestAction ?? "", /repo\.register/);
     assert.match(status.rootAvailability.nextBestAction ?? "", /repo\.unregister/);
-    assert.strictEqual(status.derivedState?.stale, true);
+    assert.strictEqual(status.derivedState?.stale, false);
+    assert.strictEqual(
+      status.derivedState?.stale,
+      Boolean(
+        status.derivedState?.structuralStale ||
+        status.derivedState?.semanticStale,
+      ),
+    );
     assert.strictEqual(status.derivedState?.graphIntegrityState, "verified");
     assert.strictEqual(
       status.derivedState?.nextBestAction,

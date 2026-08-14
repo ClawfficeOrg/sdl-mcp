@@ -137,22 +137,30 @@ describe("agent-facing SDL tool contracts", () => {
             errors: 0, queueDepth: 0, stale: false,
           },
           derivedState: {
-            stale: true, clustersDirty: false, processesDirty: false,
+            stale: true, structuralStale: false, semanticStale: true,
+            clustersDirty: false, processesDirty: false,
             algorithmsDirty: false, summariesDirty: false, embeddingsDirty: true,
             targetVersionId: "v1", computedVersionId: "v1", lastError: null,
             graphIntegrityState: "verified", graphIntegrityVersionId: "v1",
             graphIntegrityRevision: 8, graphIntegrityVerifiedRevision: 8,
             graphIntegrityDigest: "a".repeat(64),
-            nextBestAction: "Run sdl.index.refresh with mode:\"incremental\".",
+            nextBestAction:
+              "Semantic derived state is not yet ready. Continue with available retrieval lanes; do not run incremental indexing solely for summariesDirty or embeddingsDirty.",
           },
         },
         expected: {
           ...base,
-          derivedState: { embeddingsDirty: true, graphIntegrityState: "verified" },
+          derivedState: {
+            semanticStale: true,
+            embeddingsDirty: true,
+            graphIntegrityState: "verified",
+            nextBestAction:
+              "Semantic derived state is not yet ready. Continue with available retrieval lanes; do not run incremental indexing solely for summariesDirty or embeddingsDirty.",
+          },
         },
       },
       {
-        label: "degraded graph blocks requested graph capability",
+        label: "degraded graph reports background verification",
         canonical: {
           ...base,
           latestVersionId: "v2",
@@ -162,13 +170,15 @@ describe("agent-facing SDL tool contracts", () => {
             errors: 2, queueDepth: 0, stale: true,
           },
           derivedState: {
-            stale: true, clustersDirty: false, processesDirty: false,
+            stale: true, structuralStale: true, semanticStale: false,
+            clustersDirty: false, processesDirty: false,
             algorithmsDirty: true, summariesDirty: false, embeddingsDirty: false,
             targetVersionId: "v2", computedVersionId: "v1",
             graphIntegrityState: "verifying", graphIntegrityVersionId: "v1",
             graphIntegrityRevision: 9, graphIntegrityVerifiedRevision: 8,
             graphIntegrityDigest: "b".repeat(64),
-            nextBestAction: "Run sdl.index.refresh with mode:\"incremental\".",
+            nextBestAction:
+              "Graph integrity verification is running in the background. Continue using graph reads and check sdl.repo.status later; do not start a refresh solely for this state.",
           },
         },
         expected: {
@@ -179,9 +189,10 @@ describe("agent-facing SDL tool contracts", () => {
             errors: 2, stale: true,
           },
           derivedState: {
-            stale: true, algorithmsDirty: true,
+            stale: true, structuralStale: true, algorithmsDirty: true,
             graphIntegrityState: "verifying",
-            nextBestAction: "Run sdl.index.refresh with mode:\"incremental\".",
+            nextBestAction:
+              "Graph integrity verification is running in the background. Continue using graph reads and check sdl.repo.status later; do not start a refresh solely for this state.",
           },
         },
       },

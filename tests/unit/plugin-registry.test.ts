@@ -110,7 +110,10 @@ describe("Registry with Plugin Integration", () => {
           error instanceof ParserAdapterContractError &&
           error.code === "PARSER_ADAPTER_CONTRACT_ERROR" &&
           error.repoRelativePath === "src/example.custom" &&
-          error.recoveryAction === "rebuild",
+          error.recoveryAction === "fileFallback" &&
+          /Reindex only if AST\/provenance-dependent behavior is required; otherwise use a file-based fallback\./.test(
+            error.message,
+          ),
       );
 
       let capturedParserState: unknown;

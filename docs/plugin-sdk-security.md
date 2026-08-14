@@ -592,7 +592,7 @@ ssh root@vm "sdl-mcp index"
 // - Adapter implements LanguageAdapter interface
 ```
 
-For live-mutable files, SDL-MCP binds parser provenance to the plugin name, plugin package version, adapter identity, and adapter contract version. A changed or missing component is a contract mismatch, not a reason to run another parser. Preserve the graph and use stopped safe rebuild recovery after installing the intended plugin version.
+For live-mutable files, SDL-MCP binds parser provenance to the plugin name, plugin package version, adapter identity, and adapter contract version. A changed or missing component is a contract mismatch, not a reason to run another parser. Reindex only if AST/provenance-dependent behavior is required; otherwise use a file-based fallback. If a rebuild is required, preserve the active graph and use stopped safe-rebuild recovery after installing the intended plugin version.
 
 **3. Runtime Checks**:
 

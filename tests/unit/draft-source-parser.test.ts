@@ -58,7 +58,11 @@ function assertTypedError(
   );
   assert.equal(
     (error as { recoveryAction?: unknown }).recoveryAction,
-    "rebuild",
+    "fileFallback",
+  );
+  assert.match(
+    error.message,
+    /Reindex only if AST\/provenance-dependent behavior is required; otherwise use a file-based fallback\./,
   );
   assert.doesNotMatch(
     JSON.stringify(error),

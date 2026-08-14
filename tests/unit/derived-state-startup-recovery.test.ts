@@ -34,6 +34,8 @@ describe("recoverStaleDerivedStateOnStartup", () => {
           if (repoId === "repo-a") {
             return {
               stale: true,
+              structuralStale: true,
+              semanticStale: true,
               clustersDirty: true,
               processesDirty: false,
               algorithmsDirty: false,
@@ -47,6 +49,8 @@ describe("recoverStaleDerivedStateOnStartup", () => {
           if (repoId === "repo-b") {
             return {
               stale: false,
+              structuralStale: false,
+              semanticStale: false,
               clustersDirty: false,
               processesDirty: false,
               algorithmsDirty: false,
@@ -98,6 +102,8 @@ describe("recoverStaleDerivedStateOnStartup", () => {
       {
         getDerivedStateSummary: async () => ({
           stale: true,
+          structuralStale: false,
+          semanticStale: true,
           clustersDirty: false,
           processesDirty: false,
           algorithmsDirty: false,

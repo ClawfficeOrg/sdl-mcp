@@ -31,6 +31,7 @@ import {
 } from "../../dist/mcp/dispatch-limiter.js";
 import {
   getDerivedState,
+  getDerivedStateSummary,
   markDerivedStateDirty,
 } from "../../dist/db/ladybug-derived-state.js";
 import { symbolCardCache } from "../../dist/graph/cache.js";
@@ -400,6 +401,10 @@ describe("derived refresh computed flags", () => {
     assert.strictEqual(state.algorithmsDirty, false);
     assert.strictEqual(state.summariesDirty, true);
     assert.strictEqual(state.embeddingsDirty, true);
+    const summary = await getDerivedStateSummary(repoId);
+    assert.strictEqual(summary?.stale, true);
+    assert.strictEqual(summary?.structuralStale, false);
+    assert.strictEqual(summary?.semanticStale, true);
     assert.notStrictEqual(
       symbolCardCache.captureRepoGeneration(repoId),
       cacheGeneration,

@@ -428,9 +428,10 @@ When memory is enabled:
 For indexing:
 
 - Never call `index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn.
-- `embeddingsDirty`, `summariesDirty`, `graphIntegrityState: "verifying"`, `PARSER_FILE_STATE_MISSING`, parser-state warnings, parser-provenance warnings, and refresh recommendations are diagnostics, not approval.
+- Read `derivedState.structuralStale` and `derivedState.semanticStale` as separate readiness classes. If only `summariesDirty` or `embeddingsDirty` is set, continue with available retrieval lanes; do not refresh the index.
+- These dirty flags, `graphIntegrityState: "verifying"`, `PARSER_FILE_STATE_MISSING`, parser-state warnings, parser-provenance warnings, and refresh recommendations are diagnostics, not approval.
 - Do not wait for semantic freshness or graph verification unless the current task explicitly requires latest-revision graph proof.
-- On a provenance-dependent edit failure, use an SDL file-based edit fallback or report the limitation; do not automatically reindex.
+- On a parser-provenance failure, reindex only if AST/provenance-dependent behavior is required; otherwise use an SDL file-based fallback or report the limitation.
 - Subagents may report that a refresh appears necessary, but only the root agent may request approval or initiate it.
 - When `rootAvailability` is missing or unreadable, restore the root or unregister the repository; refresh advice is intentionally suppressed until the root is usable.
 - After the user approves a refresh, prefer incremental mode unless the repository is new and unindexed or recovery explicitly requires a stopped safe rebuild.

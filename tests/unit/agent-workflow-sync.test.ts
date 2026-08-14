@@ -41,4 +41,24 @@ ${result.stderr}`);
       );
     }
   });
+
+  it("keeps fallback workflow readiness and provenance guidance current", () => {
+    const workflowSurfaces = [
+      "templates/SDL.md",
+      "SDL.md",
+      "tests/stress/fixtures/SDL.md",
+    ];
+
+    for (const relativePath of workflowSurfaces) {
+      const content = readFileSync(resolve(repoRoot, relativePath), "utf8");
+      assert.match(content, /derivedState\.structuralStale/, relativePath);
+      assert.match(content, /derivedState\.semanticStale/, relativePath);
+      assert.match(content, /continue with available retrieval lanes/i, relativePath);
+      assert.match(
+        content,
+        /reindex only if AST\/provenance-dependent behavior is required; otherwise use an SDL file-based fallback/i,
+        relativePath,
+      );
+    }
+  });
 });

@@ -663,19 +663,39 @@ function normalizeGraphIntegrityState(value: unknown): GraphIntegrityState {
     : "unknown";
 }
 
-export function derivedStateIsStale(row: DerivedStateRow | null): boolean {
+/** Structural graph derivatives required by graph-shaped retrieval lanes. */
+export function derivedStateIsStructurallyStale(
+  row: DerivedStateRow | null,
+): boolean {
   if (!row) return false;
   return (
     row.clustersDirty ||
     row.processesDirty ||
-    row.algorithmsDirty ||
-    row.summariesDirty ||
-    row.embeddingsDirty
+    row.algorithmsDirty
+  );
+}
+
+/** Semantic derivatives may lag without blocking structural/code retrieval. */
+export function derivedStateIsSemanticallyStale(
+  row: DerivedStateRow | null,
+): boolean {
+  if (!row) return false;
+  return row.summariesDirty || row.embeddingsDirty;
+}
+
+/** Compatibility aggregate; callers should prefer the readiness-specific flags. */
+export function derivedStateIsStale(row: DerivedStateRow | null): boolean {
+  return (
+    derivedStateIsStructurallyStale(row) ||
+    derivedStateIsSemanticallyStale(row)
   );
 }
 
 export interface DerivedStateSummary {
+  /** Compatibility aggregate of structural and semantic staleness. */
   stale: boolean;
+  structuralStale: boolean;
+  semanticStale: boolean;
   clustersDirty: boolean;
   processesDirty: boolean;
   algorithmsDirty: boolean;
@@ -700,8 +720,12 @@ export async function getDerivedStateSummary(
 ): Promise<DerivedStateSummary | null> {
   const row = await getDerivedState(repoId);
   if (!row) return null;
+  const structuralStale = derivedStateIsStructurallyStale(row);
+  const semanticStale = derivedStateIsSemanticallyStale(row);
   const summary: DerivedStateSummary = {
-    stale: derivedStateIsStale(row),
+    stale: structuralStale || semanticStale,
+    structuralStale,
+    semanticStale,
     clustersDirty: row.clustersDirty,
     processesDirty: row.processesDirty,
     algorithmsDirty: row.algorithmsDirty,
@@ -726,10 +750,13 @@ export async function getDerivedStateSummary(
     summary.nextBestAction = graphIntegrityNextBestAction(
       row.graphIntegrityState,
     );
-  } else if (summary.stale) {
+  } else if (summary.structuralStale) {
     summary.nextBestAction = row.lastError
-      ? "Derived state recomputation failed. Inspect derivedState.lastError, then run sdl.index.refresh with mode:\"incremental\" once. If stale flags remain, inspect the logged failure instead of starting a full-refresh loop."
-      : "Derived state is stale, likely from an interrupted older refresh. Run sdl.index.refresh with mode:\"incremental\" to recompute derived state inline.";
+      ? "Derived-state recomputation reported an error. Inspect derivedState.lastError. Reindex only if current structural graph behavior is required and the user explicitly approves it in the current turn; if approved, run one incremental refresh and inspect the logged failure if structural flags remain."
+      : "Structural derived state is stale, likely from an interrupted older refresh. Continue with available retrieval lanes unless current structural graph behavior is required; reindex only after explicit user approval in the current turn.";
+  } else if (summary.semanticStale) {
+    summary.nextBestAction =
+      "Semantic derived state is not yet ready. Continue with available retrieval lanes; do not run incremental indexing solely for summariesDirty or embeddingsDirty.";
   }
   return summary;
 }
