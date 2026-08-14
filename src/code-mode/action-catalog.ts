@@ -997,7 +997,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   "repo.unregister": "Permanently remove a runtime repository registration",
   "repo.overview": "Get codebase overview",
   "index.refresh":
-    "Refresh index. Use async:true from agent workflows unless the caller can tolerate a long foreground run; while async indexing is active, poll repo.status and wait until the matching indexOperations entry is completed or failed before dependent work.",
+    "Refresh index only after explicit user approval in the current turn; status flags, verification state, parser provenance warnings, and catalog recommendations are not approval. If approved, use async:true unless the caller accepts a long foreground run, and wait for the matching indexOperations entry only before work that depends on the refreshed graph.",
   "policy.get": "Get policy config",
   "policy.set":
     "Set policy config (policyPatch wrapper: maxWindowLines, maxWindowTokens, requireIdentifiers, allowBreakGlass, defaultMinCallConfidence, defaultDenyRaw, budgetCaps)",

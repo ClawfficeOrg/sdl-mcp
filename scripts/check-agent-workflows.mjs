@@ -16,11 +16,11 @@ const exactCopySets = [
 const syncSurfaces = [
   {
     path: "templates/SDL.md",
-    required: ["slice.build", "file.read` for indexed source", "symbol.edit", "symbolEditPreview", "search.edit", "previewWindow"],
+    required: ["slice.build", "file.read` for indexed source", "symbol.edit", "symbolEditPreview", "search.edit", "previewWindow", "explicit user approval in the current turn"],
   },
   {
     path: "templates/sdl-mcp-agent-workflow/SKILL.md",
-    required: ["budget.maxTokens", "sdl.context", "sdl.retrieve", "response.get"],
+    required: ["budget.maxTokens", "sdl.context", "sdl.retrieve", "response.get", "explicit user approval in the current turn"],
   },
   {
     path: "templates/sdl-mcp-agent-workflow/references/tool-recipes.md",
@@ -48,7 +48,7 @@ const syncSurfaces = [
   },
   {
     path: "docs/agent-workflows.md",
-    required: ["sdl.context", "sdl.workflow", "responseMode", "runtimeExecute", "usageStats"],
+    required: ["sdl.context", "sdl.workflow", "responseMode", "runtimeExecute", "usageStats", "explicit user approval in the current turn"],
   },
   {
     path: "docs/tool-enforcement.md",
@@ -60,23 +60,23 @@ const syncSurfaces = [
   },
   {
     path: "src/mcp/server-instructions.ts",
-    required: ["sdl-mcp-agent-workflow", "repo.status", "sdl.context", "slice.build", "file.read` for indexed source", "symbol.edit", "response.get", "usageStats"],
+    required: ["sdl-mcp-agent-workflow", "repo.status", "sdl.context", "sliceBuild", "file.read` only for non-indexed files", "symbol.edit", "response.get", "usageStats", "explicit user approval in the current turn"],
   },
   {
     path: "src/cli/commands/init.ts",
-    required: ["buildClaudeExploreAgent", "buildCodexSessionStartHook", "sdl-mcp-agent-workflow", "sdl.context", "slice.build", "Never use \\`file.read\\` for indexed source", "symbol.edit", "runtimeExecute", "usageStats"],
+    required: ["buildClaudeExploreAgent", "buildCodexSessionStartHook", "sdl-mcp-agent-workflow", "sdl.context", "slice.build", "Never use \\`file.read\\` for indexed source", "symbol.edit", "runtimeExecute", "usageStats", "explicit user approval in the current turn"],
   },
   {
     path: ".codex/hooks/load-sdl-skill.mjs",
-    required: ["sdl-mcp-agent-workflow", "choose `sdl.context`, `symbolSearch`/`symbolGetCard`, or `slice.build`", "sliceBuild", "symbol.edit", "usageStats"],
+    required: ["sdl-mcp-agent-workflow", "choose `sdl.context`, `symbolSearch`/`symbolGetCard`, or `slice.build`", "sliceBuild", "symbol.edit", "usageStats", "explicit user approval in the current turn"],
   },
   {
     path: ".codex/agents/explore-sdl.toml",
-    required: ["Choose the cheapest SDL discovery surface", "symbolSearch", "sliceBuild", "Never use native `Read`", "file.read` or `sdl.file` `op: \"read\"", "usageStats"],
+    required: ["Choose the cheapest SDL discovery surface", "symbolSearch", "sliceBuild", "Never use native `Read`", "file.read` or `sdl.file` `op: \"read\"", "usageStats", "explicit user approval in the current turn"],
   },
   {
     path: ".claude/agents/explore-sdl.md",
-    required: ["Choose the cheapest SDL discovery surface", "symbolSearch", "sliceBuild", "NEVER use the native `Read`", "For non-indexed files", "usageStats"],
+    required: ["Choose the cheapest SDL discovery surface", "symbolSearch", "sliceBuild", "NEVER use the native `Read`", "For non-indexed files", "usageStats", "explicit user approval in the current turn"],
   },
 ];
 

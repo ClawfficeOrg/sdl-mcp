@@ -2,9 +2,6 @@
 
 Use SDL-MCP as the default path for repository `sdl-mcp`.
 
-SDL-MCP (Symbol Delta Ledger MCP Server) - an MCP server providing cards-first code context for polyglot repositories. Replaces bulk code reads with structured symbol cards, graph slices, delta packs, and gated code windows. Uses LadybugDB (graph DB), tree-sitter (AST parsing), and optional Rust native addon (napi-rs) for performance.
-
-> Optimized tool-use workflow for agents: see [SDL.md](./SDL.md).
 
 ## STRUCTURE
 
@@ -250,5 +247,18 @@ For multi-step tasks, state a brief plan:
 3. [Step] → verify: [check]
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+## Index refresh authorization
+
+- Never call `index.refresh`, directly or through `sdl.workflow`, and never run
+  `sdl-mcp index`, without explicit user approval in the current turn.
+- `embeddingsDirty`, `summariesDirty`, `graphIntegrityState: "verifying"`,
+  `PARSER_FILE_STATE_MISSING`, and parser-provenance warnings are not approval.
+- Do not wait for semantic freshness or graph verification unless the current
+  task explicitly requires latest-revision graph proof.
+- On a provenance-dependent edit failure, use an SDL file-based edit fallback
+  or report the limitation; do not automatically reindex.
+- Subagents may report that a refresh appears necessary, but only the root
+  agent may request approval or initiate it.
 
 ```

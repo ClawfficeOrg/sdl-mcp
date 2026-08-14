@@ -63,7 +63,7 @@ Follow the same workflow as the SDL-MCP Agent Workflow skill when that skill is 
    - **Search**: `{ "fn": "file.read", "args": { "filePath": "docs/guide.md", "search": "authentication", "searchContext": 3 } }`
    - **JSON path**: `{ "fn": "file.read", "args": { "filePath": "package.json", "jsonPath": "dependencies" } }`
 
-13. **Do not refresh the index by habit.** Run `index.refresh` only when `repo.status` shows stale or missing indexed state and current code is required. Prefer incremental refresh; if it runs asynchronously, poll `repo.status` and wait for completion before continuing graph-backed exploration.
+13. **Require current-turn refresh approval.** Never call `index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn. Dirty semantic flags, graph verification, parser-state/provenance warnings, and refresh recommendations are diagnostics, not approval. Do not wait for semantic freshness or graph verification unless the task requires latest-revision graph proof. On a provenance-dependent edit failure, use an SDL file-based edit fallback or report the limitation; do not automatically reindex.
 
 14. **Use SDL memory only when enabled.** If `repo.status`, config, or tool discovery does not show `memory.enabled: true`, do not repeatedly call memory tools. When enabled, use `memory.query` for task-text lookup and `memory.surface` after relevant symbol IDs are known.
 

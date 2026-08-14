@@ -170,6 +170,8 @@ Unknown repositories return `NOT_FOUND`. Dirty live buffers fail closed unless `
 
 Refresh the symbol index in `incremental` or `full` mode.
 
+Agents must not call this tool directly or through `sdl.workflow`, and must not run `sdl-mcp index`, without explicit user approval in the current turn. Dirty semantic flags, graph verification, parser-state/provenance warnings, recovery actions, and refresh recommendations are diagnostics, not approval.
+
 **Parameters:**
 
 | Parameter            | Type                      | Required | Description                                                                           |
@@ -1001,8 +1003,9 @@ Flat focus fields are authoritative seed priorities, not output boundaries.
 
 If an exact indexed `focusPaths` entry has no usable symbols, `sdl.context`
 returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` rather than unrelated context. Follow
-its incremental `index.refresh` recovery and retry the canonical `sdl.context`
-request.
+its non-refresh fallback when possible. Its incremental `index.refresh`
+recovery is a candidate action, not approval; request explicit current-turn
+user approval before running it, then retry the canonical `sdl.context` request.
 
 Semantic test-case facets add normalized titles, suite names, frameworks, categories, and modifiers to the existing symbol FTS text. A valid facet makes a symbol test evidence for the existing card and hot-path rungs; SDL-MCP does not add a test-only retrieval lane or scan source at query time. When `includeTests: false`, SDL-MCP filters unpinned test candidates identified by a valid facet or a test-like path. Explicit focus pins remain eligible, and `includeTests: true` admits test candidates. Canonical card and context output remains deterministic.
 
@@ -1198,7 +1201,7 @@ Run a command in a repo-scoped subprocess. Runtime execution is enabled by defau
 | `queryTerms`         | `string[]`                               | No       | Filter output to lines matching these terms (max 10)                                                                                                                                              |
 | `maxResponseLines`   | `integer`                                | No       | Max output lines returned (5-1,000, default: 100)                                                                                                                                                 |
 | `persistOutput`      | `boolean`                                | No       | Save full output to an artifact handle (default: true)                                                                                                                                            |
-| `outputMode`         | `"minimal"` \| `"summary"` \| `"intent"` | No       | Controls response verbosity. `"minimal"` (default): status, artifact handle, and concise stdout/stderr previews. `"summary"`: head+tail excerpts. `"intent"`: only `queryTerms`-matched excerpts. |
+| `outputMode`         | `"minimal"` \| `"digest"` \| `"summary"` \| `"intent"` | No       | Controls response verbosity. `"minimal"` (default): compact status and bounded previews. `"digest"`: structured pass/fail diagnostics for noisy toolchains. `"summary"`: head+tail excerpts. `"intent"`: only `queryTerms`-matched excerpts. |
 | `includeDiagnostics` | `boolean`                                | No       | Include coarse policy, execution, output decoding, and artifact phase timings                                                                                                                     |
 
 Use `stdin` for multiline scripts/input instead of shell quoting or base64 workarounds. SDL-MCP reports `stdinBytes` and `stdinSha256` but does not echo full stdin in visible output or persisted logs. `stdin` does not bypass command validation: the shell runtime still requires `code`. Use `code` for inline snippets or `args` for invoking files/commands. Default Node `code` snippets resolve relative imports from the requested working directory without repo-local temp files. When Node `code` also needs user `stdin`, SDL-MCP runs a temp `.mjs` from the OS temp directory so stdin remains available to the child process. On Windows shell runtime, use `&` or newlines rather than semicolons for command separation; SDL-MCP surfaces a warning when semicolons appear in shell code. Predictable failures can include compact `runtimeHints`, such as using ESM imports instead of `require()` or avoiding Bash syntax under Windows `cmd.exe`. `queryTerms` acts like a built-in grep, extracting only matching lines from long output.
@@ -1207,6 +1210,7 @@ Use `stdin` for multiline scripts/input instead of shell quoting or base64 worka
 
 - **All modes:** `status`, `exitCode`, `signal`, `durationMs`, `artifactHandle`, `truncation`, `policyDecision`, `diagnostics?`, plus `stdinBytes`/`stdinSha256` when stdin was provided, `quotingWarnings` when risky quoting patterns are detected, and `runtimeHints` for compact corrective guidance
 - **`"minimal"` (default):** returns concise `stdoutPreview` and short `stderrSummary` when output is small enough to show inline. Use `sdl.runtime.queryOutput` to search the artifact for full output.
+- **`"digest"`:** returns a structured pass/fail digest for build, test, lint, typecheck, and similar noisy commands while preserving full output for targeted queries.
 - **`"summary"`:** adds `stdoutSummary`, `stderrSummary`, `excerpts`, `truncation` (legacy behavior)
 - **`"intent"`:** adds `excerpts`, `truncation` — only `queryTerms`-matched windows, no head/tail summary
 
@@ -1440,7 +1444,7 @@ For `jsonPath` results, strings are returned whole only when their serialized JS
 
 Execute a multi-step workflow of SDL-MCP actions and internal transforms in one round trip.
 
-Use this for runtime execution, data shaping, batch mutations, and reusable multi-step pipelines. Do not use it for context retrieval; route that work to `sdl.context`. Set `includeDiagnostics: true` to include workflow phase timings. If any step has `status: "error"`, the top-level MCP response sets `isError: true` while preserving ordered results and `onError` behavior. Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow; when unavailable, run the refresh, wait for completion, and retrieve in a separate workflow. Set `onlyFinalResult: true` to omit successful intermediate envelopes while retaining prior failures and skips; `intermediateResultsSuppressed` counts only omitted successes, and `$N` execution still uses the unprojected prior results.
+Use this for runtime execution, data shaping, batch mutations, and reusable multi-step pipelines. Do not use it for context retrieval; route that work to `sdl.context`. Set `includeDiagnostics: true` to include workflow phase timings. If any step has `status: "error"`, the top-level MCP response sets `isError: true` while preserving ordered results and `onError` behavior. Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow. If latest indexed state is required, request explicit current-turn user approval before refreshing in a separate workflow, wait for completion, and then retrieve. Set `onlyFinalResult: true` to omit successful intermediate envelopes while retaining prior failures and skips; `intermediateResultsSuppressed` counts only omitted successes, and `$N` execution still uses the unprojected prior results.
 
 ### `sdl.retrieve`
 

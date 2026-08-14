@@ -18,7 +18,7 @@ SDL-MCP is the normal repository interface. Native filesystem and shell tools ar
 5. Keep `responseMode: "auto"` for potentially large responses. If a response handle is returned, use `response.get` only for the needed excerpt. For JSON artifacts, prefer `jsonPath` with dot or bracket array paths, add `offset`/`limit` for large arrays, and use `raw: true` only when byte-slicing JSON text is intentional. A missing path reports the available top-level keys and returns a same-handle `response.get` recovery call, preferring `evidence` and then `omitted`.
 6. Use focused `sdl.manual` only when composing a non-obvious request. Use `sdl.action.search` when the correct SDL action is unclear.
 
-Do not run `index.refresh` by habit. Refresh only when `repo.status` shows stale or missing indexed state and the task depends on current code.
+Never call `index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn. Status flags, graph verification, parser-state/provenance warnings, and refresh recommendations are diagnostics, not approval.
 
 Use `repo.unregister` only to permanently remove a runtime registration. Confirm with the exact same `repoId`; remove configured repositories from `SDL_CONFIG` first. Dirty live buffers require an explicit `discardDrafts: true`, which discards those drafts.
 
@@ -427,16 +427,19 @@ When memory is enabled:
 
 For indexing:
 
-- Do not refresh by habit.
-- Run `index.refresh` only when `repo.status` shows stale or missing indexed state and the task depends on current code.
+- Never call `index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn.
+- `embeddingsDirty`, `summariesDirty`, `graphIntegrityState: "verifying"`, `PARSER_FILE_STATE_MISSING`, parser-state warnings, parser-provenance warnings, and refresh recommendations are diagnostics, not approval.
+- Do not wait for semantic freshness or graph verification unless the current task explicitly requires latest-revision graph proof.
+- On a provenance-dependent edit failure, use an SDL file-based edit fallback or report the limitation; do not automatically reindex.
+- Subagents may report that a refresh appears necessary, but only the root agent may request approval or initiate it.
 - When `rootAvailability` is missing or unreadable, restore the root or unregister the repository; refresh advice is intentionally suppressed until the root is usable.
-- Prefer incremental refresh.
+- After the user approves a refresh, prefer incremental mode unless the repository is new and unindexed or recovery explicitly requires a stopped safe rebuild.
 - Read `derivedState.graphIntegrityRevision` and `graphIntegrityVerifiedRevision` together. Equal revisions with `graphIntegrityState: "verified"` prove the current persisted graph revision.
 - A `verifying` state permits graph reads but does not prove the latest revision. Continue work when pending verification is acceptable, or poll `repo.status` when the task requires latest-revision proof. Do not refresh solely because verification is running.
 - A `failed` state can remain graph-readable when a current manifest exists, but it does not prove the latest revision. Do not retry refresh automatically. Follow `nextBestAction` for stopped `index --force --safe-rebuild` recovery.
-- An `unknown` state, null current revision, or missing-manifest guidance blocks graph retrieval. Run one incremental refresh only for a new unindexed repository; a populated graph requires a stopped safe rebuild.
+- An `unknown` state, null current revision, or missing-manifest guidance blocks graph retrieval. Request approval for one incremental refresh only for a new unindexed repository; a populated graph requires a stopped safe rebuild.
 - Successful saved indexed edits commit graph and manifest changes together, advance the current revision, and return before background verification completes.
-- If refresh runs asynchronously, poll `repo.status` and wait for completion before relying on its resulting graph state.
+- If an approved refresh runs asynchronously, poll `repo.status` and wait for completion only when the task depends on its resulting graph state.
 - Do not request a full refresh for a populated active graph. SDL-MCP rejects it before provider work or graph writes.
 
 ---
@@ -483,7 +486,7 @@ Before the final response:
 - Calling `codeNeedWindow` before `symbolGetCard`, `sliceBuild`, `codeSkeleton`, and `codeHotPath`.
 - Using `runtimeExecute` to print indexed source.
 - Do not use `sdl.file` `sourceWindow` to read arbitrary source. It is only for inspecting files inside an edit preview plan and requires `planHandle`. Use `codeNeedWindow` for raw indexed source.
-- Running `index.refresh` every session or defaulting to full refresh.
+- Running `index.refresh` without explicit current-turn user approval or defaulting to full refresh.
 - Reading whole non-indexed files when `search`, `jsonPath`, or bounded ranges would answer.
 - Writing indexed source through native edits instead of `symbol.edit`, symbol edit preview/apply, or AST-aware `searchEditPreview`.
 - Keeping `.bak` files without reporting them.

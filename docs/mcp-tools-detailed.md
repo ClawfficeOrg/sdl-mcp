@@ -16,7 +16,7 @@ Use `repo.unregister` only for runtime registrations. It requires `confirmRepoId
 
 The `verifying` and `failed` states can remain graph-readable when the current Version has a valid manifest and revision metadata. They do not claim that the latest revision is verified. Continue normal graph reads during `verifying`; SDL-MCP recovers lost verifier wakeups without an agent-triggered refresh. After a permanent failure, `nextBestAction` stops refresh retry loops and directs the operator to a stopped `index --force --safe-rebuild` recovery.
 
-Graph-backed retrieval remains fail-closed when it is unavailable, including when an `indexRefresh` step appeared earlier in the same `sdl.workflow`. The error directs clients to run the refresh in one workflow, wait for completion, and run retrieval in a separate workflow.
+Graph-backed retrieval remains fail-closed when it is unavailable, including when an `indexRefresh` step appeared earlier in the same `sdl.workflow`. A recovery action is not authorization: request explicit user approval in the current turn before running a refresh in a separate workflow, then wait only when the task depends on the resulting graph state.
 
 ## Symbol search misses
 
@@ -31,8 +31,9 @@ not create a hard output boundary.
 
 If an exact indexed `focusPaths` entry has no usable symbols, `sdl.context`
 returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` instead of unrelated context. Its
-recovery calls for an incremental refresh followed by the canonical
-`sdl.context` retry.
+recovery may propose an incremental refresh followed by the canonical
+`sdl.context` retry. Treat that proposal as a candidate action, not approval;
+use a non-refresh fallback or request explicit current-turn user approval.
 
 The `taskType` selects a deterministic retrieval profile. SDL-MCP chooses the
 available lexical, vector, graph, overlay, feedback, and memory lanes, then

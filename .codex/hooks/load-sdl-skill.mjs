@@ -52,7 +52,7 @@ function fallbackSkillBody() {
     "4. Batch follow-up retrieval through `sdl.workflow`: `symbolSearch`, `symbolGetCard`, `sliceBuild` for graph/file frontiers, `codeSkeleton`, `codeHotPath`, then `codeNeedWindow` as a last resort.",
     '5. Use `symbol.edit` for one-symbol indexed edits; use `searchEditPreview` with `targeting:"identifier"`, `targeting:"structural"`, or `operations[]` for safer cross-file edits.',
     "6. Use `runtimeExecute` with `stdin` for repo-local commands and multiline scripts/input; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.",
-    "7. Use memory tools only when `memory.enabled: true`; avoid habitual `index.refresh`.",
+    "7. Use memory tools only when `memory.enabled: true`. Never call `index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn; dirty semantic state, graph verification, and parser-state/provenance warnings are not approval.",
     "8. Call `usageStats` only for requested savings reports, telemetry debugging, or persisted usage snapshots.",
   ].join("\n");
 }

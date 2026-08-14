@@ -24,7 +24,7 @@ This page defines practical workflows for coding agents using SDL-MCP.
 %%{init: {"theme":"base","themeVariables":{"background":"#ffffff","primaryColor":"#E7F8F2","primaryBorderColor":"#0F766E","primaryTextColor":"#102A43","secondaryColor":"#E8F1FF","secondaryBorderColor":"#2563EB","secondaryTextColor":"#102A43","tertiaryColor":"#FFF4D6","tertiaryBorderColor":"#B45309","tertiaryTextColor":"#102A43","lineColor":"#0F766E","textColor":"#102A43","fontFamily":"Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"},"flowchart":{"curve":"basis","htmlLabels":true}}}%%
 flowchart LR
     Task["Agent task"]
-    State["1. Establish state<br/>repo.status<br/>index.refresh<br/>policy.get"]
+    State["1. Establish state<br/>repo.status<br/>policy.get"]
     Discover["2. Discover symbols<br/>symbol.search<br/>repo.overview"]
     Understand["3. Understand context<br/>symbol.getCard<br/>slice.build<br/>memory.surface"]
     Read["4. Read code<br/>getSkeleton<br/>getHotPath<br/>needWindow"]
@@ -78,8 +78,8 @@ SDL-MCP exposes flat, gateway, and Code Mode tool surfaces. Exact tool counts mo
 | **Agent**                  | `sdl.agent.feedback`       | Record which symbols were useful/missing after a task; supports `taskTags`                                                                                           |
 |                            | `sdl.agent.feedback.query` | Query feedback records and aggregated statistics                                                                                                                     |
 | **File**                   | `sdl.file.read`            | Read non-indexed files with line range, search, or JSON path extraction                                                                                              |
-|                            | `sdl.file.write`           | Write non-indexed files with targeted update modes                                                                                                                   |
-| **Runtime**                | `sdl.runtime.execute`      | Sandboxed subprocess execution with `outputMode` (`minimal`, `summary`, `intent`); 17 runtimes including `node`, `typescript`, `python`, `shell`, `powershell`, `go`, `rust`, etc. |
+|                            | `sdl.file.write`           | Write one indexed or non-indexed file with targeted modes; indexed writes reconcile the live graph                                                                 |
+| **Runtime**                | `sdl.runtime.execute`      | Sandboxed subprocess execution with `outputMode` (`minimal`, `digest`, `summary`, `intent`); use digest for noisy build/test/lint/typecheck commands                  |
 |                            | `sdl.runtime.queryOutput`  | On-demand keyword search of stored runtime output artifacts by `artifactHandle`                                                                                      |
 | **Memory**                 | `sdl.memory.store`         | Store or update a development memory with symbol/file links                                                                                                          |
 |                            | `sdl.memory.query`         | Search memories by text, type, tags, or linked symbols; `staleOnly` filter                                                                                           |
@@ -109,7 +109,7 @@ Copy this block into `AGENTS.md` for token-efficient SDL-MCP usage on the curren
 ### 0) Establish state before deep context
 
 1. Call `sdl.repo.status` first.
-2. If local code changed and indexing is stale, run `sdl.index.refresh` with `mode: "incremental"`.
+2. Never call `sdl.index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn. Dirty semantic flags, graph verification, parser-state/provenance warnings, and refresh recommendations are diagnostics, not approval.
 3. Call `sdl.policy.get` and honor returned caps. Current effective policy is:
    - `maxWindowLines: 180`
    - `maxWindowTokens: 1400`
@@ -202,7 +202,8 @@ The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }
 - `sdl.pr.risk.analyze`:
   - Raise `riskThreshold` (for example `80`) to focus on highest-risk changes.
 - `sdl.runtime.execute`:
-  - Use `outputMode: "minimal"` (default) for ~50-token responses with just status and artifact handle.
+  - Use `outputMode: "minimal"` (default) for quiet probes and compact status/artifact output.
+  - Use `outputMode: "digest"` for noisy build, test, lint, and typecheck commands; it returns a structured failure digest while preserving full output for focused queries.
   - Use `outputMode: "summary"` for head+tail output excerpts (legacy behavior).
   - Use `outputMode: "intent"` to return only `queryTerms`-matched excerpts without head/tail summary; set `contextLines: 0` when the agent needs exact matched lines only.
   - Set `timeoutMs` and `maxResponseLines` to bound output. Use `queryTerms` to extract relevant excerpts from long output.
@@ -215,7 +216,7 @@ The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }
   - Set `budget.maxTotalTokens` (or the accepted alias `budget.maxTokens`) and `budget.maxSteps` to bound chain execution. If a later step references a packed-capable result, `sdl.workflow` requests JSON-compatible output for that referenced step automatically.
   - Use `onError: "continue"` (default) to skip only steps that reference failed/skipped prior steps, `"continueAll"` to run later steps even when their dependencies failed, or `"stop"` to halt on first error.
   - If any step has `status: "error"`, the top-level MCP response sets `isError: true`. Results remain in order, and `onError` still controls the remaining steps.
-  - Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow. When retrieval is unavailable, refresh in one workflow, wait for it to complete, then retrieve in a separate workflow.
+  - Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow. If the task requires latest-revision graph proof, request explicit current-turn user approval before refreshing in a separate workflow; wait only for dependent retrieval.
   - Set `onlyFinalResult: true` to omit successful intermediate result envelopes. SDL-MCP retains prior failures and skips, and `intermediateResultsSuppressed` counts only the omitted successes.
 
 ### 4) Live buffer workflow
@@ -233,7 +234,7 @@ Stale buffer pushes (version ≤ current) are rejected automatically.
 
 - Always provide `budget.maxTokens`; it limits the complete canonical payload.
 - Pass `focusSymbols`, `focusPaths`, and `chatMentions` as flat fields when known. They are authoritative seed priorities, not output boundaries.
-- An exact indexed `focusPaths` entry with no usable symbols returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` instead of unrelated context. Follow its incremental-refresh recovery, then retry the canonical `sdl.context` request.
+- An exact indexed `focusPaths` entry with no usable symbols returns `CONTEXT_FOCUS_PATH_UNAVAILABLE` instead of unrelated context. Its incremental-refresh recovery is a candidate action, not approval; use another SDL retrieval or file-based fallback, or request explicit current-turn approval if latest indexed context is required.
 - Use one of the task profiles: `"debug"`, `"review"`, `"implement"`, or `"explain"`. The profile selects expansion direction, depth, test defaults, and preferred evidence rungs.
 - SDL-MCP selects available retrieval lanes automatically and reports `retrieval.level` plus ordered lane availability. Callers do not choose semantic or context modes.
 - Successful responses contain `status`, `taskType`, `retrieval`, `evidence`, `edges`, `omitted`, and `nextActions`. Evidence rungs are `card`, `skeleton`, and `hotPath`; raw windows remain behind `codeNeedWindow`.
@@ -247,15 +248,16 @@ Run commands in a repo-scoped subprocess. Runtime execution is enabled by defaul
 
 **Output modes** control how much data is returned inline:
 
-| Mode        | Default? | Tokens   | Returns                                                                            |
-| :---------- | :------- | :------- | :--------------------------------------------------------------------------------- |
-| `"minimal"` | Yes      | ~50      | `{status, exitCode, signal, durationMs, outputLines, outputBytes, artifactHandle}` |
-| `"summary"` | No       | ~200-500 | Head+tail output excerpts (legacy behavior)                                        |
-| `"intent"`  | No       | ~100-300 | Only `queryTerms`-matched excerpts; no head/tail summary                           |
+| Mode        | Default? | Returns                                                                                        |
+| :---------- | :------- | :--------------------------------------------------------------------------------------------- |
+| `"minimal"` | Yes      | Compact status, artifact handle, and bounded previews when output is small                     |
+| `"digest"`  | No       | Structured pass/fail diagnostics for noisy build, test, lint, and typecheck output             |
+| `"summary"` | No       | Head+tail output excerpts (legacy behavior)                                                    |
+| `"intent"`  | No       | Only `queryTerms`-matched excerpts; no head/tail summary                                       |
 
 **Two-phase pattern** (recommended for large output):
 
-1. Execute with `outputMode: "minimal"` to get status + artifact handle at minimal token cost.
+1. Execute quiet probes with `outputMode: "minimal"`; use `"digest"` for noisy build, test, lint, or typecheck commands.
 2. If the exit code is non-zero or you need output details, call `sdl.runtime.queryOutput` with the `artifactHandle` and targeted `queryTerms`.
 
 ```json
@@ -314,7 +316,7 @@ Workflow guidance:
 - If `response.get` rejects a JSON path, choose from the sorted valid keys in the error and retry the suggested call with the same response handle.
 - Set `budget`: `{ maxTotalTokens, maxSteps, maxDurationMs }`; `maxTokens` is accepted as an alias for `maxTotalTokens`.
 - `onError`: `"continue"` (default, skip only dependency-blocked steps), `"continueAll"` (legacy run-every-later-step behavior), or `"stop"` (halt on first error).
-- Any errored step makes the top-level MCP response `isError: true`, without changing ordered results or `onError` behavior. A graph-retrieval error remains fail-closed even after an earlier `indexRefresh`; run the refresh, wait for completion, and retrieve in a separate workflow.
+- Any errored step makes the top-level MCP response `isError: true`, without changing ordered results or `onError` behavior. A graph-retrieval error remains fail-closed even after an earlier `indexRefresh`; request explicit current-turn user approval before refreshing separately, and wait only when the task depends on the resulting graph state.
 - The workflow enforces the same context-ladder escalation rules as individual tools.
 - Cross-step ETag caching is automatic — no need to pass ETags manually between steps.
 - Use workflows for multi-step operations: retrieval ladder escalation, runtime execution, data shaping, batch mutations, and CI pipelines. Do not use them merely to wrap a single `sdl.context` call or any other single action.
@@ -362,7 +364,7 @@ When memory is disabled, memory tools return a clear error and no memory surfaci
 - Do not call `sdl.symbol.getCard` N times when `sdl.symbol.getCard` can fetch all N in one call.
 - Do not record trivial `sdl.agent.feedback` just because a task ended; use it when a slice-backed task produced concrete useful/missing-symbol signal.
 - Do not call `sdl.runtime.execute` without setting `timeoutMs` — long-running processes will hang.
-- Do not use `outputMode: "summary"` when you only need pass/fail status — use `"minimal"` and query the artifact on failure.
+- Do not use `outputMode: "summary"` when you only need pass/fail status—use `"minimal"` for quiet probes or `"digest"` for noisy toolchains, then query the artifact only when needed.
 - Do not ignore `nextBestAction`, `fallbackTools`, or `fallbackRationale` in denied or ambiguous responses — they tell you what to try instead.
 - Do not ignore stale memories surfaced in slices — review and update or remove them.
 - Do not store trivial or ephemeral notes as memories — they add noise to future surfacing.

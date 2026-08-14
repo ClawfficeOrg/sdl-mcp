@@ -15,14 +15,20 @@ Use SDL-MCP as the repository boundary.
    window. Never use `file.read` for indexed source.
 4. Use `sdl.workflow` for runtime execution, transforms, dependent calls, and
    batch mutations. Persist command output and query only needed failure lines.
-5. Read and write non-indexed files through `sdl.file`. Edit indexed source
-   through symbol or search-edit preview/apply operations.
+5. Read non-indexed files through `sdl.file`. Its targeted write operation can
+   update one indexed file with live reconciliation; prefer symbol or
+   search-edit preview/apply operations when they can anchor the change.
 6. Keep `responseMode: "auto"` for potentially large results. A returned handle
    is a generic response artifact; retrieve its canonical `evidence` or another
    needed field with `response.get`.
 7. Reuse refs and ETags. Set `refsMode: "off"` only for complete or byte-stable
    output.
-8. Refresh the index only when status proves it is needed. Call usage statistics
-   only when the user asks for token savings or telemetry.
+8. Never call `index.refresh`, directly, through `sdl.workflow`, or via
+   `sdl-mcp index`, without explicit user approval in the current turn. Dirty
+   semantic flags, graph verification, parser-state/provenance warnings, and
+   refresh recommendations are diagnostics, not approval. Do not wait for
+   semantic freshness or verification unless the task requires latest-revision
+   graph proof. Use an SDL file-based edit fallback after provenance failures.
+9. Call usage statistics only when the user asks for token savings or telemetry.
 
 Use [tool recipes](./references/tool-recipes.md) for exact v2 request shapes.

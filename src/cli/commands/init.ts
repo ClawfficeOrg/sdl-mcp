@@ -1011,7 +1011,7 @@ Follow the same workflow as the SDL-MCP Agent Workflow skill when that skill is 
    - **Search**: \`{ "fn": "file.read", "args": { "filePath": "docs/guide.md", "search": "authentication", "searchContext": 3 } }\`
    - **JSON path**: \`{ "fn": "file.read", "args": { "filePath": "package.json", "jsonPath": "dependencies" } }\`
 
-13. **Do not refresh the index by habit.** Run \`index.refresh\` only when \`repo.status\` shows stale or missing indexed state and current code is required. Prefer incremental refresh; if it runs asynchronously, poll \`repo.status\` and wait for completion before continuing graph-backed exploration.
+13. **Require current-turn refresh approval.** Never call \`index.refresh\`, directly, through \`sdl.workflow\`, or via \`sdl-mcp index\`, without explicit user approval in the current turn. Dirty semantic flags, graph verification, parser-state/provenance warnings, and refresh recommendations are diagnostics, not approval. Do not wait for semantic freshness or graph verification unless the task requires latest-revision graph proof. On a provenance-dependent edit failure, use an SDL file-based edit fallback or report the limitation; do not automatically reindex.
 
 14. **Use SDL memory only when enabled.** If \`repo.status\`, config, or tool discovery does not show \`memory.enabled: true\`, do not repeatedly call memory tools. When enabled, use \`memory.query\` for task-text lookup and \`memory.surface\` after relevant symbol IDs are known.
 
@@ -1047,13 +1047,14 @@ At the start of every new session in this repository, load and follow the \`sdl-
 5. Use sdl.workflow for multi-step follow-ups, runtime execution, data transforms, and batch operations after the initial SDL discovery surface is chosen.
 6. Use symbolRef / symbolRefs when you know a symbol name but not the canonical symbolId.
 7. Follow nextBestAction, fallbackTools, fallbackRationale, and candidate guidance from SDL responses instead of retrying blocked native tools.
+8. Never call index.refresh directly or through sdl.workflow, and never run sdl-mcp index, without explicit user approval in the current turn. Dirty semantic flags, graph verification, parser-state/provenance warnings, and refresh recommendations are not approval.
 
 ## Native Tool Restrictions
 
 - Never use native repo-local Read, Write, Edit, patch, or Bash while the SDL-MCP PID file is present.
 - Use the Iris ladder for indexed source reads: sdl.context for task-shaped context, symbolSearch/symbolGetCard for exact symbols, slice.build for graph/file frontiers, then codeSkeleton, codeHotPath, and codeNeedWindow only as a last resort. Never use \`file.read\` for indexed source.
 - Use symbol.edit for one-symbol indexed writes and searchEditPreview with targeting:"identifier", targeting:"structural", or operations[] for cross-file indexed edits. Use targeted scripts through sdl.workflow runtimeExecute with stdin only when SDL edit tools cannot express the change.
-- Use file.read / file.write for non-indexed repository files.
+- Use file.read only for non-indexed repository files. file.write can make a targeted single-file write, including an indexed file with live reconciliation; prefer symbol.edit or search edit preview/apply when they can anchor the indexed change.
 - Use runtimeExecute inside sdl.workflow for repo-local shell actions; pass multiline scripts/input through stdin.
 - If a native file or Bash call is denied by a hook, switch to SDL-MCP immediately and do not retry the denied tool.
 - Use the explore-sdl subagent for codebase exploration instead of the built-in Explore agent.
@@ -1070,7 +1071,7 @@ Provide flat focusSymbols and/or focusPaths as seed priorities. Always set budge
 
 ## Runtime Execution
 
-- Use runtimeExecute inside sdl.workflow with outputMode: "minimal" (default) for ~50-token responses.
+- Use runtimeExecute inside sdl.workflow with outputMode: "minimal" for quiet probes, "digest" for noisy build/test/lint/typecheck commands, or "intent" when exact query terms are known.
 - Parameters: use args (string array), code (inline string), and stdin for multiline input. command is an executable alias; executable wins if both are present.
 - Use runtimeQueryOutput with artifactHandle and queryTerms to retrieve output details after minimal-mode execution.
 - Set timeoutMs on all runtime executions to prevent hangs.
@@ -1078,7 +1079,7 @@ Provide flat focusSymbols and/or focusPaths as seed priorities. Always set budge
 ## Non-Indexed File Access
 
 - Use file.read inside sdl.workflow for reading non-indexed files with targeted modes (search, jsonPath, offset/limit).
-- Use file.write or sdl.file op:"write" for non-indexed writes with one targeted mode.
+- Use file.write or sdl.file op:"write" for targeted single-file writes; indexed writes reconcile the live graph.
 - Prefer search or jsonPath over full reads.
 `;
 }
@@ -1253,7 +1254,7 @@ function fallbackSkillBody() {
     "4. Batch follow-up retrieval through \`sdl.workflow\`: \`symbolSearch\`, \`symbolGetCard\`, \`sliceBuild\` for graph/file frontiers, \`codeSkeleton\`, \`codeHotPath\`, then \`codeNeedWindow\` as a last resort.",
     "5. Use \`symbol.edit\` for one-symbol indexed edits; use \`searchEditPreview\` with \`targeting:\\"identifier\\"\`, \`targeting:\\"structural\\"\`, or \`operations[]\` for safer cross-file edits.",
     "6. Use \`runtimeExecute\` with \`stdin\` for repo-local commands and multiline scripts/input; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.",
-    "7. Use memory tools only when \`memory.enabled: true\`; avoid habitual \`index.refresh\`.",
+    "7. Use memory tools only when \`memory.enabled: true\`. Never call \`index.refresh\`, directly, through \`sdl.workflow\`, or via \`sdl-mcp index\`, without explicit user approval in the current turn; dirty semantic state, graph verification, and parser-state/provenance warnings are not approval.",
     "8. Call \`usageStats\` only for requested savings reports, telemetry debugging, or persisted usage snapshots; compact output returns \`formattedSummary\` and \`detail:\\"full\\"\` returns structured diagnostics.",
   ].join("\\n");
 }

@@ -282,11 +282,36 @@ describe("MCPServer", () => {
     it("publishes SDL-MCP Agent Workflow instructions for session start", () => {
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /sdl-mcp-agent-workflow/);
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /repo\.status/);
+      assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /sdl\.action\.search/);
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /sdl\.context/);
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /usageStats/);
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /outputMode: \"digest\"/);
+      assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /outputMode: \"minimal\"/);
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /refsMode: \"off\"/);
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /short ids/);
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /Never (?:call|run) `index\.refresh`[^\n]*explicit user approval in the current turn/,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /directly[^\n]*`sdl\.workflow`[^\n]*`sdl-mcp index`/,
+      );
+      assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /`embeddingsDirty`/);
+      assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /`summariesDirty`/);
+      assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /`PARSER_FILE_STATE_MISSING`/);
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /Do not wait for semantic freshness or graph verification/,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /`file\.write`[^\n]*indexed/,
+      );
+      assert.doesNotMatch(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /do not refresh the index by habit/i,
+      );
     });
 
     it("has gatewayMode defaulting to false", () => {

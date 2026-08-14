@@ -248,6 +248,10 @@ describe("code-mode action catalog", () => {
 
       assert.match(byAction.get("action.search")?.description ?? "", /limit.*50/i);
       assert.match(byAction.get("index.refresh")?.description ?? "", /wait/i);
+      assert.match(
+        byAction.get("index.refresh")?.description ?? "",
+        /explicit user approval in the current turn/i,
+      );
       assert.match(byAction.get("runtime.execute")?.description ?? "", /shell.*code/i);
       assert.match(byAction.get("runtime.execute")?.description ?? "", /maxResponseLines.*5/i);
       assert.match(byAction.get("search.edit")?.description ?? "", /dot/i);
