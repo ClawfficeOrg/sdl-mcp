@@ -355,14 +355,14 @@ Use this after `sdl.context` or `slice.build` identifies the affected files or s
 
 ## 4. Runtime Output Control
 
-Run repo-local commands through `runtimeExecute` inside `sdl.workflow`.
+runtimeExecute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files.
+
+Run permitted repo-local tooling through `runtimeExecute` inside `sdl.workflow`.
 
 
 Default to `outputMode: "digest"` for build, test, lint, and other noisy diagnostics; use `outputMode: "minimal"` when exit status is enough. Always set `persistOutput: true` and an explicit `timeoutMs`. Use `stdin` for multiline scripts/input instead of PowerShell here-strings, quote-heavy `node -e`, or base64 decode/eval workarounds. Query stored logs only when needed with `runtimeQueryOutput` and focused `queryTerms`. Use `outputMode: "intent"` when the command intent is already tied to known terms such as `FAIL`, `Error`, or a test name; set `contextLines: 0` when exact matched lines are cleaner than surrounding context.
 
 Persisted runtime artifacts preserve the redacted command output byte-for-byte. Default model excerpts remove only leading command-prompt echoes and recognized Node test-duration suffixes; use `view: "raw"` when the unprojected, already-redacted artifact excerpt is required.
-
-Do not use runtime execution to print indexed source. Use the retrieval ladder instead.
 
 ### Execute First
 
@@ -485,7 +485,7 @@ Before the final response:
 
 - Starting with native `Read`, `Grep`, shell search, or repo-wide listing instead of SDL discovery (`sdl.context`, `sdl.retrieve`, `symbolSearch`, or `slice.build`).
 - Calling `codeNeedWindow` before `symbolGetCard`, `sliceBuild`, `codeSkeleton`, and `codeHotPath`.
-- Using `runtimeExecute` to print indexed source.
+- Using `runtimeExecute` to inspect, search, or print repository files.
 - Do not use `sdl.file` `sourceWindow` to read arbitrary source. It is only for inspecting files inside an edit preview plan and requires `planHandle`. Use `codeNeedWindow` for raw indexed source.
 - Running `index.refresh` without explicit current-turn user approval or defaulting to full refresh.
 - Reading whole non-indexed files when `search`, `jsonPath`, or bounded ranges would answer.

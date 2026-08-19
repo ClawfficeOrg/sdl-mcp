@@ -253,7 +253,9 @@ describe("workflow projection", () => {
         Object.keys(step).filter((key) => key === "nextAction").length <= 1,
       );
       assert.deepEqual(Object.keys(step), [
-        ...("nextAction" in step ? ["stepIndex"] : []),
+        ...(fixture.status === "error" || "nextAction" in step
+          ? ["stepIndex"]
+          : []),
         "fn",
         "status",
         "error",

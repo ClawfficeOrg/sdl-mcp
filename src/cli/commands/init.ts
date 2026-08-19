@@ -244,6 +244,9 @@ const SDL_SOURCE_EXTENSIONS = SDL_SOURCE_EXTENSIONS_BY_LANGUAGE.flatMap(
   ({ extensions }) => extensions,
 );
 
+const RUNTIME_REPOSITORY_TOOLING_GUIDANCE =
+  'runtimeExecute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files.';
+
 const SDL_RUNTIME_REDIRECT_PREFIXES = [
   "npm test",
   "npm run test",
@@ -787,6 +790,7 @@ PY
 
 function buildClaudeRuntimeHook(pidfilePath: string): string {
   const safePath = shellEscape(pidfilePath);
+  const runtimeReason = `${RUNTIME_REPOSITORY_TOOLING_GUIDANCE} For permitted tooling, use sdl.workflow with runtimeExecute, default outputMode: "minimal", persistOutput: true, an explicit timeoutMs, stdin for multiline input, and runtimeQueryOutput only for focused follow-up output.`;
   return `#!/bin/sh
 set -eu
 
@@ -805,7 +809,7 @@ import os
 import re
 import sys
 
-RUNTIME_REASON = "Run repo-local shell actions through SDL-MCP instead of native Bash. Use sdl.workflow with runtimeExecute, default outputMode: \\"minimal\\", persistOutput: true, an explicit timeoutMs, stdin for multiline input, and runtimeQueryOutput only for focused follow-up output."
+RUNTIME_REASON = ${JSON.stringify(runtimeReason)}
 
 def norm(value):
     return str(value or "").replace("\\\\", "/").lower()
@@ -1000,7 +1004,7 @@ Follow the same workflow as the SDL-MCP Agent Workflow skill when that skill is 
     - If output details are needed, call \`runtimeQueryOutput\` with the \`artifactHandle\` and targeted \`queryTerms\`.
    - Use \`outputMode: "intent"\` when the command is already tied to known terms such as \`FAIL\`, \`Error\`, or a test name; set \`contextLines: 0\` when exact matched lines are cleaner than surrounding context.
    - Always set \`timeoutMs\` to prevent hangs.
-   - Never use runtime execution to print indexed source.
+   - ${RUNTIME_REPOSITORY_TOOLING_GUIDANCE}
 
 10. **Follow SDL fallback guidance** — when a request is denied or ambiguous, use the \`nextBestAction\`, \`fallbackTools\`, \`fallbackRationale\`, and ranked candidates from the response instead of retrying native tools.
 
@@ -1055,7 +1059,8 @@ At the start of every new session in this repository, load and follow the \`sdl-
 - Use the Iris ladder for indexed source reads: sdl.context for task-shaped context, symbolSearch/symbolGetCard for exact symbols, slice.build for graph/file frontiers, then codeSkeleton, codeHotPath, and codeNeedWindow only as a last resort. Never use \`file.read\` for indexed source.
 - Use symbol.edit for one-symbol indexed writes and searchEditPreview with targeting:"identifier", targeting:"structural", or operations[] for cross-file indexed edits. Use targeted scripts through sdl.workflow runtimeExecute with stdin only when SDL edit tools cannot express the change.
 - Use file.read only for non-indexed repository files. file.write can make a targeted single-file write, including an indexed file with live reconciliation; prefer symbol.edit or search edit preview/apply when they can anchor the indexed change.
-- Use runtimeExecute inside sdl.workflow for repo-local shell actions; pass multiline scripts/input through stdin.
+- ${RUNTIME_REPOSITORY_TOOLING_GUIDANCE}
+- For permitted tooling, use runtimeExecute inside sdl.workflow; pass multiline scripts/input through stdin.
 - If a native file or Bash call is denied by a hook, switch to SDL-MCP immediately and do not retry the denied tool.
 - Use the explore-sdl subagent for codebase exploration instead of the built-in Explore agent.
 - Native access remains allowed for .codex/**, .claude/**, and non-repo agent skills, memories, and session internals.
@@ -1071,6 +1076,7 @@ Provide flat focusSymbols and/or focusPaths as seed priorities. Always set budge
 
 ## Runtime Execution
 
+- ${RUNTIME_REPOSITORY_TOOLING_GUIDANCE}
 - Use runtimeExecute inside sdl.workflow with outputMode: "minimal" for quiet probes, "digest" for noisy build/test/lint/typecheck commands, or "intent" when exact query terms are known.
 - Parameters: use args (string array), code (inline string), and stdin for multiline input. command is an executable alias; executable wins if both are present.
 - Use runtimeQueryOutput with artifactHandle and queryTerms to retrieve output details after minimal-mode execution.
@@ -1115,6 +1121,7 @@ function buildOpenCodeProjectConfig(configPath: string): string {
 }
 
 function buildOpenCodePlugin(): string {
+  const runtimeReason = `${RUNTIME_REPOSITORY_TOOLING_GUIDANCE.replace('op="read"', "op='read'")} For permitted tooling, use runtimeExecute inside sdl.workflow with outputMode: 'minimal' and stdin for multiline input instead of native bash.`;
   return `import type { Plugin } from "@opencode-ai/plugin";
 
 const BLOCKED_EXTENSIONS = [${formatExtensionArrayLiteral()}];
@@ -1140,7 +1147,7 @@ export const EnforceSDL: Plugin = async () => {
         const command = String(output.args.command ?? "").trim().toLowerCase();
         if (REDIRECT_PREFIXES.some((prefix) => command === prefix || command.startsWith(\`\${prefix} \`))) {
           throw new Error(
-            "Run repo-local build, test, lint, and diagnostic commands through SDL runtime. Use runtimeExecute inside sdl.workflow with outputMode: 'minimal' and stdin for multiline input instead of native bash."
+            ${JSON.stringify(runtimeReason)}
           );
         }
       }
@@ -1202,6 +1209,7 @@ function buildCodexHooksJson(repoRoot: string): string {
 }
 
 function buildCodexSessionStartHook(): string {
+  const fallbackRuntimeRule = `6. ${RUNTIME_REPOSITORY_TOOLING_GUIDANCE} For permitted tooling, use \`runtimeExecute\` with \`stdin\`; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.`;
   return `#!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -1253,7 +1261,7 @@ function fallbackSkillBody() {
     "3. Inspect its deterministic \`evidence\`, \`edges\`, \`omitted\`, and \`nextActions\`; the tool does not synthesize answers.",
     "4. Batch follow-up retrieval through \`sdl.workflow\`: \`symbolSearch\`, \`symbolGetCard\`, \`sliceBuild\` for graph/file frontiers, \`codeSkeleton\`, \`codeHotPath\`, then \`codeNeedWindow\` as a last resort.",
     "5. Use \`symbol.edit\` for one-symbol indexed edits; use \`searchEditPreview\` with \`targeting:\\"identifier\\"\`, \`targeting:\\"structural\\"\`, or \`operations[]\` for safer cross-file edits.",
-    "6. Use \`runtimeExecute\` with \`stdin\` for repo-local commands and multiline scripts/input; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.",
+    ${JSON.stringify(fallbackRuntimeRule)},
     "7. Use memory tools only when \`memory.enabled: true\`. Never call \`index.refresh\`, directly, through \`sdl.workflow\`, or via \`sdl-mcp index\`, without explicit user approval in the current turn; dirty semantic state, graph verification, and parser-state/provenance warnings are not approval.",
     "8. Call \`usageStats\` only for requested savings reports, telemetry debugging, or persisted usage snapshots; compact output returns \`formattedSummary\` and \`detail:\\"full\\"\` returns structured diagnostics.",
   ].join("\\n");
@@ -1287,6 +1295,7 @@ process.stdout.write(JSON.stringify({
 
 function buildCodexPreToolUseHook(pidfilePath: string): string {
   const indexedExtensions = JSON.stringify(SDL_SOURCE_EXTENSIONS);
+  const runtimeReason = `${RUNTIME_REPOSITORY_TOOLING_GUIDANCE} For permitted tooling, use sdl.workflow with runtimeExecute, default outputMode: "minimal", persistOutput: true, an explicit timeoutMs, stdin for multiline input, and runtimeQueryOutput only for focused follow-up output.`;
   return `#!/usr/bin/env node
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1297,7 +1306,7 @@ const pidfilePath = ${JSON.stringify(pidfilePath)};
 const indexedExtensions = new Set(${indexedExtensions});
 
 const RUNTIME_REASON =
-  "Run repo-local shell actions through SDL-MCP instead of native shell. Use sdl.workflow with runtimeExecute, default outputMode: \\"minimal\\", persistOutput: true, an explicit timeoutMs, stdin for multiline input, and runtimeQueryOutput only for focused follow-up output.";
+  ${JSON.stringify(runtimeReason)};
 const INDEXED_READ_REASON =
   "Use the SDL-MCP retrieval ladder for indexed source reads. Use sdl.context for task-shaped understanding, symbolSearch/symbolGetCard for exact symbols, or slice.build for dependency/file frontiers; then batch follow-ups through sdl.workflow using symbolSearch, symbolGetCard, sliceBuild, codeSkeleton, codeHotPath, and codeNeedWindow only as a last resort with identifiersToFind and expectedLines. Never use \`file.read\` for indexed source.";
 const INDEXED_WRITE_REASON =

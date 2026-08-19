@@ -216,7 +216,11 @@ function compactStep(
   }
 
   const out: Record<string, unknown> = {};
-  if (input.options.detail === "full" || nextAction !== undefined) {
+  if (
+    status === "error"
+    || input.options.detail === "full"
+    || nextAction !== undefined
+  ) {
     out.stepIndex = stepIndex;
   }
   out.fn = raw.fn;

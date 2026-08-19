@@ -37,7 +37,7 @@ const AGENT_DESCRIPTION_BASE =
   `agent.feedback.query(versionId?,limit?,since?) | ` +
   `buffer.push(eventType,filePath,content,version,dirty,timestamp,cursor?,selections?) | ` +
   `buffer.checkpoint(reason?) | buffer.status() | ` +
-  `runtime.execute(runtime,executable?,args?,code?,stdin?,relativeCwd?,timeoutMs?,queryTerms?,maxResponseLines? (5..1000),persistOutput?,outputMode?) [use stdin for multiline input; outputMode defaults to "minimal" ~50 tokens; use "summary" for head+tail, "intent" for queryTerms-only excerpts] | runtime.queryOutput(artifactHandle,queryTerms[],maxExcerpts?,contextLines?,stream?)`;
+  `runtime.execute(runtime,executable?,args?,code?,stdin?,relativeCwd?,timeoutMs?,queryTerms?,maxResponseLines? (5..1000),persistOutput?,outputMode?) [runtime.execute executes repository tooling: build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files. Use stdin for multiline input; outputMode defaults to "minimal" ~50 tokens; use "summary" for head+tail, "intent" for queryTerms-only excerpts] | runtime.queryOutput(artifactHandle,queryTerms[],maxExcerpts?,contextLines?,stream?)`;
 
 const MEMORY_DESCRIPTION_SUFFIX =
   ` | memory.store(type,title,content,tags?,confidence?,symbolIds?,fileRelPaths?,memoryId?) | ` +

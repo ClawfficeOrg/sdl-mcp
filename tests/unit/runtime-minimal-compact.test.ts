@@ -177,7 +177,7 @@ describe("runtime minimal mode compact response", () => {
     );
   });
 
-  it("returns structured digest and force-persisted artifact in digest mode", async () => {
+  it("returns structured digest without persisting when persistOutput is false", async () => {
     const { handleRuntimeExecute } =
       await import("../../dist/mcp/tools/runtime.js");
 
@@ -201,9 +201,6 @@ describe("runtime minimal mode compact response", () => {
       result.stdoutSummary.length < 200,
       `digest summary should be compact, got ${result.stdoutSummary.length} chars`,
     );
-    assert.ok(
-      result.artifactHandle,
-      "digest mode must force-persist the output artifact",
-    );
+    assert.equal(result.artifactHandle, null);
   });
 });

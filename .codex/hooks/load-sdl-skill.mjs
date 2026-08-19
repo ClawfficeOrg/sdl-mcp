@@ -51,7 +51,7 @@ function fallbackSkillBody() {
     "3. Inspect its deterministic `evidence`, `edges`, `omitted`, and `nextActions`; the tool does not synthesize answers.",
     "4. Batch follow-up retrieval through `sdl.workflow`: `symbolSearch`, `symbolGetCard`, `sliceBuild` for graph/file frontiers, `codeSkeleton`, `codeHotPath`, then `codeNeedWindow` as a last resort.",
     '5. Use `symbol.edit` for one-symbol indexed edits; use `searchEditPreview` with `targeting:"identifier"`, `targeting:"structural"`, or `operations[]` for safer cross-file edits.',
-    "6. Use `runtimeExecute` with `stdin` for repo-local commands and multiline scripts/input; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.",
+    '6. runtimeExecute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files. For permitted tooling, use `runtimeExecute` with `stdin`; for indexed-source edits, use runtime only when SDL edit tools cannot express the change.',
     "7. Use memory tools only when `memory.enabled: true`. Never call `index.refresh`, directly, through `sdl.workflow`, or via `sdl-mcp index`, without explicit user approval in the current turn; dirty semantic state, graph verification, and parser-state/provenance warnings are not approval.",
     "8. Call `usageStats` only for requested savings reports, telemetry debugging, or persisted usage snapshots.",
   ].join("\n");

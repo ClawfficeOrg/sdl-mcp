@@ -1184,7 +1184,7 @@ See [file.write Tool Reference](./file-write-tool.md) for the mode-by-mode guide
 
 ### `sdl.runtime.execute`
 
-Run a command in a repo-scoped subprocess. Runtime execution is enabled by default; set `runtime.enabled: false` to disable it.
+Run a command in a repo-scoped subprocess. Runtime execution executes repository tooling: build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use runtime execution to inspect, search, or print repository files. Use `sdl.context` or `sdl.retrieve` for indexed source and `sdl.file` with `op="read"` for other files. The cooperative high-confidence, precision-first guard has no per-call bypass, but it is not a security boundary. Disable runtime execution when one is required. Runtime execution is enabled by default; set `runtime.enabled: false` to disable it.
 
 **Parameters:**
 
@@ -1200,11 +1200,21 @@ Run a command in a repo-scoped subprocess. Runtime execution is enabled by defau
 | `timeoutMs`          | `integer`                                | No       | Timeout in milliseconds (100-300,000)                                                                                                                                                             |
 | `queryTerms`         | `string[]`                               | No       | Filter output to lines matching these terms (max 10)                                                                                                                                              |
 | `maxResponseLines`   | `integer`                                | No       | Max output lines returned (5-1,000, default: 100)                                                                                                                                                 |
-| `persistOutput`      | `boolean`                                | No       | Save full output to an artifact handle (default: true)                                                                                                                                            |
+| `persistOutput`      | `boolean`                                | No       | Save full output to an artifact handle (default: true). When false, no runtime output artifact or handle is created.                                                                              |
 | `outputMode`         | `"minimal"` \| `"digest"` \| `"summary"` \| `"intent"` | No       | Controls response verbosity. `"minimal"` (default): compact status and bounded previews. `"digest"`: structured pass/fail diagnostics for noisy toolchains. `"summary"`: head+tail excerpts. `"intent"`: only `queryTerms`-matched excerpts. |
 | `includeDiagnostics` | `boolean`                                | No       | Include coarse policy, execution, output decoding, and artifact phase timings                                                                                                                     |
 
 Use `stdin` for multiline scripts/input instead of shell quoting or base64 workarounds. SDL-MCP reports `stdinBytes` and `stdinSha256` but does not echo full stdin in visible output or persisted logs. `stdin` does not bypass command validation: the shell runtime still requires `code`. Use `code` for inline snippets or `args` for invoking files/commands. Default Node `code` snippets resolve relative imports from the requested working directory without repo-local temp files. When Node `code` also needs user `stdin`, SDL-MCP runs a temp `.mjs` from the OS temp directory so stdin remains available to the child process. On Windows shell runtime, use `&` or newlines rather than semicolons for command separation; SDL-MCP surfaces a warning when semicolons appear in shell code. Predictable failures can include compact `runtimeHints`, such as using ESM imports instead of `require()` or avoiding Bash syntax under Windows `cmd.exe`. `queryTerms` acts like a built-in grep, extracting only matching lines from long output.
+
+The guard rejects detected repository inspection before execution with the
+deterministic `POLICY_ERROR` error: `policy_denied`, `retryable: false`, and
+`RUNTIME_REPOSITORY_INSPECTION_DISALLOWED: runtimeExecute executes repository tooling and cannot inspect repository files. Use sdl.context or sdl.retrieve for indexed source; use sdl.file with op="read" for non-indexed files.` It does not expose matched command, path, or source text.
+
+When Code Mode is unavailable, read non-indexed files with `sdl.file.read`.
+For indexed source, use the flat ladder: `sdl.repo.overview`,
+`sdl.symbol.search` / `sdl.symbol.getCard`, `sdl.slice.build`, then
+`sdl.code.getSkeleton`, `sdl.code.getHotPath`, or a justified
+`sdl.code.needWindow` as appropriate.
 
 **Response** varies by `outputMode`:
 
@@ -1444,7 +1454,7 @@ For `jsonPath` results, strings are returned whole only when their serialized JS
 
 Execute a multi-step workflow of SDL-MCP actions and internal transforms in one round trip.
 
-Use this for runtime execution, data shaping, batch mutations, and reusable multi-step pipelines. Do not use it for context retrieval; route that work to `sdl.context`. Set `includeDiagnostics: true` to include workflow phase timings. If any step has `status: "error"`, the top-level MCP response sets `isError: true` while preserving ordered results and `onError` behavior. Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow. If latest indexed state is required, request explicit current-turn user approval before refreshing in a separate workflow, wait for completion, and then retrieve. Set `onlyFinalResult: true` to omit successful intermediate envelopes while retaining prior failures and skips; `intermediateResultsSuppressed` counts only omitted successes, and `$N` execution still uses the unprojected prior results.
+Use this for runtime execution, data shaping, batch mutations, and reusable multi-step pipelines. Do not use it for context retrieval; route that work to `sdl.context`. A rejected `runtimeExecute` step has `status: "error"` and the same typed `POLICY_ERROR` / `policy_denied` / `retryable: false` error as a direct runtime call. If any step has `status: "error"`, the top-level MCP response sets `isError: true` while preserving ordered results and `onError` behavior: `"stop"` skips later steps, `"continue"` runs independent later steps, and `"continueAll"` attempts later steps. Set `includeDiagnostics: true` to include workflow phase timings. Graph-backed retrieval remains fail-closed even when `indexRefresh` appears earlier in the workflow. If latest indexed state is required, request explicit current-turn user approval before refreshing in a separate workflow, wait for completion, and then retrieve. Set `onlyFinalResult: true` to omit successful intermediate envelopes while retaining prior failures and skips; `intermediateResultsSuppressed` counts only omitted successes, and `$N` execution still uses the unprojected prior results.
 
 ### `sdl.retrieve`
 

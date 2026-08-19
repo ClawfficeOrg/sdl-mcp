@@ -155,7 +155,7 @@ function projectFamilyValue(
     return projectStatusValue(input, projectCompatibilityValue);
   }
   if (isRecord(input.canonicalResult) && isRecord(input.canonicalResult.error)) {
-    return input.canonicalResult;
+    return projectCompatibilityValue(input);
   }
   throw new Error("Projection action has no projector");
 }

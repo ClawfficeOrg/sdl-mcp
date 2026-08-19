@@ -35,6 +35,19 @@ The generated files steer Claude toward:
 5. `sdl.workflow` for batched escalation, runtime execution, data transforms, and batch operations
 6. `runtimeExecute` inside `sdl.workflow` for repo-local commands
 
+`runtimeExecute` executes repository tooling: build, test, lint, compiler,
+named scripts, and targeted edit scripts. Do not use it to inspect, search, or
+print repository files. Use `sdl.context` or `sdl.retrieve` for indexed source
+and `sdl.file` with `op="read"` for other files. Its cooperative,
+high-confidence, precision-first guard has no per-call bypass, but it is not a
+security boundary. Disable runtime execution when one is required.
+
+When Code Mode is unavailable, read non-indexed files with `sdl.file.read`.
+For indexed source, use the flat ladder: `sdl.repo.overview`,
+`sdl.symbol.search` / `sdl.symbol.getCard`, `sdl.slice.build`, then
+`sdl.code.getSkeleton`, `sdl.code.getHotPath`, or a justified
+`sdl.code.needWindow` as appropriate.
+
 They also teach Claude to use `symbolRef` / `symbolRefs` when it knows a symbol name but not the canonical ID, and to follow SDL fallback guidance instead of retrying blocked native tools. Enforcement is conditional on the SDL-MCP server being active.
 
 ---

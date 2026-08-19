@@ -202,6 +202,7 @@ The scenario is a bounded JSON array of `{ "tool": "...", "arguments": { ... } }
 - `sdl.pr.risk.analyze`:
   - Raise `riskThreshold` (for example `80`) to focus on highest-risk changes.
 - `sdl.runtime.execute`:
+  - Runtime execution executes repository tooling: build, test, lint, compiler, named scripts, and targeted edit scripts are supported. Do not use runtime execution to inspect, search, or print repository files; use `sdl.context` or `sdl.retrieve` for indexed source and `sdl.file` with `op="read"` for other files.
   - Use `outputMode: "minimal"` (default) for quiet probes and compact status/artifact output.
   - Use `outputMode: "digest"` for noisy build, test, lint, and typecheck commands; it returns a structured failure digest while preserving full output for focused queries.
   - Use `outputMode: "summary"` for head+tail output excerpts (legacy behavior).
@@ -245,6 +246,20 @@ Stale buffer pushes (version ≤ current) are rejected automatically.
 ### 6) Runtime execution (`sdl.runtime.execute` + `sdl.runtime.queryOutput`)
 
 Run commands in a repo-scoped subprocess. Runtime execution is enabled by default; set `runtime.enabled: false` to disable it.
+
+Runtime execution executes repository tooling, not repository inspection. Use it for builds, tests, lint, compiler work, named scripts, and targeted edit scripts. Do not use runtime execution to inspect, search, or print repository files: route indexed source to `sdl.context` or `sdl.retrieve`, and other files to `sdl.file` with `op="read"`. The cooperative, high-confidence, precision-first guard has no per-call bypass, but it is not a security boundary. Disable runtime execution when one is required.
+
+When the guard rejects a call, it returns `POLICY_ERROR`, `policy_denied`, and
+`retryable: false` without command or path details. A rejected `runtimeExecute`
+workflow step has `status: "error"` and the same typed error. The top-level MCP
+response sets `isError: true`; `onError: "continue"`, `"continueAll"`, and
+`"stop"` still control later steps as documented below.
+
+When Code Mode is unavailable, read non-indexed files with `sdl.file.read`.
+For indexed source, use the flat ladder: `sdl.repo.overview`,
+`sdl.symbol.search` / `sdl.symbol.getCard`, `sdl.slice.build`, then
+`sdl.code.getSkeleton`, `sdl.code.getHotPath`, or a justified
+`sdl.code.needWindow` as appropriate.
 
 **Output modes** control how much data is returned inline:
 

@@ -20,6 +20,10 @@ import type { CodeModeConfig } from "../../dist/config/types.js";
 import type { ToolContext } from "../../dist/server.js";
 import { RuntimeExecuteRequestSchema } from "../../dist/mcp/tools.js";
 import { tokenAccumulator } from "../../dist/mcp/token-accumulator.js";
+import {
+  RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+  RuntimeRepositoryInspectionError,
+} from "../../dist/domain/errors.js";
 import { z } from "zod";
 
 const originalSdlConfig = process.env.SDL_CONFIG;
@@ -128,6 +132,12 @@ function createMockActionMap() {
             },
           ],
         });
+      },
+    },
+    "test.typedFail": {
+      schema: z.object({}).passthrough(),
+      handler: async () => {
+        throw new RuntimeRepositoryInspectionError();
       },
     },
     "test.slow": {
@@ -986,6 +996,77 @@ describe("code-mode workflow executor", () => {
     );
     assert.strictEqual(result.results[0].status, "error");
     assert.strictEqual(result.results[1].status, "skipped");
+  });
+
+  it("preserves typed domain errors while honoring each onError mode", async () => {
+    const expectedError = {
+      message: RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+      code: "POLICY_ERROR",
+      classification: "policy_denied",
+      retryable: false,
+    };
+    assert.deepStrictEqual(
+      responseProjection.projectToolResultForModelContent(
+        "sdl.runtime.execute",
+        { error: expectedError },
+        { repoId: "test", runtime: "node", args: ["--version"] },
+      ),
+      { error: expectedError },
+    );
+
+    for (const [onError, expectedStatuses] of [
+      ["stop", ["error", "skipped", "skipped"]],
+      ["continue", ["error", "ok", "skipped"]],
+      ["continueAll", ["error", "ok", "error"]],
+    ] as const) {
+      const request: ParsedWorkflowRequest = {
+        repoId: "test",
+        steps: [
+          { fn: "testTypedFail", action: "test.typedFail", args: {} },
+          { fn: "testEcho", action: "test.echo", args: { message: "independent" } },
+          { fn: "testEcho", action: "test.echo", args: { message: "$0.message" } },
+        ],
+        onError,
+      };
+
+      const result = await executeWorkflow(
+        request,
+        createMockActionMap(),
+        testConfig,
+      );
+
+      assert.deepStrictEqual(
+        result.results.map((step) => step.status),
+        expectedStatuses,
+        onError,
+      );
+      assert.deepStrictEqual(result.results[0].error, expectedError, onError);
+      const projected = responseProjection.projectToolResultForModelContent(
+        "sdl.workflow",
+        result,
+        { repoId: "test", steps: request.steps, onError },
+      ) as { results: Array<Record<string, unknown>> };
+      assert.deepStrictEqual(projected.results[0], {
+        stepIndex: 0,
+        fn: "testTypedFail",
+        status: "error",
+        error: expectedError,
+      }, onError);
+      if (onError === "continue") {
+        assert.strictEqual(result.results[2].blockedByStep, 0);
+        assert.strictEqual(result.results[2].blockedByFn, "testTypedFail");
+        assert.strictEqual(
+          result.results[2].blockedByError,
+          RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+        );
+      }
+      if (onError === "continueAll") {
+        assert.strictEqual(
+          result.results[2].error,
+          "Cannot navigate into null/undefined at segment 'message' in reference '$0.message'",
+        );
+      }
+    }
   });
 
   it("onError=stop halts chain when a gateway action returns failure", async () => {

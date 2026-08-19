@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { buildFlatToolDescriptors } from "../../dist/mcp/tools/tool-descriptors.js";
+import { AGENT_DESCRIPTION } from "../../dist/gateway/descriptions.js";
 
 // Read the committed inventory for expected tool names
 import { readFileSync } from "node:fs";
@@ -137,6 +138,30 @@ describe("buildFlatToolDescriptors", () => {
       assert.ok(typeof d.description === "string", `description must be string for ${d.name}`);
       assert.ok(d.schema, `descriptor ${d.name} missing schema`);
       assert.ok(typeof d.handler === "function", `descriptor ${d.name} missing handler`);
+    }
+  });
+
+  it("reserves runtime execution for repository tooling, not file inspection", () => {
+    const descriptor = descriptors.find(
+      (candidate) => candidate.name === "sdl.runtime.execute",
+    );
+    assert.ok(descriptor);
+
+    for (const [surface, description] of [
+      ["flat runtime descriptor", descriptor.description],
+      ["gateway runtime descriptor", AGENT_DESCRIPTION],
+    ] as const) {
+      assert.match(description, /runtime(?:Execute|\.execute) executes repository tooling/i, surface);
+      assert.match(
+        description,
+        /Do not use it to inspect, search, or print repository files/i,
+        surface,
+      );
+      assert.match(description, /sdl\.context[^.]*sdl\.retrieve[^.]*indexed source/i, surface);
+      assert.match(description, /sdl\.file[^.]*op[^.]*read[^.]*other files/i, surface);
+      assert.match(description, /build[^.]*test[^.]*lint[^.]*compiler/i, surface);
+      assert.match(description, /targeted edit scripts/i, surface);
+      assert.doesNotMatch(description, /runtime[^.]*read[^.]*fallback/i, surface);
     }
   });
 

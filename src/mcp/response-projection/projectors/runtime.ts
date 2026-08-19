@@ -370,6 +370,12 @@ export function projectRuntimeValue(
   projectCompatibilityValue: ModelValueProjectionDelegate,
 ): unknown {
   if (
+    isRecord(input.canonicalResult)
+    && isRecord(input.canonicalResult.error)
+  ) {
+    return projectCompatibilityValue(input);
+  }
+  if (
     input.action === "runtime.execute"
     || input.action === "sdl.runtime.execute"
   ) {

@@ -291,6 +291,31 @@ describe("MCPServer", () => {
       assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /short ids/);
       assert.match(
         SDL_MCP_SERVER_INSTRUCTIONS,
+        /runtimeExecute executes repository tooling/i,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /Do not use it to inspect, search, or print repository files/i,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /sdl\.context[^\n]*sdl\.retrieve[^\n]*indexed source/i,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /sdl\.file[^\n]*op[^\n]*read[^\n]*other files/i,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /build[^\n]*test[^\n]*lint[^\n]*compiler/i,
+      );
+      assert.match(SDL_MCP_SERVER_INSTRUCTIONS, /targeted edit scripts/i);
+      assert.doesNotMatch(
+        SDL_MCP_SERVER_INSTRUCTIONS,
+        /runtimeExecute[^\n.]*(?:inspect|search|print|read)[^\n.]*(?:fallback|last resort)/i,
+      );
+      assert.match(
+        SDL_MCP_SERVER_INSTRUCTIONS,
         /Never (?:call|run) `index\.refresh`[^\n]*explicit user approval in the current turn/,
       );
       assert.match(

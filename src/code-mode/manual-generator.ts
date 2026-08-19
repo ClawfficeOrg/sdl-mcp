@@ -52,12 +52,11 @@ export function getActiveActionToFn(
   return filtered;
 }
 
-const MANUAL_TEMPLATE = `// SDL-MCP API: sdl.context for context; sdl.workflow for multi-step ops
-// repoId lives in workflow envelope.
-// Reference steps as ${"$"}N, e.g. ${"$"}0.results[0].symbolId. Wildcard [*] projects arrays: ${"$"}0.results[*].symbolId -> string[].
+const MANUAL_TEMPLATE = `// SDL-MCP API
+// ${"$"}N refs: ${"$"}0.results[0].symbolId; ${"$"}0.results[*].symbolId -> string[].
 // Limits: sdl.action.search limit <= 50; workflowContinuationGet limit <= 1000; runtimeExecute maxResponseLines 5..1000; shell runtime requires code.
-// Release-static medians: card50 search150 skeleton200 hotPath500 runtimeDigest120 context800/2000 window<=1400 slice1500.
-// Economy: bounded context evidence; nearMisses; refsMode:"off" expands refs; digest build/test/lint.
+// Release-static medians: search150 runtimeDigest120.
+// Economy: bounded context evidence; nearMisses.
 // sdl.context requires budget.maxTokens; aliases and action/duration budgets are rejected.
 // Use wireFormat:"json" for symbol.search/sliceBuild when ${"$"}N refs need fields.
 // Continuation recipe: symbolSearch -> workflowContinuationGet(handle,path,offset,limit) -> dataMap/dataTemplate.
@@ -68,25 +67,25 @@ type EM = "replacePattern"|"replaceLines"|"insertAt"|"append"|"overwrite"; type 
 type SEO = { kind: "replaceSymbol"|"replaceBody"|"replaceSignature"|"insertBefore"|"insertAfter"; content: string } | { kind: "renameLocal"; name: string; replacement: string }; type SR = { startLine: number; startCol: number; endLine: number; endCol: number }
 
 // === Discovery ===
-/** Search SDL action catalog; also a workflow step (fn "actionSearch") */
+/** Action catalog; workflow fn "actionSearch" */
 function actionSearch(p: { query: string; limit?: number; includeSchemas?: boolean }): { actions: object[] }
 
 // === Query ===
-/** Search symbols (~150; nearMisses) */
+/** ~150; nearMisses */
 function symbolSearch(p: { query: string; kinds?: string[]; limit?: number; semantic?: boolean }): { results: { symbolId: string; name: string; kind: string; file: string; relevance?: number }[] }
-/** Get card (~50; refsMode:"off" expands refs) */
+/** Card ~50; refsMode:"off" expands refs */
 function symbolGetCard(p: { symbolId: string; ifNoneMatch?: string }): { card: object; etag: string } | { notModified: true }
-/** Symbol-scoped edit with snapshot preconditions */
+/** Snapshot-guarded symbol edit */
 function symbolEdit(p: { mode: "preview"; symbolId?: string; symbolRef?: object; operation: SEO; createBackup?: boolean } | { mode: "apply"; planHandle: string; createBackup?: boolean } | { mode: "applyNow"; symbolId: string; expectedAstFingerprint: string; expectedRange: SR; operation: SEO; createBackup?: boolean }): { mode: "preview"|"apply"; planHandle: string; symbolId: string; file: string; writeTarget: "file"|"draft"; validation: object }
-/** Build slice (~1500) */
+/** Slice ~1500 */
 function sliceBuild(p: { taskText?: string; entrySymbols?: string[]; budget?: { maxCards?: number; maxEstimatedTokens?: number }; wireFormat?: "json"|"standard"|"readable"|"compact"|"agent"|"packed"|"auto" }): { sliceHandle: string; slice?: object }
-/** Refresh existing slice (delta only) */
+/** Slice delta */
 function sliceRefresh(p: { sliceHandle: string; knownVersion?: string }): { added: object[]; removed: string[]; changed: object[] }
-/** Fetch spillover page */
+/** Spillover page */
 function sliceSpilloverGet(p: { spilloverHandle: string; page?: number; pageSize?: number }): { cards: object[]; hasMore: boolean }
-/** Get delta between versions */
+/** Version delta */
 function deltaGet(p: { fromVersion?: string; toVersion?: string; includeBlastRadius?: boolean }): { changed: object[]; blastRadius?: object[] }
-/** Analyze PR risk */
+/** PR risk */
 function prRiskAnalyze(p: { fromVersion: string; toVersion: string; riskThreshold?: number }): { riskItems: object[]; summary: string }
 
 // === Code (ladder: card -> skeleton -> hotPath -> needWindow) ===
@@ -114,31 +113,31 @@ function semanticEnrichmentRefresh(p: { dryRun?: boolean; force?: boolean; insta
 /** Report semantic enrichment status */
 function semanticEnrichmentStatus(p: { languages?: string[]; detail?: "compact"|"full"; limit?: number }): { status: object }
 // === Memory ===
-/** Store a development memory */
+/** Store memory */
 function memoryStore(p: { type: "decision"|"bugfix"|"task_context"|"pattern"|"convention"|"architecture"|"performance"|"security"; title: string; content: string; tags?: string[]; symbolIds?: string[]; fileRelPaths?: string[] }): { memoryId: string }
-/** Query memories */
+/** Find memories */
 function memoryQuery(p: { query?: string; types?: string[]; tags?: string[]; limit?: number }): { memories: object[] }
-/** Soft-delete a memory */
+/** Remove memory */
 function memoryRemove(p: { memoryId: string }): { removed: boolean }
-/** Auto-surface relevant memories */
+/** Surface memories */
 function memorySurface(p: { symbolIds?: string[]; fileIds?: string[]; taskText?: string; limit?: number }): { memories: object[] }
 
 // === Context / Agent ===
-/** Record agent feedback */
+/** Record feedback */
 function agentFeedback(p: { versionId: string; sliceHandle: string; usefulSymbols: string[]; missingSymbols?: string[]; rating?: string; comment?: string }): { recorded: boolean }
-/** Query feedback records */
+/** Query feedback */
 function agentFeedbackQuery(p: { limit?: number }): { records: object[] }
-/** Push buffer update */
+/** Push draft */
 function bufferPush(p: { eventType: "open"|"change"|"save"|"close"|"checkpoint"; filePath: string; content: string; version: number; dirty: boolean; timestamp: string }): { accepted: boolean }
-/** Request buffer checkpoint */
+/** Checkpoint draft */
 function bufferCheckpoint(): { checkpointed: boolean }
-/** Get buffer status */
+/** Draft status */
 function bufferStatus(): { status: object }
-/** Execute command (~120 digest); digest build/test/lint. Node ESM. */
+/** runtimeExecute executes repository tooling: build/test/lint/compiler, named scripts, targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source; sdl.file with op="read" for other files. */
 function runtimeExecute(p: { runtime: string; executable?: string; args?: string[]; code?: string; stdin?: string; relativeCwd?: string; timeoutMs?: number; queryTerms?: string[]; contextLines?: number; maxResponseLines?: number; persistOutput?: boolean; outputMode?: "minimal"|"summary"|"intent"|"digest" }): { status: string; exitCode: number; durationMs: number; artifactHandle?: string; stdoutSummary?: string; nextAction?: object }
-/** Query stored runtime output by keywords or exact line range */
+/** Stored runtime excerpts */
 function runtimeQueryOutput(p: { artifactHandle: string; queryTerms?: string[]; cursor?: { stream: "stdout"|"stderr"; afterLine: number }; lineRange?: { stream: "stdout"|"stderr"; startLine: number; endLine: number }; maxExcerpts?: number; contextLines?: number; stream?: "stdout"|"stderr"|"both" }): { excerpts: object[]; matchStatus: "matched"|"noMatchFallback"|"lineRange"; matchCount: number; nextCursor?: object }
-/** Retrieve stored large response by handle; maxTokens estimate-capped, maxBytes exact */
+/** Page a response artifact */
 function responseGet(p: { handle: string; full?: boolean; maxBytes?: number; maxTokens?: number; offsetBytes?: number; jsonPath?: string; raw?: boolean; offset?: number; limit?: number }): { content: unknown; truncated: boolean; metadata: object; pagination?: object }
 
 // === Usage ===
@@ -146,24 +145,18 @@ function responseGet(p: { handle: string; full?: boolean; maxBytes?: number; max
 function usageStats(p: { scope?: "session" | "history" | "lifetime" | "both" | "all"; since?: string; limit?: number; persist?: boolean; detail?: "compact" | "full" }): { formattedSummary: string } | object
 
 // === File ===
-/** Read non-indexed; large untargeted gets hint */
+/** Read non-indexed files */
 function fileRead(p: { filePath: string; maxBytes?: number; offset?: number; limit?: number; search?: string; searchContext?: number; jsonPath?: string; responseMode?: RM; deltaMode?: DM; maxDeltaLines?: number }): { content: string; truncated: boolean; sessionDelta?: object; delta?: object } | ResponseHandle
 function fileWrite(p: { filePath: string; content?: string; replaceLines?: { start: number; end: number; content: string }; replacePattern?: { pattern: string; replacement: string; global?: boolean }; jsonPath?: string; jsonValue?: unknown; insertAt?: { line: number; content: string }; append?: string; createBackup?: boolean; createIfMissing?: boolean }): { filePath: string; mode: string; backupPath?: string; replacementCount?: number }
-/** Cross-file search-and-edit: preview plan then apply; identifier/structural/operations[] targeting */
+/** Preview/apply cross-file edits */
 function searchEdit(p: { mode: "preview"; targeting?: ST; query?: SQ; editMode?: EM; operations?: SEOps[]; filters?: object; maxFiles?: number; createBackup?: boolean; responseMode?: RM } | { mode: "apply"; planHandle: string; createBackup?: boolean }): object | ResponseHandle
 
 // === Data Transforms (workflow-only) ===
-/** Project fields from an object */
 function dataPick(p: { input: unknown; fields: Record<string, string> }): object
-/** Project fields from each element of an array */
 function dataMap(p: { input: unknown[]; fields: Record<string, string> }): object[]
-/** Filter array elements by clauses */
 function dataFilter(p: { input: unknown[]; clauses: Array<{path: string; op: "eq"|"ne"|"gt"|"gte"|"lt"|"lte"|"contains"|"in"|"exists"; value?: unknown}>; mode?: "all"|"any" }): object[]
-/** Sort array elements by a field. Uses 'by' (NOT field/order) */
 function dataSort(p: { input: unknown[]; by: {path: string; direction?: "asc"|"desc"; type?: "string"|"number"|"date"|"boolean"} }): object[]
-/** Render {{mustache}} template strings from object(s) */
 function dataTemplate(p: { input: Record<string, unknown> | unknown[]; template: string; joinWith?: string }): string
-/** Retrieve continuation data; path pages a selected array/string */
 function workflowContinuationGet(p: { handle: string; path?: string; offset?: number; limit?: number }): { data: unknown; totalTokens: number; hasMore: boolean }
 
 // === Compact Wire Format (sliceBuild wireFormat:"compact") ===

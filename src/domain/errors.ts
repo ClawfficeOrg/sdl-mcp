@@ -142,6 +142,16 @@ export class RuntimePolicyDeniedError extends Error {
   }
 }
 
+export const RUNTIME_REPOSITORY_INSPECTION_DISALLOWED =
+  'RUNTIME_REPOSITORY_INSPECTION_DISALLOWED: runtimeExecute executes repository tooling and cannot inspect repository files. Use sdl.context or sdl.retrieve for indexed source; use sdl.file with op="read" for non-indexed files.';
+
+export class RuntimeRepositoryInspectionError extends RuntimePolicyDeniedError {
+  constructor() {
+    super(RUNTIME_REPOSITORY_INSPECTION_DISALLOWED);
+    this.name = "RuntimeRepositoryInspectionError";
+  }
+}
+
 export class RuntimeNotFoundError extends Error {
   readonly code = ErrorCode.RUNTIME_ERROR;
   constructor(message: string) {

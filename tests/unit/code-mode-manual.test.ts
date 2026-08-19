@@ -17,6 +17,7 @@ import {
 import { invalidateConfigCache } from "../../dist/config/loadConfig.js";
 import { estimateTokens } from "../../dist/util/tokenize.js";
 import { ValidationError } from "../../dist/domain/errors.js";
+import { WORKFLOW_DESCRIPTION } from "../../dist/code-mode/descriptions.js";
 
 const originalSdlConfig = process.env.SDL_CONFIG;
 
@@ -69,6 +70,10 @@ describe("code-mode manual generator", () => {
     const manual = generateManual();
     const tokens = estimateTokens(manual);
     assert.ok(tokens < 4000, `Expected tokens < 4000, got ${tokens}`);
+    assert.ok(
+      tokens <= 3850,
+      `Expected at least 150 tokens of manual headroom, got ${tokens}`,
+    );
   });
 
   it("documents static token price tags", () => {
@@ -147,6 +152,34 @@ describe("code-mode manual generator", () => {
     assert.doesNotMatch(bufferPushLine, /content\?: string/);
     assert.match(manual, /dataTemplate[\s\S]*\): string/);
     assert.match(manual, /workflowContinuationGet[\s\S]*path\?: string/);
+  });
+
+  it("reserves runtime execution for repository tooling, not file inspection", () => {
+    const manual = generateManual();
+    const focused = handleManual({
+      actions: ["runtime.execute"],
+      format: "json",
+      includeSchemas: false,
+      includeExamples: false,
+    }) as { actions: Array<{ description: string }> };
+
+    for (const [surface, description] of [
+      ["Code Mode manual", manual],
+      ["Code Mode runtime action", focused.actions[0]?.description ?? ""],
+      ["Code Mode workflow descriptor", WORKFLOW_DESCRIPTION],
+    ] as const) {
+      assert.match(description, /runtime(?:Execute|\.execute) executes repository tooling/i, surface);
+      assert.match(
+        description,
+        /Do not use it to inspect, search, or print repository files/i,
+        surface,
+      );
+      assert.match(description, /sdl\.context[^.]*sdl\.retrieve[^.]*indexed source/i, surface);
+      assert.match(description, /sdl\.file[^.]*op[^.]*read[^.]*other files/i, surface);
+      assert.match(description, /build[^.]*test[^.]*lint[^.]*compiler/i, surface);
+      assert.match(description, /targeted edit scripts/i, surface);
+      assert.doesNotMatch(description, /runtime[^.]*read[^.]*fallback/i, surface);
+    }
   });
 
   it("documents that skeletonOffset preserves the original rendering options", () => {

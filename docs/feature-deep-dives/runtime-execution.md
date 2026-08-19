@@ -6,7 +6,7 @@
 
 ## Run Commands Under Governance
 
-`sdl.runtime.execute` lets agents run repo-scoped commands under SDL-MCP policy instead of falling back to unrestricted shell access.
+`sdl.runtime.execute` executes repository tooling under SDL-MCP policy instead of falling back to unrestricted shell access. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use runtime execution to inspect, search, or print repository files: use `sdl.context` or `sdl.retrieve` for indexed source and `sdl.file` with `op="read"` for other files.
 
 This is the preferred execution path for SDL-enforced agent workflows. In Code Mode, agents should normally call it through `runtimeExecute` inside `sdl.workflow`.
 
@@ -18,18 +18,61 @@ in visible output or persisted logs. The limit is 512 KiB.
 For `runtime: "node"`, inline `code` always runs as ESM regardless of the
 repository's module type: SDL-MCP pipes it to `node --input-type=module`
 (or a temp `.mjs` file when the request also supplies `stdin`). Write ESM
-snippets — `import fs from "node:fs"`, or
-`import { createRequire } from "node:module"` when a CommonJS dependency is
-unavoidable. Bare `require()` fails with
-`require is not defined in ES module scope`. Use args-only execution such as
+snippets. Bare `require()` fails with `require is not defined in ES module
+scope`; use `import { createRequire } from "node:module"` only when a
+CommonJS dependency is unavoidable. Use args-only execution such as
 `args: ["-e", "..."]` only when you specifically need a CommonJS-style
 `require` one-liner.
 
 ```json
 {
   "runtime": "node",
-  "code": "import fs from \"node:fs\";\nconst pkg = JSON.parse(fs.readFileSync(\"package.json\", \"utf-8\"));\nconsole.log(pkg.version);"
+  "code": "process.stdin.pipe(process.stdout);",
+  "stdin": "runtime input\n"
 }
+```
+
+### Repository inspection guard
+
+The runtime guard is cooperative and precision-first: it rejects only
+high-confidence attempts to inspect, search, or print files inside the current
+repository before user code runs. It is not a general content scanner or a
+security boundary, and it does not inspect every possible execution path.
+There is no per-call bypass for a detected repository inspection. Disable
+runtime execution when a security boundary is required.
+
+The deterministic rejection message is:
+
+```text
+RUNTIME_REPOSITORY_INSPECTION_DISALLOWED: runtimeExecute executes repository tooling and cannot inspect repository files. Use sdl.context or sdl.retrieve for indexed source; use sdl.file with op="read" for non-indexed files.
+```
+
+Direct `sdl.runtime.execute` calls return `isError: true` with the typed error
+`{ message, code: "POLICY_ERROR", classification: "policy_denied", retryable: false }`.
+In `sdl.workflow`, the `runtimeExecute` step carries the same typed error with
+`status: "error"`, and the top-level response sets `isError: true`.
+`onError: "stop"` skips later steps, `"continue"` runs independent later
+steps and skips dependency-blocked ones, and `"continueAll"` attempts later
+steps. The guard never exposes the matched command, path, or source text.
+
+When Code Mode is unavailable, read non-indexed files with `sdl.file.read`.
+For indexed source, use the flat ladder: `sdl.repo.overview`,
+`sdl.symbol.search` / `sdl.symbol.getCard`, `sdl.slice.build`, then
+`sdl.code.getSkeleton`, `sdl.code.getHotPath`, or a justified
+`sdl.code.needWindow` as appropriate.
+
+The flowchart summarizes the recovery route. It describes a cooperative guard,
+not a security sandbox.
+
+```mermaid
+flowchart TD
+    Request["Runtime request"] --> Guard["Policy classifier: cooperative guard, not a security sandbox"]
+    Guard --> Inspect{"Repository inspection?"}
+    Inspect -->|no| Allowed["Allowed execution"]
+    Inspect -->|yes| Rejected["Typed POLICY_ERROR rejection"]
+    Rejected --> Mode{"Code Mode available?"}
+    Mode -->|yes| CodeMode["Code Mode recovery"]
+    Mode -->|no| Flat["Flat recovery"]
 ```
 
 ---
@@ -67,12 +110,12 @@ SDL-MCP is Windows-first but supports all major platforms (Windows, Linux, macOS
 
 Compiled runtimes use a compile-then-execute workflow: SDL-MCP compiles the source, runs the resulting binary, then cleans up.
 
-When compilation fails and `persistOutput` is enabled, compiler stdout/stderr are persisted with the same artifact store, so `sdl.runtime.queryOutput` can inspect noisy TS/Rust/C/C++ failures by handle. If a runtime fails before emitting output, SDL-MCP persists a small stderr marker so the failure phase remains queryable by artifact handle.
+When `persistOutput` is enabled, compiler failures use the same artifact store, and runtimes that fail before emitting output persist a small stderr marker. This keeps noisy TS/Rust/C/C++ failures and early failure phases queryable by artifact handle. With `persistOutput: false`, SDL-MCP stores no runtime output artifact and returns no artifact handle.
 
 
 ## Output Modes
 
-Use `outputMode: "digest"` for build, test, lint, and other noisy diagnostics. The digest parses common tool output into a compact `digest` object, keeps `stdoutSummary` short, and always leaves full stdout/stderr behind an `artifactHandle` for `sdl.runtime.queryOutput`.
+Use `outputMode: "digest"` for build, test, lint, and other noisy diagnostics. The digest parses common tool output into a compact `digest` object and keeps `stdoutSummary` short. When `persistOutput` is enabled, it also leaves full stdout/stderr behind an `artifactHandle` for `sdl.runtime.queryOutput`.
 
 Use `outputMode: "minimal"` when exit status and metadata are enough. Use `outputMode: "intent"` when you already know the terms that define success or failure. If the digest omits the detail you need, query the artifact with focused `queryTerms` or a `lineRange`; do not rerun the command just to print full output.
 

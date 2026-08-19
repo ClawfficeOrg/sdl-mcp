@@ -5,7 +5,7 @@
  * → excerpt generation → telemetry → structured response.
  */
 
-import { access, mkdtemp, writeFile, rm } from "fs/promises";
+import { access, mkdtemp, realpath, writeFile, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { z } from "zod";
@@ -21,6 +21,7 @@ import * as ladybugDb from "../../db/ladybug-queries.js";
 import {
   DatabaseError,
   RuntimePolicyDeniedError,
+  RuntimeRepositoryInspectionError,
   ValidationError,
 } from "../../domain/errors.js";
 import { loadConfig } from "../../config/loadConfig.js";
@@ -43,6 +44,10 @@ import {
   resolveAndValidateCwd,
 } from "../../runtime/executor.js";
 import {
+  classifyRuntimeRepositoryInspection,
+  type RuntimeRepositoryInspectionRequest,
+} from "../../runtime/repository-inspection.js";
+import {
   applyRedaction,
   writeArtifact,
 } from "../../runtime/artifacts.js";
@@ -50,7 +55,6 @@ import { buildOutputDigest } from "../../runtime/output-digest.js";
 import type { OutputExcerpt, ConcurrencyTracker } from "../../runtime/types.js";
 import {
   projectRuntimeOutputExcerpts,
-  RUNTIME_INLINE_OUTPUT_BYTES,
 } from "../runtime-output-projection.js";
 import { logRuntimeExecution, logPolicyDecision } from "../telemetry.js";
 import { attachRawContext } from "../token-usage.js";
@@ -606,17 +610,17 @@ export async function handleRuntimeExecute(
       : augmented;
   };
 
-  // 1. Load config + validate repo
+  // 1. Validate repo + load config
   const repoStartedAt = timer.start();
-  const appConfig = loadConfig();
-  const runtimeConfig = RuntimeConfigSchema.parse(appConfig.runtime ?? {});
-
   const conn = await getLadybugConn();
   const repo = await ladybugDb.getRepo(conn, request.repoId);
   if (!repo) {
     throw new DatabaseError(`Repository ${request.repoId} not found`);
   }
   timer.record("runtime.loadRepo", repoStartedAt);
+
+  const appConfig = loadConfig();
+  const runtimeConfig = RuntimeConfigSchema.parse(appConfig.runtime ?? {});
 
   // 2. Resolve runtime descriptor
   const runtimeResolveStartedAt = timer.start();
@@ -629,11 +633,30 @@ export async function handleRuntimeExecute(
   }
   timer.record("runtime.resolveRuntime", runtimeResolveStartedAt);
 
+  // Repository/cwd/runtime policy errors intentionally take precedence over
+  // repository-inspection classification at the pre-execution boundary.
+  let canonicalRepoRoot: string;
+  let cwd: string;
+  const cwdStartedAt = timer.start();
+  try {
+    canonicalRepoRoot = await realpath(repo.rootPath);
+    cwd = await resolveAndValidateCwd(
+      canonicalRepoRoot,
+      request.relativeCwd,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new RuntimePolicyDeniedError(
+        `Working directory does not exist: ${request.relativeCwd || "(repo root)"}`,
+      );
+    }
+    throw err;
+  }
+  timer.record("runtime.resolveCwd", cwdStartedAt);
+
   // 3. Evaluate policy
   const policyStartedAt = timer.start();
-  const tracker = getOrCreateConcurrencyTracker(
-    runtimeConfig.maxConcurrentJobs,
-  );
   const timeoutMs = request.timeoutMs ?? runtimeConfig.maxDurationMs;
   const executable =
     request.executable ??
@@ -651,7 +674,43 @@ export async function handleRuntimeExecute(
     envKeys: [], // No custom env in v1
   };
 
-  const runtimeDecision = decideRuntime(policyContext, runtimeConfig, tracker);
+  const tracker = getOrCreateConcurrencyTracker(
+    runtimeConfig.maxConcurrentJobs,
+  );
+  let runtimeDecision = decideRuntime(policyContext, runtimeConfig);
+  timer.record("runtime.policy", policyStartedAt);
+
+  if (runtimeDecision.kind === "approve") {
+    const inspectionDecision = classifyRuntimeRepositoryInspection({
+      repoRoot: canonicalRepoRoot,
+      registeredRepoRoot: repo.rootPath,
+      cwd,
+      runtime: request.runtime as RuntimeRepositoryInspectionRequest["runtime"],
+      executable,
+      args: request.args,
+      code: request.code,
+      stdin: request.stdin,
+      platform: process.platform,
+    });
+    if (inspectionDecision.decision === "deny") {
+      logger.warn("Runtime repository inspection denied", {
+        repoId: request.repoId,
+        runtime: request.runtime,
+        category: inspectionDecision.category,
+        ruleId: inspectionDecision.ruleId,
+        commandFingerprint: summarizeCommand(
+          executable,
+          request.args,
+          request.code !== undefined,
+          request.stdin !== undefined,
+        ),
+      });
+      throw new RuntimeRepositoryInspectionError();
+    }
+
+    runtimeDecision = decideRuntime(policyContext, runtimeConfig, tracker);
+  }
+
   const policyDecision = {
     decision: runtimeDecision.kind,
     evidenceUsed: runtimeDecision.evidenceUsed,
@@ -661,9 +720,7 @@ export async function handleRuntimeExecute(
         ? runtimeDecision.deniedReasons
         : undefined,
   };
-  timer.record("runtime.policy", policyStartedAt);
 
-  // Log policy decision
   logPolicyDecision({
     requestType: "runtimeExecute",
     repoId: request.repoId,
@@ -726,27 +783,11 @@ export async function handleRuntimeExecute(
   let tempCodeDir: string | undefined;
 
   try {
-    // 5. Resolve CWD
-    let cwd: string;
-    const cwdStartedAt = timer.start();
-    try {
-      cwd = await resolveAndValidateCwd(repo.rootPath, request.relativeCwd);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") {
-        throw new RuntimePolicyDeniedError(
-          `Working directory does not exist: ${request.relativeCwd || "(repo root)"}`,
-        );
-      }
-      throw err;
-    }
-    timer.record("runtime.resolveCwd", cwdStartedAt);
-
-    // 6. Handle code mode.
+    // 5. Handle code mode.
     let codePath: string | undefined;
     let executionStdin = request.stdin;
     let nodeCodeFromStdin = false;
-    if (request.code) {
+    if (request.code !== undefined) {
       if (
         request.runtime === "node" &&
         request.stdin === undefined &&
@@ -786,21 +827,9 @@ export async function handleRuntimeExecute(
       result: Awaited<ReturnType<typeof execute>>,
       phase: "compile" | "execute",
     ): Promise<string | null> => {
-      // Digest mode and complete large captures force persistence. Incomplete
-      // captures stay explicitly unrecoverable because discarded bytes are gone.
-      const captureTruncated =
-        result.stdoutTruncated || result.stderrTruncated;
-      const requiresRecovery =
-        !captureTruncated &&
-        result.totalStdoutBytes + result.totalStderrBytes >
-          RUNTIME_INLINE_OUTPUT_BYTES;
-      if (
-        !request.persistOutput &&
-        request.outputMode !== "digest" &&
-        !requiresRecovery
-      ) {
-        return null;
-      }
+      // persistOutput is the sole storage authorization. Incomplete captures
+      // stay explicitly unrecoverable because discarded bytes are gone.
+      if (!request.persistOutput) return null;
 
       try {
         const artifactStartedAt = timer.start();

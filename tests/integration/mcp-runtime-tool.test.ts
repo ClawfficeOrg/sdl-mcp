@@ -2,7 +2,13 @@ import { beforeEach, afterEach, describe, it } from "node:test";
 import assert from "node:assert";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  rmSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import {
   initLadybugDb,
   closeLadybugDb,
@@ -66,6 +72,7 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
       "utf-8",
     );
     process.env.SDL_CONFIG = configPath;
+    invalidateConfigCache();
   }
 
   beforeEach(async () => {
@@ -436,6 +443,744 @@ describe("sdl.runtime.execute - MCP Tool Handler", () => {
         }),
       (err: Error) => {
         assert.ok(err.message.includes("not found"));
+        return true;
+      },
+    );
+  });
+
+  describe("repository inspection guard", () => {
+    const repositorySource = "repository-source.ts";
+
+    beforeEach(() => {
+      writeFileSync(
+        join(testDir, repositorySource),
+        "export const repositorySecret = 'SOURCE_SNIPPET_MUST_NOT_LEAK';\n",
+        "utf-8",
+      );
+    });
+
+    it("rejects inline repository reads before any user code executes", async () => {
+      const sentinel = join(testDir, "blocked-inline-sentinel.txt");
+      const {
+        ErrorCode,
+        RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+        RuntimeRepositoryInspectionError,
+      } = await import("../../dist/domain/errors.js");
+      const { errorToMcpResponse } =
+        await import("../../dist/mcp/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const code = [
+        "import { readFileSync, writeFileSync } from 'node:fs';",
+        `readFileSync(${JSON.stringify(repositorySource)}, 'utf-8');`,
+        `writeFileSync(${JSON.stringify(sentinel)}, 'created', 'utf-8');`,
+      ].join("\n");
+
+      let thrown: unknown;
+      try {
+        await handleRuntimeExecute({
+          repoId,
+          runtime: "node",
+          code,
+          persistOutput: false,
+          outputMode: "summary",
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      assert.ok(thrown instanceof RuntimeRepositoryInspectionError);
+      assert.ok(thrown instanceof Error);
+      assert.equal(thrown.name, "RuntimeRepositoryInspectionError");
+      assert.equal(thrown.code, ErrorCode.POLICY_ERROR);
+      assert.equal(thrown.message, RUNTIME_REPOSITORY_INSPECTION_DISALLOWED);
+      assert.equal(existsSync(sentinel), false);
+
+      const mapped = errorToMcpResponse(thrown);
+      assert.deepEqual(mapped, {
+        error: {
+          message: RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+          code: "POLICY_ERROR",
+          classification: "policy_denied",
+          retryable: false,
+        },
+      });
+      const publicJson = JSON.stringify(mapped);
+      for (const privateValue of [
+        "SOURCE_SNIPPET_MUST_NOT_LEAK",
+        repositorySource,
+        "inlineStaticRead",
+        "ruleId",
+        "durationMs",
+        "timestamp",
+        testDir,
+      ]) {
+        assert.equal(publicJson.includes(privateValue), false, privateValue);
+      }
+    });
+
+    it("rejects repository reads supplied through direct runtime arguments", async () => {
+      const { RuntimeRepositoryInspectionError } =
+        await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+
+      await assert.rejects(
+        () =>
+          handleRuntimeExecute({
+            repoId,
+            runtime: "node",
+            args: [
+              "-e",
+              `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(repositorySource)}, 'utf-8')`,
+            ],
+            persistOutput: false,
+          }),
+        RuntimeRepositoryInspectionError,
+      );
+    });
+
+    it("keeps empty code in code mode instead of executing source arguments", async () => {
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const cases = [
+        {
+          runtime: "node" as const,
+          flag: "-e",
+          source: (sentinel: string) =>
+            `const fs=require('node:fs'); fs.readFileSync(${JSON.stringify(repositorySource)}, 'utf8'); fs.writeFileSync(${JSON.stringify(sentinel)}, 'ran')`,
+        },
+        {
+          runtime: "python" as const,
+          flag: "-c",
+          source: (sentinel: string) =>
+            `from pathlib import Path; Path(${JSON.stringify(repositorySource)}).read_text(); Path(${JSON.stringify(sentinel)}).write_text('ran')`,
+        },
+      ];
+
+      for (const testCase of cases) {
+        const sentinel = join(
+          testDir,
+          `empty-code-${testCase.runtime}-must-not-run.txt`,
+        );
+        const result = await handleRuntimeExecute({
+          repoId,
+          runtime: testCase.runtime,
+          code: "",
+          args: [testCase.flag, testCase.source(sentinel)],
+          persistOutput: false,
+          outputMode: "minimal",
+        });
+
+        assert.equal(result.status, "success", testCase.runtime);
+        assert.equal(existsSync(sentinel), false, testCase.runtime);
+      }
+    });
+
+    it("classifies relative reads from the canonical execution cwd", async () => {
+      const targetCwd = join(testDir, "nested", "deep");
+      const aliasCwd = join(testDir, "alias");
+      const sentinel = join(testDir, "blocked-canonical-cwd-sentinel.txt");
+      mkdirSync(targetCwd, { recursive: true });
+      symlinkSync(
+        targetCwd,
+        aliasCwd,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const { RuntimeRepositoryInspectionError } =
+        await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const code = [
+        "import { readFileSync, writeFileSync } from 'node:fs';",
+        `readFileSync(${JSON.stringify(`../../${repositorySource}`)}, 'utf-8');`,
+        `writeFileSync(${JSON.stringify(sentinel)}, 'created', 'utf-8');`,
+      ].join("\n");
+
+      await assert.rejects(
+        () =>
+          handleRuntimeExecute({
+            repoId,
+            runtime: "node",
+            relativeCwd: "alias",
+            code,
+            persistOutput: false,
+          }),
+        RuntimeRepositoryInspectionError,
+      );
+      assert.equal(existsSync(sentinel), false);
+    });
+
+    it("classifies absolute reads through the registered root alias", async () => {
+      const aliasRoot = `${testDir}-registered-root-alias`;
+      const sentinel = join(testDir, "blocked-root-alias-sentinel.txt");
+      if (existsSync(aliasRoot)) rmSync(aliasRoot, { recursive: true, force: true });
+      symlinkSync(
+        testDir,
+        aliasRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const conn = await getLadybugConn();
+      const now = new Date().toISOString();
+      await ladybugDb.upsertRepo(conn, {
+        repoId,
+        rootPath: aliasRoot,
+        configJson: JSON.stringify({
+          repoId,
+          rootPath: aliasRoot,
+          ignore: [],
+          languages: ["ts"],
+          maxFileBytes: 2_000_000,
+          includeNodeModulesTypes: false,
+          packageJsonPath: null,
+          tsconfigPath: null,
+          workspaceGlobs: null,
+        }),
+        createdAt: now,
+      });
+      const { RuntimeRepositoryInspectionError } =
+        await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const sourcePath = join(aliasRoot, repositorySource);
+      const code = [
+        `require('node:fs').readFileSync(${JSON.stringify(sourcePath)}, 'utf-8');`,
+        `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'created', 'utf-8');`,
+      ].join("\n");
+
+      try {
+        await assert.rejects(
+          () =>
+            handleRuntimeExecute({
+              repoId,
+              runtime: "node",
+              args: ["-e", code],
+              persistOutput: false,
+            }),
+          RuntimeRepositoryInspectionError,
+        );
+        assert.equal(existsSync(sentinel), false);
+      } finally {
+        if (existsSync(aliasRoot)) {
+          rmSync(aliasRoot, { recursive: true, force: true });
+        }
+      }
+    });
+
+    it("rejects attached Node source before either payload executes", async () => {
+      const {
+        RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+        RuntimeRepositoryInspectionError,
+      } = await import("../../dist/domain/errors.js");
+      const { errorToMcpResponse } =
+        await import("../../dist/mcp/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const cases = [
+        {
+          name: "long eval",
+          prefix: "--eval=",
+          sentinel: join(testDir, "blocked-attached-long-eval.txt"),
+        },
+        {
+          name: "short eval",
+          prefix: "-e",
+          sentinel: join(testDir, "blocked-attached-short-eval.txt"),
+        },
+      ];
+
+      for (const testCase of cases) {
+        const source = [
+          "import { readFileSync, writeFileSync } from 'node:fs';",
+          `readFileSync(${JSON.stringify(repositorySource)}, 'utf-8');`,
+          `writeFileSync(${JSON.stringify(testCase.sentinel)}, 'created', 'utf-8');`,
+        ].join("\n");
+        let thrown: unknown;
+        try {
+          await handleRuntimeExecute({
+            repoId,
+            runtime: "node",
+            args: [`${testCase.prefix}${source}`],
+            persistOutput: false,
+          });
+        } catch (error) {
+          thrown = error;
+        }
+
+        assert.ok(
+          thrown instanceof RuntimeRepositoryInspectionError,
+          testCase.name,
+        );
+        assert.equal(
+          thrown.message,
+          RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+          testCase.name,
+        );
+        assert.deepEqual(errorToMcpResponse(thrown), {
+          error: {
+            message: RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+            code: "POLICY_ERROR",
+            classification: "policy_denied",
+            retryable: false,
+          },
+        });
+        assert.equal(existsSync(testCase.sentinel), false, testCase.name);
+      }
+    });
+
+    it("classifies repository reads before applying live concurrency capacity", async () => {
+      writeConfig({ maxConcurrentJobs: 1 });
+      const ready = join(testDir, "runtime-holder-ready.txt");
+      const release = join(testDir, "runtime-holder-release.txt");
+      const { RuntimeRepositoryInspectionError } =
+        await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const baseline = await handleRuntimeExecute({
+        repoId,
+        runtime: "node",
+        code: "console.log('baseline-probe')",
+        persistOutput: false,
+      });
+      assert.equal(baseline.status, "success", baseline.stderrSummary);
+      const holder = handleRuntimeExecute({
+        repoId,
+        runtime: "node",
+        code: [
+          "import { existsSync, writeFileSync } from 'node:fs';",
+          `writeFileSync(${JSON.stringify(ready)}, 'ready', 'utf-8');`,
+          `while (!existsSync(${JSON.stringify(release)})) await new Promise((resolve) => setTimeout(resolve, 10));`,
+        ].join("\n"),
+        persistOutput: false,
+      });
+
+      try {
+        const deadline = Date.now() + 5_000;
+        while (!existsSync(ready) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        assert.equal(existsSync(ready), true, "holder did not acquire the runtime slot");
+
+        await assert.rejects(
+          () =>
+            handleRuntimeExecute({
+              repoId,
+              runtime: "node",
+              code: `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(repositorySource)}, 'utf-8')`,
+              persistOutput: false,
+            }),
+          RuntimeRepositoryInspectionError,
+        );
+
+        const capacityDenied = await handleRuntimeExecute({
+          repoId,
+          runtime: "node",
+          code: "console.log('capacity-probe')",
+          persistOutput: false,
+        });
+        assert.equal(capacityDenied.status, "denied");
+        assert.equal(
+          capacityDenied.stderrSummary,
+          "",
+        );
+        assert.deepEqual(capacityDenied.policyDecision?.deniedReasons, [
+          "Concurrency limit reached (1/1 active jobs)",
+        ]);
+        assert.notEqual(
+          capacityDenied.policyDecision?.auditHash,
+          baseline.policyDecision?.auditHash,
+          "capacity denial must use tracker-derived policy evidence",
+        );
+      } finally {
+        writeFileSync(release, "release", "utf-8");
+        const holderResult = await holder;
+        assert.equal(holderResult.status, "success", holderResult.stderrSummary);
+      }
+    });
+
+    it("preserves repository, cwd, runtime, and executable denial precedence", async () => {
+      const {
+        DatabaseError,
+        RuntimePolicyDeniedError,
+        RuntimeRepositoryInspectionError,
+        ValidationError,
+      } = await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const inspectionCode =
+        `import fs from 'node:fs'; fs.readFileSync(${JSON.stringify(repositorySource)}, 'utf-8')`;
+
+      await assert.rejects(
+        () =>
+          handleRuntimeExecute({
+            repoId: "missing-repository",
+            runtime: "node",
+            code: inspectionCode,
+          }),
+        (error: Error) => {
+          assert.ok(error instanceof DatabaseError);
+          assert.equal(error instanceof RuntimeRepositoryInspectionError, false);
+          return true;
+        },
+      );
+
+      await assert.rejects(
+        () =>
+          handleRuntimeExecute({
+            repoId,
+            runtime: "node",
+            relativeCwd: "missing-working-directory",
+            code: inspectionCode,
+          }),
+        (error: Error) => {
+          assert.ok(error instanceof RuntimePolicyDeniedError);
+          assert.equal(error instanceof RuntimeRepositoryInspectionError, false);
+          assert.match(error.message, /Working directory does not exist/);
+          return true;
+        },
+      );
+
+      await assert.rejects(
+        () =>
+          handleRuntimeExecute({
+            repoId,
+            runtime: "not-a-runtime",
+            code: inspectionCode,
+          }),
+        (error: Error) => {
+          assert.ok(error instanceof ValidationError);
+          assert.equal(error instanceof RuntimeRepositoryInspectionError, false);
+          return true;
+        },
+      );
+
+      const executableDenied = await handleRuntimeExecute({
+        repoId,
+        runtime: "node",
+        executable: "powershell",
+        code: inspectionCode,
+        persistOutput: false,
+      });
+      assert.equal(executableDenied.status, "denied");
+      assert.ok(
+        executableDenied.policyDecision?.deniedReasons?.some((reason) =>
+          reason.includes("not compatible with runtime"),
+        ),
+      );
+    });
+
+    it("blocks every static alias and namespace read before user code executes", async () => {
+      const {
+        RUNTIME_REPOSITORY_INSPECTION_DISALLOWED,
+        RuntimeRepositoryInspectionError,
+      } = await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      writeFileSync(join(testDir, "package.json"), "{}\n", "utf-8");
+
+      const cases: Array<{
+        name: string;
+        sentinel: string;
+        request: Record<string, unknown>;
+      }> = [
+        {
+          name: "node:fs promises alias",
+          sentinel: "blocked-fs-promises-alias.txt",
+          request: {
+            runtime: "node",
+            code: [
+              `import { promises as fs, writeFileSync } from "node:fs";`,
+              `await fs.readFile("package.json");`,
+              `writeFileSync("blocked-fs-promises-alias.txt", "ran");`,
+            ].join("\n"),
+          },
+        },
+        {
+          name: "node:fs/promises direct import",
+          sentinel: "blocked-fs-promises-direct.txt",
+          request: {
+            runtime: "node",
+            code: [
+              `import { readFile } from "node:fs/promises";`,
+              `import { writeFileSync } from "node:fs";`,
+              `await readFile("package.json");`,
+              `writeFileSync("blocked-fs-promises-direct.txt", "ran");`,
+            ].join("\n"),
+          },
+        },
+        {
+          name: "ESM createRequire",
+          sentinel: "blocked-create-require.txt",
+          request: {
+            runtime: "node",
+            code: [
+              `import { createRequire } from "node:module";`,
+              `const require = createRequire(import.meta.url);`,
+              `const fs = require("node:fs");`,
+              `fs.readFileSync("package.json", "utf8");`,
+              `fs.writeFileSync("blocked-create-require.txt", "ran");`,
+            ].join("\n"),
+          },
+        },
+        {
+          name: "pathlib namespace",
+          sentinel: "blocked-pathlib-namespace.txt",
+          request: {
+            runtime: "python",
+            code: [
+              "import pathlib",
+              'pathlib.Path("package.json").read_text()',
+              'pathlib.Path("blocked-pathlib-namespace.txt").write_text("ran")',
+            ].join("\n"),
+          },
+        },
+        {
+          name: "pathlib alias",
+          sentinel: "blocked-pathlib-alias.txt",
+          request: {
+            runtime: "python",
+            code: [
+              "import pathlib as pl",
+              'pl.Path("package.json").read_bytes()',
+              'pl.Path("blocked-pathlib-alias.txt").write_text("ran")',
+            ].join("\n"),
+          },
+        },
+        {
+          name: "Path constructor alias",
+          sentinel: "blocked-path-constructor-alias.txt",
+          request: {
+            runtime: "python",
+            code: [
+              "from pathlib import Path as P",
+              'P("package.json").read_text()',
+              'P("blocked-path-constructor-alias.txt").write_text("ran")',
+            ].join("\n"),
+          },
+        },
+      ];
+
+      for (const testCase of cases) {
+        let thrown: unknown;
+        try {
+          await handleRuntimeExecute({
+            repoId,
+            persistOutput: false,
+            outputMode: "minimal",
+            ...testCase.request,
+          });
+        } catch (error) {
+          thrown = error;
+        }
+        assert.ok(
+          thrown instanceof RuntimeRepositoryInspectionError,
+          testCase.name,
+        );
+        assert.equal(thrown.message, RUNTIME_REPOSITORY_INSPECTION_DISALLOWED);
+        assert.equal(existsSync(join(testDir, testCase.sentinel)), false);
+      }
+    });
+
+    it(
+      "blocks static Windows wrappers, GNU readers, and device aliases before execution",
+      { skip: process.platform !== "win32" },
+      async () => {
+        const { RuntimeRepositoryInspectionError } =
+          await import("../../dist/domain/errors.js");
+        const { handleRuntimeExecute } =
+          await import("../../dist/mcp/tools/runtime.js");
+        writeFileSync(join(testDir, "package.json"), "{}\n", "utf-8");
+        const devicePackage = `\\\\?\\${join(testDir, "package.json")}`;
+        const cases: Array<{
+          name: string;
+          runtime: "powershell" | "shell";
+          code: string;
+        }> = [
+          {
+            name: "powershell -NoProfile",
+            runtime: "powershell",
+            code: 'powershell -NoProfile -Command "Get-Content -LiteralPath package.json"',
+          },
+          {
+            name: "pwsh -NoProfile",
+            runtime: "powershell",
+            code: 'pwsh -NoProfile -Command "Get-Content -LiteralPath package.json"',
+          },
+          {
+            name: "cmd switches and outer quotes",
+            runtime: "shell",
+            code: 'cmd.exe /d /s /c "type package.json"',
+          },
+          ...["grep", "sed", "awk"].map((command) => ({
+            name: `cmd GNU ${command}`,
+            runtime: "shell" as const,
+            code: `cmd.exe /d /s /c "${command} needle package.json"`,
+          })),
+          {
+            name: "Windows device path",
+            runtime: "shell",
+            code: `cmd.exe /d /s /c "type ${devicePackage}"`,
+          },
+        ];
+
+        for (const testCase of cases) {
+          await assert.rejects(
+            () =>
+              handleRuntimeExecute({
+                repoId,
+                runtime: testCase.runtime,
+                code: testCase.code,
+                persistOutput: false,
+                outputMode: "minimal",
+              }),
+            RuntimeRepositoryInspectionError,
+            testCase.name,
+          );
+        }
+      },
+    );
+
+    it("blocks an outside-root filesystem alias that resolves into the repository", async () => {
+      const aliasRoot = `${testDir}-outside-target-alias`;
+      const sentinel = join(testDir, "blocked-outside-target-alias.txt");
+      if (existsSync(aliasRoot)) rmSync(aliasRoot, { recursive: true, force: true });
+      symlinkSync(
+        testDir,
+        aliasRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const { RuntimeRepositoryInspectionError } =
+        await import("../../dist/domain/errors.js");
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const sourcePath = join(aliasRoot, repositorySource);
+      const code = [
+        `import { readFileSync, writeFileSync } from "node:fs";`,
+        `readFileSync(${JSON.stringify(sourcePath)}, "utf8");`,
+        `writeFileSync(${JSON.stringify(sentinel)}, "ran");`,
+      ].join("\n");
+
+      try {
+        await assert.rejects(
+          () =>
+            handleRuntimeExecute({
+              repoId,
+              runtime: "node",
+              code,
+              persistOutput: false,
+              outputMode: "minimal",
+            }),
+          RuntimeRepositoryInspectionError,
+        );
+        assert.equal(existsSync(sentinel), false);
+      } finally {
+        if (existsSync(aliasRoot)) rmSync(aliasRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("continues to execute named scripts, executable scripts, normal commands, and outside-root reads", async () => {
+      const { handleRuntimeExecute } =
+        await import("../../dist/mcp/tools/runtime.js");
+      const executableScript = join(testDir, "allowed-script.mjs");
+      const outsideSource = join(dirname(testDir), "outside-runtime-source.txt");
+      writeFileSync(executableScript, "console.log('executable-script-ok');\n", "utf-8");
+      writeFileSync(outsideSource, "outside-read-ok\n", "utf-8");
+      writeFileSync(
+        join(testDir, "package.json"),
+        JSON.stringify({
+          scripts: {
+            "guard:named": "node -e \"console.log('named-script-ok')\"",
+          },
+        }),
+        "utf-8",
+      );
+
+      try {
+        const normal = await handleRuntimeExecute({
+          repoId,
+          runtime: "node",
+          args: ["-e", "console.log('normal-command-ok')"],
+          outputMode: "summary",
+          persistOutput: false,
+        });
+        const script = await handleRuntimeExecute({
+          repoId,
+          runtime: "node",
+          args: [executableScript],
+          outputMode: "summary",
+          persistOutput: false,
+        });
+        const named = await handleRuntimeExecute({
+          repoId,
+          runtime: "shell",
+          code: "npm run guard:named",
+          outputMode: "summary",
+          persistOutput: false,
+        });
+        const outside = await handleRuntimeExecute({
+          repoId,
+          runtime: "node",
+          code: [
+            "import { readFileSync } from 'node:fs';",
+            `console.log(readFileSync(${JSON.stringify(outsideSource)}, 'utf-8').trim());`,
+          ].join("\n"),
+          outputMode: "summary",
+          persistOutput: false,
+        });
+
+        assert.equal(normal.status, "success", normal.stderrSummary);
+        assert.match(normal.stdoutSummary, /normal-command-ok/);
+        assert.equal(script.status, "success", script.stderrSummary);
+        assert.match(script.stdoutSummary, /executable-script-ok/);
+        assert.equal(named.status, "success", named.stderrSummary);
+        assert.match(named.stdoutSummary, /named-script-ok/);
+        assert.equal(outside.status, "success", outside.stderrSummary);
+        assert.match(outside.stdoutSummary, /outside-read-ok/);
+      } finally {
+        rmSync(outsideSource, { force: true });
+      }
+    });
+  });
+
+  it("never persists complete large output when persistOutput is false", async () => {
+    const artifactBaseDir = join(testDir, "artifacts-disabled");
+    writeConfig({
+      artifactBaseDir,
+      maxStdoutBytes: 1_048_576,
+      maxStderrBytes: 262_144,
+    });
+    const { handleRuntimeExecute } =
+      await import("../../dist/mcp/tools/runtime.js");
+
+    const result = await handleRuntimeExecute({
+      repoId,
+      runtime: "node",
+      code: `process.stdout.write("x".repeat(100_000));`,
+      persistOutput: false,
+      outputMode: "minimal",
+    });
+
+    assert.equal(result.status, "success");
+    assert.equal(result.artifactHandle, null);
+    assert.equal(existsSync(artifactBaseDir), false);
+  });
+
+  it("reports a missing repository before parsing invalid runtime configuration", async () => {
+    writeConfig({ maxConcurrentJobs: 0 });
+    const { DatabaseError } = await import("../../dist/domain/errors.js");
+    const { handleRuntimeExecute } =
+      await import("../../dist/mcp/tools/runtime.js");
+
+    await assert.rejects(
+      () =>
+        handleRuntimeExecute({
+          repoId: "missing-repository",
+          runtime: "node",
+          code: "console.log('must-not-run')",
+        }),
+      (error: Error) => {
+        assert.ok(error instanceof DatabaseError);
+        assert.equal(error.message, "Repository missing-repository not found");
         return true;
       },
     );

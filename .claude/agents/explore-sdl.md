@@ -52,7 +52,7 @@ Follow the same workflow as the SDL-MCP Agent Workflow skill when that skill is 
    - If output details are needed, call `runtimeQueryOutput` with the `artifactHandle` and targeted `queryTerms`.
    - Use `outputMode: "intent"` when the command is already tied to known terms such as `FAIL`, `Error`, or a test name.
    - Always set `timeoutMs` to prevent hangs.
-   - Never use runtime execution to print indexed source.
+   - runtimeExecute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files.
 
 10. **Follow SDL fallback guidance** — when a request is denied or ambiguous, use the `nextBestAction`, `fallbackTools`, `fallbackRationale`, and ranked candidates from the response instead of retrying native tools.
 

@@ -34,7 +34,7 @@ The Session 5 token-economy review identified three remaining waste channels: st
 
 ### Runtime Digest
 
-Use `outputMode: "digest"` for build, test, lint, and other noisy diagnostics. The response includes a compact `digest` object, short summaries, and an `artifactHandle` for full stdout/stderr recovery through `runtime.queryOutput`.
+Use `outputMode: "digest"` for build, test, lint, and other noisy diagnostics. The response includes a compact `digest` object and short summaries. Set `persistOutput: true` when full stdout/stderr must remain available through an `artifactHandle` and `runtime.queryOutput`.
 
 ```json
 {

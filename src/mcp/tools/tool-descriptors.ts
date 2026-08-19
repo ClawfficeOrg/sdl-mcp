@@ -326,8 +326,10 @@ export function buildFlatToolDescriptors(
     {
       action: "runtime.execute",
       description:
-        "Execute a command in a repo-scoped subprocess with structured output, " +
-        "artifact persistence, and deterministic excerpts. Enabled by default; set runtime.enabled = false to disable.",
+        "runtime.execute executes repository tooling in a repo-scoped subprocess with structured output, " +
+        "artifact persistence, and deterministic excerpts. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. " +
+        'Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files. ' +
+        "Enabled by default; set runtime.enabled = false to disable.",
       outputSchema: RuntimeExecuteResponseSchema,
       handler: handleRuntimeExecute,
     },

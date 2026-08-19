@@ -8,6 +8,8 @@ At the start of every new session in this repository, load and follow the `sdl-m
 
 When the SDL-MCP PID file is present, treat native repo-local shell and file tools as fallback-only. Use SDL runtime for shell actions with `stdin` for multiline input, the Iris ladder for indexed reads, `symbol.edit` for one-symbol indexed writes, `searchEditPreview` with `targeting:"identifier"`/`"structural"` or `operations[]` for cross-file indexed edits, and `file.read`/`file.write` for non-indexed files. Native access is reserved for `.codex/**`, `.claude/**`, and non-repo agent skills, memories, and session internals.
 
+runtimeExecute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files.
+
 ## Token Economy
 
 Prefer `runtimeExecute` `outputMode: "digest"` for build/test/lint; query artifacts only when needed.

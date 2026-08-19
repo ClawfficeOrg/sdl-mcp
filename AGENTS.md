@@ -262,3 +262,5 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
   agent may request approval or initiate it.
 
 ```
+
+> Optimized tool-use workflow for agents: see [SDL.md](./SDL.md).

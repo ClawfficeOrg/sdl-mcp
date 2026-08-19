@@ -1008,7 +1008,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
     "Request buffer checkpoint. Zero-file success responses include a message explaining why no clean buffers were checkpointed.",
   "buffer.status": "Get buffer status",
   "runtime.execute":
-    'Execute runtime command. Shell runtime requires code; direct args-only shell execution is rejected. Use outputMode:"digest" for build/test/lint failures, then runtime.queryOutput for full logs. Node code runs as ESM (use import/createRequire, not require()). Use stdin for multiline scripts/input; maxResponseLines accepts 5-1000 lines (default 100).',
+    'runtime.execute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files. Shell runtime requires code; direct args-only shell execution is rejected. Use outputMode:"digest" for tooling failures, then runtime.queryOutput for full logs. Node code runs as ESM (use import/createRequire, not require()). Use stdin for multiline scripts/input; maxResponseLines accepts 5-1000 lines (default 100).',
   "runtime.queryOutput": "Query stored command output by keywords",
   "response.get": "Retrieve a stored large tool response by handle",
   "memory.store": "Store a development memory",
@@ -1041,7 +1041,7 @@ const META_TOOL_DESCRIPTIONS: Record<string, string> = {
   retrieve:
     "Top-level compact retrieval for one-hop symbol/card/slice/skeleton/hot-path/window reads. Use workflow for pipelines, transforms, runtime execution, mutations, or $N result piping.",
   workflow:
-    "Preferred first tool for execute, runtime, transform, batch, or pipeline prompts. Runs multi-step workflows with $N result piping, runtime execution, data transforms, and batch mutations.",
+    'Preferred first tool for execute, runtime, transform, batch, or pipeline prompts. Runs multi-step workflows with $N result piping, data transforms, and batch mutations. runtimeExecute executes repository tooling. Permitted uses include build, test, lint, compiler, named scripts, and targeted edit scripts. Do not use it to inspect, search, or print repository files. Use sdl.context or sdl.retrieve for indexed source and sdl.file with op="read" for other files.',
 };
 
 const TRANSFORM_DESCRIPTIONS: Record<string, string> = {

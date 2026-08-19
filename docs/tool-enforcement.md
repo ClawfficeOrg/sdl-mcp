@@ -43,6 +43,19 @@ SDL-MCP's token savings depend on the model actually using SDL tools:
 5. `sdl.workflow` for batched escalation, runtime execution, data transforms, and batch operations
 6. `runtimeExecute` inside `sdl.workflow` for repo-local commands
 
+`runtimeExecute` executes repository tooling such as build, test, lint,
+compiler, named-script, and targeted-edit work. Do not use it to inspect,
+search, or print repository files: use `sdl.context` or `sdl.retrieve` for
+indexed source, and use `sdl.file` with `op="read"` for other files. The
+cooperative high-confidence, precision-first guard has no per-call bypass, but
+it is not a security boundary. Disable runtime execution when one is required.
+
+When Code Mode is unavailable, read non-indexed files with `sdl.file.read`.
+For indexed source, use the flat ladder: `sdl.repo.overview`,
+`sdl.symbol.search` / `sdl.symbol.getCard`, `sdl.slice.build`, then
+`sdl.code.getSkeleton`, `sdl.code.getHotPath`, or a justified
+`sdl.code.needWindow` as appropriate.
+
 The generated enforcement files also teach:
 
 - use `symbolRef` / `symbolRefs` when the agent knows a symbol name but not the canonical `symbolId`

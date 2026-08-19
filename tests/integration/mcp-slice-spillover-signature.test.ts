@@ -307,6 +307,7 @@ describe("MCP slice spillover signatures", () => {
         },
       ) as { results: Array<Record<string, unknown>> };
       assert.deepEqual(workflow.results[0], {
+        stepIndex: 0,
         fn: "sliceSpilloverGet",
         status: "error",
         error: expectedError.error,

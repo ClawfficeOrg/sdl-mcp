@@ -15,6 +15,10 @@ Use SDL-MCP as the repository boundary.
    window. Never use `file.read` for indexed source.
 4. Use `sdl.workflow` for runtime execution, transforms, dependent calls, and
    batch mutations. Persist command output and query only needed failure lines.
+   runtimeExecute executes repository tooling. Permitted uses include build,
+   test, lint, compiler, named scripts, and targeted edit scripts. Do not use it
+   to inspect, search, or print repository files. Use sdl.context or sdl.retrieve
+   for indexed source and sdl.file with op="read" for other files.
 5. Read non-indexed files through `sdl.file`. Its targeted write operation can
    update one indexed file with live reconciliation; prefer symbol or
    search-edit preview/apply operations when they can anchor the change.

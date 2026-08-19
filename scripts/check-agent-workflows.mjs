@@ -13,6 +13,32 @@ const exactCopySets = [
   },
 ];
 
+const runtimeInspectionAnchors = [
+  "executes repository tooling",
+  "inspect, search, or print repository files",
+  "sdl.context",
+  "sdl.retrieve",
+  "sdl.file",
+  "op=",
+  "other files",
+  "targeted edit scripts",
+];
+
+const initRuntimeGuidanceSections = [
+  ["const RUNTIME_REPOSITORY_TOOLING_GUIDANCE", "const SDL_RUNTIME_REDIRECT_PREFIXES", runtimeInspectionAnchors],
+  ["function buildClaudeRuntimeHook(", "function buildClaudeExploreHook(", ["RUNTIME_REPOSITORY_TOOLING_GUIDANCE"]],
+  ["function buildClaudeExploreAgent(", "function buildClaudePrompt(", ["RUNTIME_REPOSITORY_TOOLING_GUIDANCE"]],
+  ["function buildClaudePrompt(", "function buildOpenCodeProjectConfig(", ["RUNTIME_REPOSITORY_TOOLING_GUIDANCE"]],
+  ["function buildOpenCodePlugin(", "function buildCodexProjectConfig(", ["RUNTIME_REPOSITORY_TOOLING_GUIDANCE"]],
+  ["function buildCodexSessionStartHook(", "function buildCodexPreToolUseHook(", ["RUNTIME_REPOSITORY_TOOLING_GUIDANCE"]],
+  ["function buildCodexPreToolUseHook(", "function buildAgentInstructionAssets(", ["RUNTIME_REPOSITORY_TOOLING_GUIDANCE"]],
+].map(([sectionStart, sectionEnd, required]) => ({
+  path: "src/cli/commands/init.ts",
+  sectionStart,
+  sectionEnd,
+  required,
+}));
+
 const syncSurfaces = [
   {
     path: "templates/SDL.md",
@@ -78,6 +104,25 @@ const syncSurfaces = [
     path: ".claude/agents/explore-sdl.md",
     required: ["Choose the cheapest SDL discovery surface", "symbolSearch", "sliceBuild", "NEVER use the native `Read`", "For non-indexed files", "usageStats", "explicit user approval in the current turn"],
   },
+  ...[
+    "templates/SDL.md",
+    "templates/sdl-mcp-agent-workflow/SKILL.md",
+    "templates/AGENTS.md.template",
+    "templates/CLAUDE.md.template",
+    "templates/CODEX.md.template",
+    "templates/GEMINI.md.template",
+    "templates/OPENCODE.md.template",
+    "src/code-mode/action-catalog.ts",
+    "src/code-mode/descriptions.ts",
+    "src/code-mode/manual-generator.ts",
+    "src/mcp/tools/tool-descriptors.ts",
+    "src/gateway/descriptions.ts",
+    "src/mcp/server-instructions.ts",
+    ".codex/hooks/load-sdl-skill.mjs",
+    ".codex/agents/explore-sdl.toml",
+    ".claude/agents/explore-sdl.md",
+  ].map((path) => ({ path, required: runtimeInspectionAnchors })),
+  ...initRuntimeGuidanceSections,
 ];
 
 const narrativeDocs = [
@@ -168,10 +213,22 @@ for (const { canonicalPath, copies } of exactCopySets) {
 }
 
 for (const surface of syncSurfaces) {
-  const text = read(surface.path);
+  const source = read(surface.path);
+  let text = source;
+  let surfaceLabel = surface.path;
+  if (surface.sectionStart && surface.sectionEnd) {
+    const start = source.indexOf(surface.sectionStart);
+    const end = source.indexOf(surface.sectionEnd, start + 1);
+    surfaceLabel = `${surface.path}#${surface.sectionStart}`;
+    if (start === -1 || end === -1) {
+      failures.push(`${surfaceLabel} has missing section boundary`);
+      continue;
+    }
+    text = source.slice(start, end);
+  }
   for (const required of surface.required) {
     if (!text.includes(required)) {
-      failures.push(`${surface.path} is missing workflow anchor: ${required}`);
+      failures.push(`${surfaceLabel} is missing workflow anchor: ${required}`);
     }
   }
 }

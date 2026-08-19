@@ -11,6 +11,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+function assertRuntimeInspectionGuidance(
+  content: string,
+  surface: string,
+): void {
+  assert.match(content, /runtimeExecute executes repository tooling/i, surface);
+  assert.match(
+    content,
+    /Do not use it to inspect, search, or print repository files/i,
+    surface,
+  );
+  assert.match(
+    content,
+    /sdl\.context[\s\S]*?sdl\.retrieve[\s\S]*?indexed source/i,
+    surface,
+  );
+  assert.match(
+    content,
+    /sdl\.file[\s\S]*?op[\s\S]*?read[\s\S]*?other files/i,
+    surface,
+  );
+}
+
 describe("init agent enforcement", () => {
   let tempRoot: string;
   let tempDir: string;
@@ -133,11 +155,32 @@ describe("init agent enforcement", () => {
 
     const agentsText = readFileSync(join(tempDir, "AGENTS.md"), "utf8");
     const claudeText = readFileSync(join(tempDir, "CLAUDE.md"), "utf8");
+    const claudeRuntimeHookText = readFileSync(
+      join(tempDir, ".claude", "hooks", "force-sdl-runtime.sh"),
+      "utf8",
+    );
+    const claudeExploreAgentText = readFileSync(
+      join(tempDir, ".claude", "agents", "explore-sdl.md"),
+      "utf8",
+    );
+    const claudePromptText = readFileSync(
+      join(tempDir, ".claude", "sdl-prompt.md"),
+      "utf8",
+    );
     for (const generatedText of [agentsText, claudeText]) {
       assert.match(generatedText, /searchEditPreview/);
       assert.match(generatedText, /targeting:"identifier"/);
       assert.match(generatedText, /operations\[\]/);
       assert.match(generatedText, /stdin/);
+    }
+    for (const [surface, generatedText] of [
+      ["generated AGENTS.md", agentsText],
+      ["generated CLAUDE.md", claudeText],
+      ["generated Claude runtime hook", claudeRuntimeHookText],
+      ["generated Claude explore agent", claudeExploreAgentText],
+      ["generated Claude prompt", claudePromptText],
+    ] as const) {
+      assertRuntimeInspectionGuidance(generatedText, surface);
     }
 
     const settings = JSON.parse(
@@ -291,11 +334,27 @@ describe("init agent enforcement", () => {
 
     const agentsText = readFileSync(join(tempDir, "AGENTS.md"), "utf8");
     const codexText = readFileSync(join(tempDir, "CODEX.md"), "utf8");
+    const sessionHookText = readFileSync(
+      join(tempDir, ".codex", "hooks", "load-sdl-skill.mjs"),
+      "utf8",
+    );
+    const preToolHookText = readFileSync(
+      join(tempDir, ".codex", "hooks", "force-sdl-mcp.mjs"),
+      "utf8",
+    );
     for (const generatedText of [agentsText, codexText]) {
       assert.match(generatedText, /searchEditPreview/);
       assert.match(generatedText, /targeting:"identifier"/);
       assert.match(generatedText, /operations\[\]/);
       assert.match(generatedText, /stdin/);
+    }
+    for (const [surface, generatedText] of [
+      ["generated AGENTS.md", agentsText],
+      ["generated CODEX.md", codexText],
+      ["generated Codex session hook", sessionHookText],
+      ["generated Codex pre-tool hook", preToolHookText],
+    ] as const) {
+      assertRuntimeInspectionGuidance(generatedText, surface);
     }
 
     const sessionHookPath = join(
@@ -368,6 +427,27 @@ describe("init agent enforcement", () => {
     const fallbackHookOutput = JSON.parse(fallbackHookRun.stdout);
     assert.match(fallbackHookOutput.systemMessage, /sdl-mcp init --skill/);
     assert.doesNotMatch(fallbackHookOutput.systemMessage, /user-global/);
+    assert.match(
+      fallbackHookOutput.systemMessage,
+      /runtimeExecute executes repository tooling/i,
+    );
+    assert.match(
+      fallbackHookOutput.systemMessage,
+      /Do not use it to inspect, search, or print repository files/i,
+    );
+    assert.match(
+      fallbackHookOutput.systemMessage,
+      /sdl\.context[^\n]*sdl\.retrieve[^\n]*indexed source/i,
+    );
+    assert.match(
+      fallbackHookOutput.systemMessage,
+      /sdl\.file[^\n]*op[^\n]*read[^\n]*other files/i,
+    );
+    assert.match(
+      fallbackHookOutput.systemMessage,
+      /build[^\n]*test[^\n]*lint[^\n]*compiler/i,
+    );
+    assert.match(fallbackHookOutput.systemMessage, /targeted edit scripts/i);
 
     const runHook = (payload: Record<string, unknown>): string => {
       const hookRun = spawnSync(process.execPath, [hookPath], {
@@ -596,5 +676,21 @@ describe("init agent enforcement", () => {
     assert.ok(
       existsSync(join(tempDir, ".opencode", "plugins", "enforce-sdl.ts")),
     );
+    for (const [surface, generatedText] of [
+      ["generated AGENTS.md", readFileSync(join(tempDir, "AGENTS.md"), "utf8")],
+      [
+        "generated OPENCODE.md",
+        readFileSync(join(tempDir, "OPENCODE.md"), "utf8"),
+      ],
+      [
+        "generated OpenCode enforcement plugin",
+        readFileSync(
+          join(tempDir, ".opencode", "plugins", "enforce-sdl.ts"),
+          "utf8",
+        ),
+      ],
+    ] as const) {
+      assertRuntimeInspectionGuidance(generatedText, surface);
+    }
   });
 });

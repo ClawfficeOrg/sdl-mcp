@@ -5,14 +5,17 @@ export const MANUAL_DESCRIPTION =
 
 export const WORKFLOW_DESCRIPTION =
   "Execute a workflow of SDL-MCP operations in a single round-trip. Best for " +
-  "multi-step operations (runtime execution, data transforms, batch mutations) " +
+  "multi-step operations (repository tooling, data transforms, batch mutations) " +
   "- for code context retrieval, prefer sdl.context. Each " +
   "step calls a function from the API manual or an internal transform " +
   "(dataPick, dataMap, dataFilter, dataSort, dataTemplate). Use $N references " +
   "(e.g., $0.results[0].symbolId) to pass results " +
   "between steps. Includes budget tracking, context-ladder validation, " +
-  "internal ETag caching, opt-in execution tracing, and runtime digest " +
-  "output for build/test/lint commands.";
+  "internal ETag caching, opt-in execution tracing, and runtime digest output. " +
+  "runtimeExecute executes repository tooling. Permitted uses include build, test, " +
+  "lint, compiler, named scripts, and targeted edit scripts. Do not use it to " +
+  "inspect, search, or print repository files. Use sdl.context or sdl.retrieve " +
+  'for indexed source and sdl.file with op="read" for other files.';
 
 export const CONTEXT_DESCRIPTION =
   "Retrieve task-shaped code context for explain, debug, review, or implement " +
