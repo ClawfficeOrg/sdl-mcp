@@ -93,10 +93,6 @@ const syncSurfaces = [
     required: ["buildClaudeExploreAgent", "buildCodexSessionStartHook", "sdl-mcp-agent-workflow", "sdl.context", "slice.build", "Never use \\`file.read\\` for indexed source", "symbol.edit", "runtimeExecute", "usageStats", "explicit user approval in the current turn"],
   },
   {
-    path: ".codex/hooks/load-sdl-skill.mjs",
-    required: ["sdl-mcp-agent-workflow", "choose `sdl.context`, `symbolSearch`/`symbolGetCard`, or `slice.build`", "sliceBuild", "symbol.edit", "usageStats", "explicit user approval in the current turn"],
-  },
-  {
     path: ".codex/agents/explore-sdl.toml",
     required: ["Choose the cheapest SDL discovery surface", "symbolSearch", "sliceBuild", "Never use native `Read`", "file.read` or `sdl.file` `op: \"read\"", "usageStats", "explicit user approval in the current turn"],
   },
@@ -118,7 +114,6 @@ const syncSurfaces = [
     "src/mcp/tools/tool-descriptors.ts",
     "src/gateway/descriptions.ts",
     "src/mcp/server-instructions.ts",
-    ".codex/hooks/load-sdl-skill.mjs",
     ".codex/agents/explore-sdl.toml",
     ".claude/agents/explore-sdl.md",
   ].map((path) => ({ path, required: runtimeInspectionAnchors })),
