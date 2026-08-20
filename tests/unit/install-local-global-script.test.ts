@@ -53,6 +53,22 @@ describe("install-local-global.ps1", () => {
     assert.match(script, /Invoke-Native npm install --legacy-peer-deps/);
   });
 
+  it("rebuilds and verifies LadybugDB before reporting success", () => {
+    assert.match(
+      script,
+      /}\r?\n\r?\nInvoke-Step "Rebuild LadybugDB runtime" \{\r?\n  Invoke-Native npm rebuild kuzu --foreground-scripts\r?\n}\r?\n\r?\nInvoke-Step "Build runtime JavaScript"/,
+    );
+    assert.match(script, /Invoke-Step "Verify LadybugDB runtime"/);
+    assert.match(
+      script,
+      /require\(require\.resolve\('kuzu', \{ paths: \[process\.argv\[1\]\] \}\)\)/,
+    );
+    assert.match(
+      script,
+      /Install local packages globally[\s\S]*Verify LadybugDB runtime[\s\S]*Global sdl-mcp now points/,
+    );
+  });
+
   it("verifies the installed tokenizer runtime before reporting success", () => {
     assert.match(script, /Invoke-Step "Verify tokenizer runtime"/);
     assert.match(

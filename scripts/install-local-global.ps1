@@ -203,6 +203,10 @@ if (-not $SkipNpmInstall) {
   }
 }
 
+Invoke-Step "Rebuild LadybugDB runtime" {
+  Invoke-Native npm rebuild kuzu --foreground-scripts
+}
+
 Invoke-Step "Build runtime JavaScript" {
   Invoke-Native npm run build
 }
@@ -265,6 +269,16 @@ Invoke-Step "Install local packages globally" {
     $repoRoot
   )
   Invoke-Native npm install -g @localPackages
+}
+
+Invoke-Step "Verify LadybugDB runtime" {
+  $globalSdlMcpRoot = Join-Path ((npm root -g).Trim()) "sdl-mcp"
+  if (-not (Test-Path $globalSdlMcpRoot)) {
+    throw "Global sdl-mcp package was not found at $globalSdlMcpRoot"
+  }
+  # Resolve from the installed package root so a missing package-local native
+  # artifact fails here instead of degrading storage at server startup.
+  Invoke-Native -FilePath node -Arguments @("-e", "require(require.resolve('kuzu', { paths: [process.argv[1]] }));", $globalSdlMcpRoot)
 }
 
 Invoke-Step "Verify tokenizer runtime" {
