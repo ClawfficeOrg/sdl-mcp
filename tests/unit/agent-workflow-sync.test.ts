@@ -66,7 +66,6 @@ ${result.stderr}`);
       "templates/sdl-mcp-agent-workflow/SKILL.md",
       "docs/agent-workflows.md",
       "src/cli/commands/init.ts",
-      ".codex/hooks/load-sdl-skill.mjs",
       ".codex/agents/explore-sdl.toml",
       ".claude/agents/explore-sdl.md",
     ];
@@ -112,7 +111,6 @@ ${result.stderr}`);
       "templates/CODEX.md.template",
       "templates/GEMINI.md.template",
       "templates/OPENCODE.md.template",
-      ".codex/hooks/load-sdl-skill.mjs",
       ".codex/agents/explore-sdl.toml",
       ".claude/agents/explore-sdl.md",
     ];
