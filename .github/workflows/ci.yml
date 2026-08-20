@@ -691,7 +691,7 @@ jobs:
           SDL_MCP_DISABLE_NATIVE_ADDON: "1"
           # Serialize pass-1 DB writes against parser work to avoid hosted-runner exit 139 flakes.
           SDL_MCP_PASS1_STABLE_DB_WRITES: "1"
-        run: npm run benchmark:matrix -- --matrix benchmarks/real-world/matrix.json --config benchmarks/real-world/benchmark.config.json --out-dir .benchmark/matrix-nightly
+        run: npm run benchmark:matrix -- --force-legacy-index --matrix benchmarks/real-world/matrix.json --config benchmarks/real-world/benchmark.config.json --out-dir .benchmark/matrix-nightly
 
       - name: Audit realism benchmark claims (non-blocking)
         continue-on-error: true

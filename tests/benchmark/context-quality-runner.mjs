@@ -67,7 +67,9 @@ async function runWatchedCommand(
   emitSuccessfulLogs = true,
 ) {
   childSequence += 1;
-  const logStem = `${artifactStem}.child-${process.pid}-${childSequence}`;
+  const childLogDir = resolve(dirname(artifactStem), "context-quality-child-logs");
+  mkdirSync(childLogDir, { recursive: true });
+  const logStem = resolve(childLogDir, `${process.pid}-${childSequence}`);
   const stdoutPath = `${logStem}.stdout.log`;
   const stderrPath = `${logStem}.stderr.log`;
   let logsEmitted = false;

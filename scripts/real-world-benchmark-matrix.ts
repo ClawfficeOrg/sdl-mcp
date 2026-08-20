@@ -150,11 +150,13 @@ function buildRunCommand(params: {
   repoId: string;
   outPath: string;
   skipIndex: boolean;
+  forceLegacyIndex: boolean;
   mode: BenchmarkMode;
 }): string {
   const configArg = params.configPath ? ` --config "${params.configPath}"` : "";
   const skipArg = params.skipIndex ? " --skip-index" : "";
-  return `"${NODE_BIN}" scripts/real-world-benchmark.ts --tasks "${params.tasksPath}" --repo-id "${params.repoId}" --out "${params.outPath}" --mode "${params.mode}"${configArg}${skipArg}`;
+  const forceLegacyArg = params.forceLegacyIndex ? " --force-legacy-index" : "";
+  return `"${NODE_BIN}" scripts/real-world-benchmark.ts --tasks "${params.tasksPath}" --repo-id "${params.repoId}" --out "${params.outPath}" --mode "${params.mode}"${configArg}${skipArg}${forceLegacyArg}`;
 }
 
 interface FamilyAggregates {
@@ -201,6 +203,7 @@ function main(): void {
   const limitRunsRaw = getArgValue(args, "limit-runs");
   const limitRuns = limitRunsRaw ? Number(limitRunsRaw) : Number.POSITIVE_INFINITY;
   const forceSkipIndex = getFlag(args, "skip-index");
+  const forceLegacyIndex = getFlag(args, "force-legacy-index");
   const mode = resolveBenchmarkMode(getArgValue(args, "mode"));
 
   if (!existsSync(matrixPath)) {
@@ -250,6 +253,7 @@ function main(): void {
       repoId: run.repoId,
       outPath: runOutPath,
       skipIndex,
+      forceLegacyIndex,
       mode,
     });
 

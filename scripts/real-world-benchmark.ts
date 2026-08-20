@@ -2292,6 +2292,7 @@ async function runBenchmark(): Promise<void> {
   const outPath =
     getArgValue(args, "out") ?? getFallbackOutPath(args) ?? getNpmOutPath();
   const skipIndex = getFlagEnabled(args, "skip-index");
+  const forceLegacyIndex = getFlagEnabled(args, "force-legacy-index");
   const mode = resolveBenchmarkMode(
     getArgValue(args, "mode") ?? getNpmConfigValue("mode"),
   );
@@ -2329,7 +2330,9 @@ async function runBenchmark(): Promise<void> {
 
   if (!skipIndex) {
     console.log(`Indexing repo ${repoConfig.repoId}...`);
-    await indexRepo(repoConfig.repoId, "full");
+    await indexRepo(repoConfig.repoId, "full", undefined, undefined, {
+      forceLegacyPipeline: forceLegacyIndex,
+    });
   }
 
   const candidateFiles = collectCandidateFiles(

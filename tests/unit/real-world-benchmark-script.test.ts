@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { describe, it } from "node:test";
@@ -10,6 +10,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../..");
 
 describe("real-world benchmark script", () => {
+  it("keeps nightly matrix indexing on the compatibility pipeline", () => {
+    const matrix = readFileSync(
+      resolve(repoRoot, "scripts/real-world-benchmark-matrix.ts"),
+      "utf8",
+    );
+    const benchmark = readFileSync(
+      resolve(repoRoot, "scripts/real-world-benchmark.ts"),
+      "utf8",
+    );
+    const workflow = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
+
+    assert.match(matrix, /getFlag\(args, "force-legacy-index"\)/u);
+    assert.match(matrix, /\$\{forceLegacyArg\}/u);
+    assert.match(benchmark, /forceLegacyPipeline:\s*forceLegacyIndex/u);
+    assert.match(workflow, /benchmark:matrix -- --force-legacy-index/u);
+  });
+
   it("runs the matrix smoke entrypoint without parse or helper reference errors", () => {
     const outDir = mkdtempSync(resolve(tmpdir(), "sdl-mcp-benchmark-smoke-"));
     const result = spawnSync(process.execPath, [

@@ -152,12 +152,12 @@ describe("scheduled context-quality graph cache", () => {
         ),
         [],
       );
-      const checkoutLogs = workingEntries.filter((name) =>
-        name.startsWith(`checkout-${primaryName}.child-`),
+      const childLogs = readdirSync(
+        resolve(dirname(workingPrimaryPath), "context-quality-child-logs"),
       );
-      assert.equal(checkoutLogs.length, 2);
-      assert.ok(checkoutLogs.some((name) => name.endsWith(".stdout.log")));
-      assert.ok(checkoutLogs.some((name) => name.endsWith(".stderr.log")));
+      assert.equal(childLogs.length, 2);
+      assert.ok(childLogs.some((name) => name.endsWith(".stdout.log")));
+      assert.ok(childLogs.some((name) => name.endsWith(".stderr.log")));
 
       const runner = readSource("tests/benchmark/context-quality-runner.mjs");
       assert.match(
@@ -301,6 +301,10 @@ describe("scheduled context-quality graph cache", () => {
     assert.doesNotMatch(benchmark, /as unknown as ContextPayload/u);
     assert.match(runner, /restoreVerifiedDbFamilyCache/u);
     assert.match(runner, /runCanonicalV2DeterminismGate/u);
+    assert.match(
+      runner,
+      /resolve\(dirname\(artifactStem\), "context-quality-child-logs"\)/u,
+    );
     assert.match(runner, /no-op re-index/u);
     assert.match(runner, /fingerprintDbFamily/u);
     assert.match(runner, /closeLadybugDb/u);

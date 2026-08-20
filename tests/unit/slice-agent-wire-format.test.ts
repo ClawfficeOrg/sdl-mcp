@@ -286,4 +286,66 @@ describe("toAgentGraphSlice", () => {
     );
     assert.deepStrictEqual(SliceBuildResponseSchema.parse(errorPayload), errorPayload);
   });
+
+  it("validates full sdl.retrieve slice projections for every wire format", async () => {
+    const { RetrieveOutputSchema } = await import(
+      "../../dist/code-mode/retrieve.js",
+    );
+    const slice = makeMockSlice({
+      frontier: [{ symbolId: "sym-3", score: 0.5, why: "budget" }],
+      truncation: {
+        truncated: true,
+        droppedCards: 2,
+        droppedEdges: 1,
+        reason: "card budget reached",
+        budgetUsed: {
+          cards: 3,
+          maxCards: 3,
+          estimatedTokens: 900,
+          maxTokens: 1_000,
+        },
+        suggestion: "Retrieve the spillover page.",
+        howToResume: { type: "cursor", value: 3 },
+      },
+    });
+
+    for (const wireFormat of [
+      "readable",
+      "standard",
+      "json",
+      "agent",
+      "compact",
+      "packed",
+      "auto",
+    ] as const) {
+      const wireResult = serializeSliceForWireFormat(
+        slice,
+        wireFormat,
+        undefined,
+        { packedEnabled: true, packedThreshold: 0 },
+      );
+      const payload = toStructuredContent(
+        "sdl.retrieve",
+        {
+          sliceHandle: "slice-handle",
+          ledgerVersion: slice.versionId,
+          slice: wireResult.payload,
+          spilloverHandle: "slice-handle",
+        },
+        {
+          repoId: slice.repoId,
+          op: "sliceBuild",
+          args: { wireFormat },
+          detail: "full",
+          responseMode: "inline",
+        },
+      );
+
+      assert.doesNotThrow(
+        () =>
+          assert.deepStrictEqual(RetrieveOutputSchema.parse(payload), payload),
+        wireFormat,
+      );
+    }
+  });
 });

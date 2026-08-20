@@ -249,6 +249,17 @@ const SliceTruncationSchema = z.object({
   truncated: z.boolean(),
   droppedCards: z.number().int().min(0),
   droppedEdges: z.number().int().min(0),
+  reason: z.string().optional(),
+  budgetUsed: z
+    .object({
+      cards: z.number().int().min(0),
+      maxCards: z.number().int().min(0),
+      estimatedTokens: z.number().int().min(0),
+      maxTokens: z.number().int().min(0),
+    })
+    .strict()
+    .optional(),
+  suggestion: z.string().optional(),
   howToResume: z
     .object({
       type: z.enum(["cursor", "token"]),
@@ -1839,33 +1850,115 @@ const SliceErrorResponseSchema = z.object({
 });
 
 const ProjectedSliceSymbolCardSchema = SliceSymbolCardSchema.extend({
-  version: SliceSymbolCardSchema.shape.version.optional(),
+  version: SliceSymbolCardSchema.shape.version.partial().optional(),
 });
 
-const ProjectedSliceTruncationSchema = SliceTruncationSchema.extend({
-  reason: z.string().optional(),
-  suggestion: z.string().optional(),
-  budgetUsed: z
-    .object({
-      cards: z.number().int().min(0),
-      maxCards: z.number().int().min(0),
-      maxTokens: z.number().int().min(0),
-    })
-    .strict()
-    .optional(),
-}).strict();
+const ProjectedSliceTruncationSchema = SliceTruncationSchema.strict();
 
 const ProjectedGraphSliceSchema = GraphSliceSchema.pick({
+  repoId: true,
+  versionId: true,
+  budget: true,
   startSymbols: true,
+  symbolIndex: true,
   cards: true,
   edges: true,
   frontier: true,
   truncation: true,
   memories: true,
-}).extend({
-  cards: z.array(ProjectedSliceSymbolCardSchema),
-  truncation: ProjectedSliceTruncationSchema.optional(),
-});
+})
+  .partial({
+    repoId: true,
+    versionId: true,
+    budget: true,
+    symbolIndex: true,
+  })
+  .extend({
+    cards: z.array(ProjectedSliceSymbolCardSchema),
+    truncation: ProjectedSliceTruncationSchema.optional(),
+  });
+
+const AgentSliceDependencySchema = z
+  .object({
+    name: z.string(),
+    confidence: z.number().optional(),
+  })
+  .strict();
+
+const AgentSliceCardSchema = z
+  .object({
+    name: z.string(),
+    kind: z.string(),
+    file: z.string(),
+    lines: z
+      .object({
+        start: z.number(),
+        end: z.number(),
+      })
+      .strict(),
+    exported: z.boolean(),
+    signature: z.string().optional(),
+    summary: z.string().optional(),
+    imports: z.array(AgentSliceDependencySchema),
+    calls: z.array(AgentSliceDependencySchema),
+  })
+  .strict();
+
+const AgentSliceSchema = z
+  .object({
+    wireFormat: z.literal("agent"),
+    version: z.string(),
+    budget: z
+      .object({
+        maxCards: z.number(),
+        maxTokens: z.number(),
+      })
+      .strict(),
+    seedSymbols: z.array(z.string()),
+    cards: z.array(AgentSliceCardSchema),
+    edges: z.array(
+      z
+        .object({
+          from: z.string(),
+          to: z.string(),
+          type: z.string(),
+          confidence: z.number(),
+        })
+        .strict(),
+    ),
+    memories: z
+      .array(
+        z
+          .object({
+            memoryId: z.string(),
+            type: z.string(),
+            title: z.string(),
+            tags: z.array(z.string()),
+          })
+          .strict(),
+      )
+      .optional(),
+    frontier: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            file: z.string(),
+            why: z.string(),
+          })
+          .strict(),
+      )
+      .optional(),
+    truncation: z
+      .object({
+        truncated: z.boolean(),
+        totalAvailable: z.number(),
+        included: z.number(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 const CompactSliceNextActionSchema = z.object({
   id: z.string(),
@@ -1875,6 +1968,7 @@ const CompactSliceNextActionSchema = z.object({
 export const SliceBuildResponseSchema = z.union([
   z.object({
     sliceHandle: z.string(),
+    spilloverHandle: z.string().optional(),
     ledgerVersion: z.string().optional(),
     lease: SliceLeaseSchema.optional(),
     sliceEtag: SliceEtagSchema.optional(),
@@ -1882,14 +1976,7 @@ export const SliceBuildResponseSchema = z.union([
       ProjectedGraphSliceSchema,
       GraphSliceSchema,
       CompactGraphSliceV3Schema,
-      z.object({
-        wireFormat: z.literal("agent"),
-        version: z.string(),
-        budget: z.object({ maxCards: z.number(), maxTokens: z.number() }),
-        seedSymbols: z.array(z.string()),
-        cards: z.array(z.unknown()),
-        edges: z.array(z.unknown()),
-      }),
+      AgentSliceSchema,
       z.string(),
     ]),
     /** How to inspect candidate relationships when the slice has no edges. */
